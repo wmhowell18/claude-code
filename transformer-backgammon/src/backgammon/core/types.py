@@ -261,6 +261,102 @@ class EncodingConfig:
     feature_dim: int = 2  # Will be computed based on flags
 
 
+@dataclass
+class TransformerConfig:
+    """Configuration for transformer architecture.
+
+    Attributes:
+        num_layers: Number of transformer blocks
+        embed_dim: Embedding dimension
+        num_heads: Number of attention heads
+        ff_dim: Feed-forward hidden dimension
+        dropout_rate: Dropout probability
+        layer_norm_epsilon: Epsilon for layer normalization
+        input_feature_dim: Dimension of input features per position
+        use_learned_positional_encoding: Whether to use learned position embeddings
+        use_policy_head: Whether to include policy prediction head
+        return_attention_weights: Whether to return attention weights for visualization
+    """
+    num_layers: int = 4
+    embed_dim: int = 128
+    num_heads: int = 8
+    ff_dim: int = 512
+    dropout_rate: float = 0.1
+    layer_norm_epsilon: float = 1e-6
+    input_feature_dim: int = 2
+    use_learned_positional_encoding: bool = True
+    use_policy_head: bool = False
+    return_attention_weights: bool = False
+
+    def __post_init__(self):
+        """Validate configuration."""
+        assert self.embed_dim % self.num_heads == 0, \
+            f"embed_dim ({self.embed_dim}) must be divisible by num_heads ({self.num_heads})"
+        assert self.num_layers > 0, "num_layers must be positive"
+        assert self.num_heads > 0, "num_heads must be positive"
+        assert 0 <= self.dropout_rate < 1, "dropout_rate must be in [0, 1)"
+
+
+@dataclass
+class TrainingConfig:
+    """Configuration for training loop.
+
+    Attributes:
+        learning_rate: Initial learning rate
+        optimizer: Optimizer name ("adam", "sgd", etc.)
+        batch_size: Training batch size
+        num_epochs: Number of training epochs
+        minibatches_per_epoch: Number of minibatches per epoch
+        replay_buffer_size: Experience replay buffer capacity
+        min_replay_size: Minimum buffer size before training starts
+        games_per_iteration: Number of self-play games per iteration
+        eval_every_n_games: Evaluate after this many games
+        eval_num_games: Number of games for evaluation
+        checkpoint_every_n_games: Save checkpoint after this many games
+        checkpoint_dir: Directory for saving checkpoints
+    """
+    learning_rate: float = 1e-4
+    optimizer: str = "adam"
+    batch_size: int = 256
+    num_epochs: int = 100
+    minibatches_per_epoch: int = 100
+    replay_buffer_size: int = 100000
+    min_replay_size: int = 10000
+    games_per_iteration: int = 100
+    eval_every_n_games: int = 1000
+    eval_num_games: int = 100
+    checkpoint_every_n_games: int = 5000
+    checkpoint_dir: str = "./checkpoints"
+
+
+@dataclass
+class Config:
+    """Complete configuration for the backgammon AI.
+
+    Attributes:
+        transformer: Transformer architecture config
+        encoding: Board encoding config
+        training: Training loop config
+        seed: Random seed
+        device: Device to use ("cpu", "gpu", "tpu")
+        use_jit: Whether to use JAX JIT compilation
+        log_level: Logging level
+        log_dir: Directory for logs
+        use_wandb: Whether to use Weights & Biases
+        wandb_project: W&B project name
+    """
+    transformer: TransformerConfig
+    encoding: EncodingConfig
+    training: TrainingConfig
+    seed: int = 42
+    device: str = "cpu"
+    use_jit: bool = True
+    log_level: str = "info"
+    log_dir: str = "./logs"
+    use_wandb: bool = False
+    wandb_project: str = "transformer-backgammon"
+
+
 # ==============================================================================
 # GAME SIMULATION
 # ==============================================================================
