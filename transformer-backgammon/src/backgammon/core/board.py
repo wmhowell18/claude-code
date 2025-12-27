@@ -415,3 +415,393 @@ def print_board(board: Board) -> None:
         board: Board to print
     """
     print(board_to_string(board))
+
+
+# ==============================================================================
+# MOVE GENERATION
+# ==============================================================================
+
+def generate_legal_moves(board: Board, player: Player, dice: Dice) -> LegalMoves:
+    """Generate all legal moves for a board, player, and dice roll.
+
+    This is the core move generation algorithm. It handles:
+    - Entering from the bar (required if checkers on bar)
+    - Normal moves
+    - Bearing off
+    - Using all possible dice combinations
+
+    Args:
+        board: Current board state
+        player: Player to move
+        dice: Dice roll
+
+    Returns:
+        List of all legal moves
+    """
+    moves_list = dice_values(dice)
+    all_moves = []
+
+    # Generate all possible move sequences
+    _generate_moves_recursive(
+        board=board,
+        player=player,
+        dice_remaining=moves_list,
+        current_move=[],
+        all_moves=all_moves,
+    )
+
+    # If no moves found, player must pass
+    if not all_moves:
+        return [()]  # Empty move
+
+    # Remove duplicate moves and filter for maximum dice usage
+    unique_moves = _deduplicate_moves(all_moves)
+    max_dice_used = _filter_best_moves(unique_moves)
+
+    return max_dice_used
+
+
+def _generate_moves_recursive(
+    board: Board,
+    player: Player,
+    dice_remaining: List[int],
+    current_move: List[MoveStep],
+    all_moves: List[Move],
+) -> None:
+    """Recursively generate all possible move sequences.
+
+    Args:
+        board: Current board state
+        player: Player to move
+        dice_remaining: Dice values still available
+        current_move: Move steps accumulated so far
+        all_moves: List to append complete moves to
+    """
+    # Base case: no more dice
+    if not dice_remaining:
+        if current_move:  # Only add non-empty moves
+            all_moves.append(tuple(current_move))
+        return
+
+    # Try to use the next die value
+    die = dice_remaining[0]
+    rest_dice = dice_remaining[1:]
+
+    # Check if we must enter from bar first
+    if checkers_on_bar(board, player) > 0:
+        # Must enter from bar before any other move
+        entry_moves = _generate_entry_moves(board, player, die)
+
+        if entry_moves:
+            for move_step in entry_moves:
+                # Apply move temporarily
+                new_board = board.copy()
+                _apply_move_step(new_board, player, move_step)
+
+                # Recurse with this move added
+                _generate_moves_recursive(
+                    board=new_board,
+                    player=player,
+                    dice_remaining=rest_dice,
+                    current_move=current_move + [move_step],
+                    all_moves=all_moves,
+                )
+        else:
+            # Can't enter - try skipping this die
+            _generate_moves_recursive(
+                board=board,
+                player=player,
+                dice_remaining=rest_dice,
+                current_move=current_move,
+                all_moves=all_moves,
+            )
+        return
+
+    # Normal moves (not entering from bar)
+    possible_steps = _generate_single_die_moves(board, player, die)
+
+    if possible_steps:
+        for move_step in possible_steps:
+            # Apply move temporarily
+            new_board = board.copy()
+            _apply_move_step(new_board, player, move_step)
+
+            # Recurse with this move added
+            _generate_moves_recursive(
+                board=new_board,
+                player=player,
+                dice_remaining=rest_dice,
+                current_move=current_move + [move_step],
+                all_moves=all_moves,
+            )
+    else:
+        # Can't use this die - try skipping it
+        _generate_moves_recursive(
+            board=board,
+            player=player,
+            dice_remaining=rest_dice,
+            current_move=current_move,
+            all_moves=all_moves,
+        )
+
+    # Also add the current move as-is (in case we can't use remaining dice)
+    if current_move:
+        all_moves.append(tuple(current_move))
+
+
+def _generate_entry_moves(board: Board, player: Player, die: int) -> List[MoveStep]:
+    """Generate moves entering from the bar.
+
+    Args:
+        board: Current board
+        player: Player to move
+        die: Die value to use
+
+    Returns:
+        List of possible entry moves (0 or 1 move)
+    """
+    entry_point = _entry_point(player, die)
+
+    if _can_land_on_point(board, player, entry_point):
+        opponent = player.opponent()
+        hits = board.get_checkers(opponent, entry_point) == 1
+
+        return [MoveStep(
+            from_point=0,
+            to_point=entry_point,
+            die_used=die,
+            hits_opponent=hits,
+        )]
+
+    return []
+
+
+def _generate_single_die_moves(board: Board, player: Player, die: int) -> List[MoveStep]:
+    """Generate all possible moves using a single die value.
+
+    Args:
+        board: Current board
+        player: Player to move
+        die: Die value to use
+
+    Returns:
+        List of possible move steps
+    """
+    moves = []
+    checkers = board.white_checkers if player == Player.WHITE else board.black_checkers
+
+    # Check each point where player has checkers
+    for from_point in range(1, 25):
+        if checkers[from_point] == 0:
+            continue
+
+        # Calculate destination
+        if player == Player.WHITE:
+            to_point = from_point - die  # White moves toward 0
+        else:
+            to_point = from_point + die  # Black moves toward 25
+
+        # Check if this is a bearing off move
+        if can_bear_off(board, player):
+            if player == Player.WHITE:
+                if to_point <= 0:
+                    # Bearing off for white
+                    if to_point == 0 or _can_bear_off_with_higher(board, player, from_point, die):
+                        moves.append(MoveStep(
+                            from_point=from_point,
+                            to_point=25,  # Off
+                            die_used=die,
+                            hits_opponent=False,
+                        ))
+                    continue
+            else:  # BLACK
+                if to_point >= 25:
+                    # Bearing off for black
+                    if to_point == 25 or _can_bear_off_with_higher(board, player, from_point, die):
+                        moves.append(MoveStep(
+                            from_point=from_point,
+                            to_point=25,  # Off
+                            die_used=die,
+                            hits_opponent=False,
+                        ))
+                    continue
+
+        # Normal move (not bearing off)
+        if 1 <= to_point <= 24:
+            if _can_land_on_point(board, player, to_point):
+                opponent = player.opponent()
+                hits = board.get_checkers(opponent, to_point) == 1
+
+                moves.append(MoveStep(
+                    from_point=from_point,
+                    to_point=to_point,
+                    die_used=die,
+                    hits_opponent=hits,
+                ))
+
+    return moves
+
+
+def _can_bear_off_with_higher(board: Board, player: Player, from_point: int, die: int) -> bool:
+    """Check if can bear off with a die higher than needed.
+
+    When bearing off, if you roll higher than needed, you can bear off
+    from the highest occupied point.
+
+    Args:
+        board: Current board
+        player: Player
+        from_point: Point trying to bear off from
+        die: Die value
+
+    Returns:
+        True if this is the highest occupied point
+    """
+    checkers = board.white_checkers if player == Player.WHITE else board.black_checkers
+
+    # Check if there are any checkers on higher points
+    if player == Player.WHITE:
+        # For white, higher point = larger number in home board
+        for point in range(from_point + 1, 7):
+            if checkers[point] > 0:
+                return False
+    else:
+        # For black, higher point = smaller number in home board
+        for point in range(19, from_point):
+            if checkers[point] > 0:
+                return False
+
+    return True
+
+
+def _deduplicate_moves(moves: List[Move]) -> List[Move]:
+    """Remove duplicate moves.
+
+    Args:
+        moves: List of moves
+
+    Returns:
+        List with duplicates removed
+    """
+    # Convert to set of frozensets for deduplication
+    unique = []
+    seen = set()
+
+    for move in moves:
+        # Create a hashable representation
+        key = tuple(sorted([
+            (step.from_point, step.to_point, step.die_used)
+            for step in move
+        ]))
+
+        if key not in seen:
+            seen.add(key)
+            unique.append(move)
+
+    return unique
+
+
+def _filter_best_moves(moves: List[Move]) -> List[Move]:
+    """Filter moves to only those that use the maximum number of dice.
+
+    In backgammon, you must use as many dice as possible.
+
+    Args:
+        moves: List of legal moves
+
+    Returns:
+        Moves that use maximum dice
+    """
+    if not moves:
+        return moves
+
+    max_dice = max(len(move) for move in moves)
+    return [move for move in moves if len(move) == max_dice]
+
+
+# ==============================================================================
+# MOVE APPLICATION
+# ==============================================================================
+
+def apply_move(board: Board, player: Player, move: Move) -> Board:
+    """Apply a move to a board, returning a new board.
+
+    Args:
+        board: Current board
+        player: Player making the move
+        move: Move to apply
+
+    Returns:
+        New board with move applied
+    """
+    new_board = board.copy()
+
+    for step in move:
+        _apply_move_step(new_board, player, step)
+
+    # Switch player
+    new_board.player_to_move = player.opponent()
+
+    return new_board
+
+
+def _apply_move_step(board: Board, player: Player, step: MoveStep) -> None:
+    """Apply a single move step to a board (mutates board).
+
+    Args:
+        board: Board to modify
+        player: Player making the move
+        step: Move step to apply
+    """
+    opponent = player.opponent()
+
+    # Remove checker from source
+    count = board.get_checkers(player, step.from_point)
+    assert count > 0, f"No checkers at point {step.from_point}"
+    board.set_checkers(player, step.from_point, count - 1)
+
+    # Handle hitting
+    if step.hits_opponent:
+        # Remove opponent's blot and put it on the bar
+        board.set_checkers(opponent, step.to_point, 0)
+        bar_count = board.get_checkers(opponent, 0)
+        board.set_checkers(opponent, 0, bar_count + 1)
+
+    # Add checker to destination
+    dest_count = board.get_checkers(player, step.to_point)
+    board.set_checkers(player, step.to_point, dest_count + 1)
+
+
+def undo_move(board: Board, player: Player, move: Move) -> Board:
+    """Undo a move (reverse it).
+
+    This is useful for search algorithms.
+
+    Args:
+        board: Board after the move
+        player: Player who made the move
+        move: Move to undo
+
+    Returns:
+        Board before the move
+    """
+    # To undo, we need to reverse the move steps
+    # This is complex because we need to track hits
+    # For now, simpler to just store the board state before moving
+    raise NotImplementedError("Use board.copy() before applying move instead")
+
+
+def is_legal_move(board: Board, player: Player, dice: Dice, move: Move) -> bool:
+    """Check if a specific move is legal.
+
+    Args:
+        board: Current board
+        player: Player to move
+        dice: Dice roll
+        move: Move to check
+
+    Returns:
+        True if move is legal
+    """
+    legal_moves = generate_legal_moves(board, player, dice)
+    return move in legal_moves
