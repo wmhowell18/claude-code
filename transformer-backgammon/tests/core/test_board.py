@@ -129,7 +129,7 @@ class TestBoardQueries:
         # Normal win
         board = empty_board()
         board.white_checkers[25] = 15
-        board.black_checkers[1] = 5  # Black has some off
+        board.black_checkers[25] = 5  # Black has some off
 
         outcome = winner(board)
         assert outcome is not None
@@ -137,7 +137,7 @@ class TestBoardQueries:
         assert outcome.points == 1
 
         # Gammon (opponent hasn't borne off any)
-        board.black_checkers[1] = 0
+        board.black_checkers[25] = 0  # Clear the borne off checkers
         board.black_checkers[13] = 5  # All on board
         outcome = winner(board)
         assert outcome.points == 2
@@ -358,5 +358,5 @@ class TestBoardDisplay:
 
         assert isinstance(s, str)
         assert len(s) > 0
-        assert "Player to move: Player.WHITE" in s
+        assert "Player to move: white" in s
         assert "167" in s  # Pip count

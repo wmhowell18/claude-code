@@ -243,6 +243,24 @@ class EncodedBoard:
         self.feature_dim = self.position_features.shape[2]
 
 
+@dataclass
+class EncodingConfig:
+    """Configuration for board encoding.
+
+    Attributes:
+        use_one_hot_counts: Encode checker counts as one-hot vectors (vs continuous)
+        include_geometric_features: Add geometric features (distance to home, etc.)
+        include_strategic_features: Add strategic features (blots, anchors, etc.)
+        include_dice_encoding: Include dice features in encoding
+        feature_dim: Resulting feature dimension per position
+    """
+    use_one_hot_counts: bool = False
+    include_geometric_features: bool = False
+    include_strategic_features: bool = False
+    include_dice_encoding: bool = False
+    feature_dim: int = 2  # Will be computed based on flags
+
+
 # ==============================================================================
 # GAME SIMULATION
 # ==============================================================================
