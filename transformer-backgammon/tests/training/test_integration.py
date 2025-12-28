@@ -227,6 +227,9 @@ class TestEndToEndTraining:
                 num_layers=2,
                 ff_dim=256,
 
+                # Enable policy for neural self-play
+                train_policy=True,
+
                 # Replay buffer
                 replay_buffer_size=100,
                 replay_buffer_min_size=10,
@@ -292,6 +295,9 @@ class TestEndToEndTraining:
                 num_heads=4,
                 num_layers=2,
                 ff_dim=256,
+
+                # Enable policy for neural self-play
+                train_policy=True,
 
                 replay_buffer_size=100,
                 replay_buffer_min_size=5,
