@@ -937,7 +937,7 @@ def advanced_anchor() -> Board:
 def get_all_variant_starts() -> List[Board]:
     """Get all predefined variant starting positions.
 
-    Useful for training diversity.
+    Includes full-game and simplified variants.
 
     Returns:
         List of all variant starting positions
@@ -949,7 +949,195 @@ def get_all_variant_starts() -> List[Board]:
         slotted_5_point(),
         slotted_bar_point(),
         advanced_anchor(),
+        hypergammon_start(),
+        micro_gammon_start(),
+        short_gammon_start(),
+        bearoff_practice(),
+        race_position(),
     ]
+
+
+def get_early_training_variants() -> List[Board]:
+    """Get simplified variants for early training.
+
+    Returns fast-finishing positions ideal for truncated early training.
+    Emphasizes hypergammon and simplified variants over full games.
+
+    Returns:
+        List of early training positions (3-9 checkers, low pip counts)
+    """
+    return [
+        hypergammon_start(),      # 3 checkers - fastest
+        micro_gammon_start(),     # 5 checkers - very fast
+        short_gammon_start(),     # 9 checkers - fast
+        bearoff_practice(),       # Pure bearoff training
+        race_position(),          # Pure race training
+    ]
+
+
+def get_mid_training_variants() -> List[Board]:
+    """Get mixed variants for mid training.
+
+    Balanced mix of simplified and full-game variants.
+
+    Returns:
+        List of mid training positions
+    """
+    return [
+        short_gammon_start(),
+        race_position(),
+        initial_board(),
+        split_back_checkers(),
+        slotted_5_point(),
+        slotted_bar_point(),
+    ]
+
+
+def get_late_training_variants() -> List[Board]:
+    """Get all variants for late training.
+
+    Includes all positions including complex full-game variants.
+
+    Returns:
+        List of late training positions
+    """
+    return get_all_variant_starts()
+
+
+def hypergammon_start() -> Board:
+    """Hypergammon starting position (3 checkers per side).
+
+    Hypergammon is a fast variant with only 3 checkers per player.
+    Standard setup: 2 on 24, 1 on 23 for white (mirror for black).
+    Games are much shorter, ideal for early training.
+
+    Returns:
+        Board with hypergammon starting position
+    """
+    board = empty_board()
+
+    # White: 2 on 24, 1 on 23
+    board.white_checkers[24] = 2
+    board.white_checkers[23] = 1
+
+    # Black: 2 on 1, 1 on 2
+    board.black_checkers[1] = 2
+    board.black_checkers[2] = 1
+
+    board.player_to_move = Player.WHITE
+    return board
+
+
+def micro_gammon_start() -> Board:
+    """Micro gammon starting position (5 checkers per side).
+
+    Very fast games for early training.
+    White: 2 on 24, 2 on 13, 1 on 8
+
+    Returns:
+        Board with 5 checkers per side
+    """
+    board = empty_board()
+
+    # White checkers
+    board.white_checkers[24] = 2
+    board.white_checkers[13] = 2
+    board.white_checkers[8] = 1
+
+    # Black checkers (mirrored)
+    board.black_checkers[1] = 2
+    board.black_checkers[12] = 2
+    board.black_checkers[17] = 1
+
+    board.player_to_move = Player.WHITE
+    return board
+
+
+def short_gammon_start() -> Board:
+    """Short gammon starting position (9 checkers per side).
+
+    Faster than full game, good for mid-training.
+    White: 2 on 24, 3 on 13, 2 on 8, 2 on 6
+
+    Returns:
+        Board with 9 checkers per side
+    """
+    board = empty_board()
+
+    # White checkers
+    board.white_checkers[24] = 2
+    board.white_checkers[13] = 3
+    board.white_checkers[8] = 2
+    board.white_checkers[6] = 2
+
+    # Black checkers (mirrored)
+    board.black_checkers[1] = 2
+    board.black_checkers[12] = 3
+    board.black_checkers[17] = 2
+    board.black_checkers[19] = 2
+
+    board.player_to_move = Player.WHITE
+    return board
+
+
+def bearoff_practice() -> Board:
+    """Bearoff practice position (all checkers in home board).
+
+    All 15 checkers already in home, pure bearoff training.
+    White: distributed across points 1-6
+
+    Returns:
+        Board with all checkers in home board
+    """
+    board = empty_board()
+
+    # White: spread across home board
+    board.white_checkers[6] = 3
+    board.white_checkers[5] = 3
+    board.white_checkers[4] = 3
+    board.white_checkers[3] = 3
+    board.white_checkers[2] = 2
+    board.white_checkers[1] = 1
+
+    # Black: spread across home board
+    board.black_checkers[19] = 3
+    board.black_checkers[20] = 3
+    board.black_checkers[21] = 3
+    board.black_checkers[22] = 3
+    board.black_checkers[23] = 2
+    board.black_checkers[24] = 1
+
+    board.player_to_move = Player.WHITE
+    return board
+
+
+def race_position() -> Board:
+    """Race position (past contact, pure running game).
+
+    Both players past contact, pure pip count race.
+    Lower pip count, faster games.
+
+    Returns:
+        Board in race position
+    """
+    board = empty_board()
+
+    # White: points 1-12
+    board.white_checkers[12] = 2
+    board.white_checkers[10] = 3
+    board.white_checkers[8] = 3
+    board.white_checkers[6] = 4
+    board.white_checkers[3] = 3
+
+    # Black: points 13-24
+    board.black_checkers[13] = 2
+    board.black_checkers[15] = 3
+    board.black_checkers[17] = 3
+    board.black_checkers[19] = 4
+    board.black_checkers[22] = 3
+
+    board.player_to_move = Player.WHITE
+    return board
 
 
 def random_variant_start(rng: Optional[np.random.Generator] = None) -> Board:
