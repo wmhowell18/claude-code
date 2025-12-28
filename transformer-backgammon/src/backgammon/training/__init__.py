@@ -25,6 +25,25 @@ from backgammon.training.train import (
     save_metrics,
 )
 
+from backgammon.training.losses import (
+    compute_policy_loss,
+    compute_value_loss,
+    compute_combined_loss,
+    train_step,
+    prepare_training_batch,
+    compute_metrics,
+)
+
+from backgammon.training.replay_buffer import (
+    ReplayBuffer,
+    PrioritizedReplayBuffer,
+)
+
+from backgammon.training.metrics import (
+    MetricsLogger,
+    MetricsAggregator,
+)
+
 __all__ = [
     # Self-play
     "GameStep",
@@ -40,4 +59,17 @@ __all__ = [
     "create_train_state",
     "save_checkpoint",
     "save_metrics",
+    # Loss functions
+    "compute_policy_loss",
+    "compute_value_loss",
+    "compute_combined_loss",
+    "train_step",
+    "prepare_training_batch",
+    "compute_metrics",
+    # Replay buffer
+    "ReplayBuffer",
+    "PrioritizedReplayBuffer",
+    # Metrics logging
+    "MetricsLogger",
+    "MetricsAggregator",
 ]
