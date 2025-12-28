@@ -1,6 +1,10 @@
-# Transformer Backgammon
+# Transformer Backgammon 🎲🤖
 
-A GPU-optimized backgammon AI using transformer neural networks, built with JAX/Flax.
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/wmhowell18/claude-code/blob/main/transformer-backgammon/colab_tpu_training.ipynb)
+
+A GPU/TPU-optimized backgammon AI using transformer neural networks, built with JAX/Flax.
+
+**Quick Start:** Click the badge above to train on Google Colab TPU (free!)
 
 ## Project Overview
 
