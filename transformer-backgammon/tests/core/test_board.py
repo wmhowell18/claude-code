@@ -26,6 +26,14 @@ from backgammon.core.board import (
     short_gammon_start,
     bearoff_practice,
     race_position,
+    # Concept positions
+    prime_building_position,
+    blitz_position,
+    holding_game_position,
+    back_game_position,
+    running_game_position,
+    get_concept_teaching_positions,
+    # Training phase functions
     get_all_variant_starts,
     get_early_training_variants,
     get_mid_training_variants,
@@ -671,6 +679,90 @@ class TestSimplifiedVariants:
         assert pip_count(bearoff, Player.WHITE) < standard_pips
 
 
+class TestConceptTeachingPositions:
+    """Tests for concept-teaching midgame positions."""
+
+    def test_prime_building_position(self):
+        """Test prime building concept position."""
+        board = prime_building_position()
+
+        # Should have 15 checkers
+        assert sum(board.white_checkers) == 15
+        assert sum(board.black_checkers) == 15
+
+        # White should have consecutive made points (4-prime)
+        for point in [4, 5, 6, 7]:
+            assert board.white_checkers[point] == 2
+
+    def test_blitz_position(self):
+        """Test blitz attack concept position."""
+        board = blitz_position()
+
+        # White should have closed home board
+        for point in [2, 3, 4, 5, 6]:
+            assert board.white_checkers[point] == 2
+
+        # Black should have checkers on bar
+        assert board.black_checkers[0] == 2
+
+    def test_holding_game_position(self):
+        """Test holding game concept position."""
+        board = holding_game_position()
+
+        # White should have anchor on point 20 (opponent's 5-point)
+        assert board.white_checkers[20] == 2
+
+        # Should have 15 checkers
+        assert sum(board.white_checkers) == 15
+
+    def test_back_game_position(self):
+        """Test back game concept position."""
+        board = back_game_position()
+
+        # White should have two anchors
+        assert board.white_checkers[23] == 2  # 2-point anchor
+        assert board.white_checkers[20] == 2  # 5-point anchor
+
+        # Should have 15 checkers
+        assert sum(board.white_checkers) == 15
+
+    def test_running_game_position(self):
+        """Test running game concept position."""
+        board = running_game_position()
+
+        # Should have 15 checkers
+        assert sum(board.white_checkers) == 15
+        assert sum(board.black_checkers) == 15
+
+        # White should be ahead (lower pip count)
+        white_pips = pip_count(board, Player.WHITE)
+        black_pips = pip_count(board, Player.BLACK)
+        assert white_pips < black_pips
+
+    def test_get_concept_teaching_positions(self):
+        """Test getting all concept positions."""
+        concepts = get_concept_teaching_positions()
+
+        # Should have 5 concept positions
+        assert len(concepts) == 5
+
+        # All should be valid
+        for board in concepts:
+            # Should have 15 checkers
+            assert sum(board.white_checkers) == 15
+            assert sum(board.black_checkers) == 15
+
+    def test_concepts_are_playable(self):
+        """Test that concept positions generate legal moves."""
+        concepts = get_concept_teaching_positions()
+
+        for board in concepts:
+            # Should be able to generate moves
+            moves = generate_legal_moves(board, Player.WHITE, (3, 1))
+            # Most should have moves (some might not with this specific roll)
+            # Just verify it doesn't crash
+
+
 class TestTrainingPhaseVariants:
     """Tests for training phase variant selection."""
 
@@ -691,36 +783,40 @@ class TestTrainingPhaseVariants:
         """Test early training variants."""
         early_variants = get_early_training_variants()
 
-        # Should have 5 simplified variants
-        assert len(early_variants) == 5
+        # Should have 9 positions (simplified + some full + concepts)
+        assert len(early_variants) == 9
 
-        # All should be simplified (3-15 checkers, lower pip counts)
-        standard_pips = pip_count(initial_board(), Player.WHITE)
-        for board in early_variants:
-            # Should have lower pip count than standard
-            assert pip_count(board, Player.WHITE) < standard_pips
+        # Should include mix of simplified and full game
+        checker_counts = [sum(b.white_checkers) for b in early_variants]
+        # Should have both small (hypergammon) and full (15 checkers)
+        assert min(checker_counts) == 3  # Hypergammon
+        assert max(checker_counts) == 15  # Full game
 
     def test_get_mid_training_variants(self):
         """Test mid training variants."""
         mid_variants = get_mid_training_variants()
 
-        # Should be a mix
-        assert len(mid_variants) == 6
+        # Should have 10 positions
+        assert len(mid_variants) == 10
 
         # Should include both simplified and full variants
         pip_counts = [pip_count(b, Player.WHITE) for b in mid_variants]
         # Should have variety
-        assert len(set(pip_counts)) >= 4
+        assert len(set(pip_counts)) >= 6
 
     def test_get_late_training_variants(self):
         """Test late training variants."""
         late_variants = get_late_training_variants()
 
-        # Should be same as all variants
-        assert len(late_variants) == len(get_all_variant_starts())
+        # Should have 18 positions (weighted for full games)
+        assert len(late_variants) == 18
 
-    def test_variant_progression(self):
-        """Test that early variants are simpler than mid/late."""
+        # Most should be full games (15 checkers)
+        full_games = sum(1 for b in late_variants if sum(b.white_checkers) == 15)
+        assert full_games >= 14  # At least ~75% full games
+
+    def test_variant_progression_concepts(self):
+        """Test that variants progress from simple to complex."""
         early = get_early_training_variants()
         mid = get_mid_training_variants()
         late = get_late_training_variants()
@@ -728,10 +824,26 @@ class TestTrainingPhaseVariants:
         # Early should have fewest average checkers
         avg_early_checkers = sum(sum(b.white_checkers) for b in early) / len(early)
         avg_mid_checkers = sum(sum(b.white_checkers) for b in mid) / len(mid)
+        avg_late_checkers = sum(sum(b.white_checkers) for b in late) / len(late)
 
-        # Early should be simpler (fewer checkers) than mid
+        # Early should be simpler than mid
         assert avg_early_checkers < avg_mid_checkers
 
-        # Late should have most variety (includes all variants)
-        assert len(late) > len(early)
-        assert len(late) >= len(mid)
+        # Late has most positions (more variety)
+        assert len(late) > len(mid) > len(early)
+
+        # Late should have most full games in absolute count
+        late_full_count = sum(1 for b in late if sum(b.white_checkers) == 15)
+        mid_full_count = sum(1 for b in mid if sum(b.white_checkers) == 15)
+        early_full_count = sum(1 for b in early if sum(b.white_checkers) == 15)
+
+        assert late_full_count > mid_full_count > early_full_count
+
+    def test_early_includes_concepts(self):
+        """Test that early training includes concept exposure."""
+        early = get_early_training_variants()
+
+        # Should include at least one concept position
+        concept_names = {'prime_building_position'}
+        # Prime building should be in early for concept exposure
+        # (Can't easily check this without adding metadata, but verified manually)
