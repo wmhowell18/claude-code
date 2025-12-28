@@ -805,3 +805,583 @@ def is_legal_move(board: Board, player: Player, dice: Dice, move: Move) -> bool:
     """
     legal_moves = generate_legal_moves(board, player, dice)
     return move in legal_moves
+
+
+# ==============================================================================
+# POSITION VARIANTS (for training diversity)
+# ==============================================================================
+
+
+def nackgammon_start() -> Board:
+    """Create nackgammon starting position.
+
+    Nackgammon is a popular variant with a different starting setup:
+    - Splits back checkers: 2 on 24, 2 on 23 (instead of 2 on 24)
+    - Takes one each from 13 and 6: 4 on 13, 4 on 6 (instead of 5 on each)
+    - Black setup is mirrored
+
+    This reduces the penalty for early hitting and creates more dynamic opening play.
+
+    Returns:
+        Board in nackgammon starting position
+    """
+    board = Board()
+
+    # White checkers
+    board.white_checkers[24] = 2
+    board.white_checkers[23] = 2
+    board.white_checkers[13] = 4  # Takes one from standard 5
+    board.white_checkers[8] = 3
+    board.white_checkers[6] = 4  # Takes one from standard 5
+
+    # Black checkers
+    board.black_checkers[1] = 2
+    board.black_checkers[2] = 2
+    board.black_checkers[12] = 4  # Takes one from standard 5
+    board.black_checkers[17] = 3
+    board.black_checkers[19] = 4  # Takes one from standard 5
+
+    board.player_to_move = Player.WHITE
+    return board
+
+
+def split_back_checkers() -> Board:
+    """Starting position with back checkers split.
+
+    White: 1 on 24, 1 on 23 instead of 2 on 24
+    Black: 1 on 1, 1 on 2 instead of 2 on 1
+
+    This is a common opening variation that gives more flexibility.
+
+    Returns:
+        Board with split back checkers
+    """
+    board = initial_board()
+
+    # White: move one checker from 24 to 23
+    board.white_checkers[24] = 1
+    board.white_checkers[23] = 1
+
+    # Black: move one checker from 1 to 2
+    board.black_checkers[1] = 1
+    board.black_checkers[2] = 1
+
+    return board
+
+
+def slotted_5_point() -> Board:
+    """Starting position with 5-point slotted.
+
+    Move one checker from 6-point to 5-point for white,
+    one from 19-point to 20-point for black.
+
+    Returns:
+        Board with slotted 5-points
+    """
+    board = initial_board()
+
+    # White: slot the 5-point
+    board.white_checkers[6] = 4
+    board.white_checkers[5] = 1
+
+    # Black: slot the 20-point
+    board.black_checkers[19] = 4
+    board.black_checkers[20] = 1
+
+    return board
+
+
+def slotted_bar_point() -> Board:
+    """Starting position with bar point (7-point) slotted.
+
+    Move one checker to 7-point for white, 18-point for black.
+
+    Returns:
+        Board with slotted bar points
+    """
+    board = initial_board()
+
+    # White: slot the 7-point (take from 13)
+    board.white_checkers[13] = 4
+    board.white_checkers[7] = 1
+
+    # Black: slot the 18-point (take from 12)
+    board.black_checkers[12] = 4
+    board.black_checkers[18] = 1
+
+    return board
+
+
+def advanced_anchor() -> Board:
+    """Starting position with advanced anchors.
+
+    Move back checkers forward to 20-point for white, 5-point for black.
+    Creates an immediate anchor in opponent's board.
+
+    Returns:
+        Board with advanced anchors
+    """
+    board = initial_board()
+
+    # White: move from 24 to 20 (opponent's 5-point)
+    board.white_checkers[24] = 0
+    board.white_checkers[20] = 2
+
+    # Black: move from 1 to 5 (opponent's 20-point)
+    board.black_checkers[1] = 0
+    board.black_checkers[5] = 2
+
+    return board
+
+
+def get_all_variant_starts() -> List[Board]:
+    """Get all predefined variant starting positions.
+
+    Includes full-game and simplified variants.
+
+    Returns:
+        List of all variant starting positions
+    """
+    return [
+        initial_board(),
+        nackgammon_start(),
+        split_back_checkers(),
+        slotted_5_point(),
+        slotted_bar_point(),
+        advanced_anchor(),
+        hypergammon_start(),
+        micro_gammon_start(),
+        short_gammon_start(),
+        bearoff_practice(),
+        race_position(),
+    ]
+
+
+def get_early_training_variants() -> List[Board]:
+    """Get simplified variants for early training.
+
+    Returns fast-finishing positions ideal for truncated early training.
+    Mix: ~70% simplified (fast completion), ~30% full game + concepts
+    to ensure exposure to advanced backgammon strategy.
+
+    Returns:
+        List of early training positions
+    """
+    return [
+        hypergammon_start(),      # 3 checkers - fastest
+        hypergammon_start(),      # Repeat for higher weight
+        micro_gammon_start(),     # 5 checkers - very fast
+        short_gammon_start(),     # 9 checkers - fast
+        bearoff_practice(),       # Pure bearoff training
+        race_position(),          # Pure race training
+        # Full game positions for concept exposure
+        initial_board(),          # Standard opening
+        split_back_checkers(),    # Opening variation
+        # Concept positions (midgame)
+        prime_building_position(), # Learn priming
+    ]
+
+
+def get_mid_training_variants() -> List[Board]:
+    """Get mixed variants for mid training.
+
+    Mix: ~40% simplified, ~60% full-game + concepts.
+    Emphasizes advanced concepts and full games while keeping
+    some simplified positions for training efficiency.
+
+    Returns:
+        List of mid training positions
+    """
+    return [
+        # Some simplified (faster training)
+        short_gammon_start(),
+        race_position(),
+        # Full game openings
+        initial_board(),
+        split_back_checkers(),
+        slotted_5_point(),      # Teaches slotting
+        slotted_bar_point(),    # Teaches slotting
+        # Advanced concepts
+        prime_building_position(),
+        holding_game_position(),
+        blitz_position(),
+        running_game_position(),
+    ]
+
+
+def get_late_training_variants() -> List[Board]:
+    """Get all variants for late training.
+
+    Mix: ~20% simplified, ~80% full game + concepts.
+    Heavily emphasizes full-game positions and advanced concepts.
+
+    Returns:
+        List of late training positions
+    """
+    return [
+        # Keep some simplified for efficiency
+        hypergammon_start(),
+        short_gammon_start(),
+        # Full game variants (weighted)
+        initial_board(),
+        initial_board(),        # Higher weight
+        nackgammon_start(),
+        split_back_checkers(),
+        slotted_5_point(),
+        slotted_bar_point(),
+        advanced_anchor(),
+        # All concept positions (weighted)
+        prime_building_position(),
+        prime_building_position(),  # Priming is crucial
+        blitz_position(),
+        holding_game_position(),
+        back_game_position(),
+        back_game_position(),   # Back game is complex, needs exposure
+        running_game_position(),
+        # Special positions
+        bearoff_practice(),
+        race_position(),
+    ]
+
+
+def hypergammon_start() -> Board:
+    """Hypergammon starting position (3 checkers per side).
+
+    Hypergammon is a fast variant with only 3 checkers per player.
+    Standard setup: 2 on 24, 1 on 23 for white (mirror for black).
+    Games are much shorter, ideal for early training.
+
+    Returns:
+        Board with hypergammon starting position
+    """
+    board = empty_board()
+
+    # White: 2 on 24, 1 on 23
+    board.white_checkers[24] = 2
+    board.white_checkers[23] = 1
+
+    # Black: 2 on 1, 1 on 2
+    board.black_checkers[1] = 2
+    board.black_checkers[2] = 1
+
+    board.player_to_move = Player.WHITE
+    return board
+
+
+def micro_gammon_start() -> Board:
+    """Micro gammon starting position (5 checkers per side).
+
+    Very fast games for early training.
+    White: 2 on 24, 2 on 13, 1 on 8
+
+    Returns:
+        Board with 5 checkers per side
+    """
+    board = empty_board()
+
+    # White checkers
+    board.white_checkers[24] = 2
+    board.white_checkers[13] = 2
+    board.white_checkers[8] = 1
+
+    # Black checkers (mirrored)
+    board.black_checkers[1] = 2
+    board.black_checkers[12] = 2
+    board.black_checkers[17] = 1
+
+    board.player_to_move = Player.WHITE
+    return board
+
+
+def short_gammon_start() -> Board:
+    """Short gammon starting position (9 checkers per side).
+
+    Faster than full game, good for mid-training.
+    White: 2 on 24, 3 on 13, 2 on 8, 2 on 6
+
+    Returns:
+        Board with 9 checkers per side
+    """
+    board = empty_board()
+
+    # White checkers
+    board.white_checkers[24] = 2
+    board.white_checkers[13] = 3
+    board.white_checkers[8] = 2
+    board.white_checkers[6] = 2
+
+    # Black checkers (mirrored)
+    board.black_checkers[1] = 2
+    board.black_checkers[12] = 3
+    board.black_checkers[17] = 2
+    board.black_checkers[19] = 2
+
+    board.player_to_move = Player.WHITE
+    return board
+
+
+def bearoff_practice() -> Board:
+    """Bearoff practice position (all checkers in home board).
+
+    All 15 checkers already in home, pure bearoff training.
+    White: distributed across points 1-6
+
+    Returns:
+        Board with all checkers in home board
+    """
+    board = empty_board()
+
+    # White: spread across home board
+    board.white_checkers[6] = 3
+    board.white_checkers[5] = 3
+    board.white_checkers[4] = 3
+    board.white_checkers[3] = 3
+    board.white_checkers[2] = 2
+    board.white_checkers[1] = 1
+
+    # Black: spread across home board
+    board.black_checkers[19] = 3
+    board.black_checkers[20] = 3
+    board.black_checkers[21] = 3
+    board.black_checkers[22] = 3
+    board.black_checkers[23] = 2
+    board.black_checkers[24] = 1
+
+    board.player_to_move = Player.WHITE
+    return board
+
+
+def race_position() -> Board:
+    """Race position (past contact, pure running game).
+
+    Both players past contact, pure pip count race.
+    Lower pip count, faster games.
+
+    Returns:
+        Board in race position
+    """
+    board = empty_board()
+
+    # White: points 1-12
+    board.white_checkers[12] = 2
+    board.white_checkers[10] = 3
+    board.white_checkers[8] = 3
+    board.white_checkers[6] = 4
+    board.white_checkers[3] = 3
+
+    # Black: points 13-24
+    board.black_checkers[13] = 2
+    board.black_checkers[15] = 3
+    board.black_checkers[17] = 3
+    board.black_checkers[19] = 4
+    board.black_checkers[22] = 3
+
+    board.player_to_move = Player.WHITE
+    return board
+
+
+def prime_building_position() -> Board:
+    """Position demonstrating prime building (consecutive made points).
+
+    Both players have partial primes, teaching the value of consecutive
+    made points for blocking opponent checkers.
+
+    Returns:
+        Board with prime-building position
+    """
+    board = empty_board()
+
+    # White: Building a 4-prime (points 4-7)
+    board.white_checkers[7] = 2
+    board.white_checkers[6] = 2
+    board.white_checkers[5] = 2
+    board.white_checkers[4] = 2
+    # Back checkers still trapped
+    board.white_checkers[24] = 2
+    board.white_checkers[23] = 1
+    # Spare checkers
+    board.white_checkers[13] = 2
+    board.white_checkers[8] = 2
+
+    # Black: Similar structure (mirror)
+    board.black_checkers[18] = 2
+    board.black_checkers[19] = 2
+    board.black_checkers[20] = 2
+    board.black_checkers[21] = 2
+    board.black_checkers[1] = 2
+    board.black_checkers[2] = 1
+    board.black_checkers[12] = 2
+    board.black_checkers[17] = 2
+
+    board.player_to_move = Player.WHITE
+    return board
+
+
+def blitz_position() -> Board:
+    """Blitz/attack position demonstrating aggressive hitting strategy.
+
+    Teaches when to go for a blitz (attack multiple blots, close out board).
+
+    Returns:
+        Board with blitz opportunity
+    """
+    board = empty_board()
+
+    # White: Closed home board, opponent has checkers on bar
+    board.white_checkers[6] = 2
+    board.white_checkers[5] = 2
+    board.white_checkers[4] = 2
+    board.white_checkers[3] = 2
+    board.white_checkers[2] = 2
+    board.white_checkers[13] = 3
+    board.white_checkers[8] = 2
+
+    # Black: On bar with closed board (difficult position)
+    board.black_checkers[0] = 2  # On bar
+    board.black_checkers[12] = 4
+    board.black_checkers[17] = 3
+    board.black_checkers[20] = 3
+    board.black_checkers[22] = 2
+    board.black_checkers[23] = 1
+
+    board.player_to_move = Player.WHITE
+    return board
+
+
+def holding_game_position() -> Board:
+    """Holding game position (anchor + waiting strategy).
+
+    Teaches value of holding an anchor deep in opponent's home
+    while waiting for a shot.
+
+    Returns:
+        Board with holding game position
+    """
+    board = empty_board()
+
+    # White: Anchor on opponent's 5-point (20), builders
+    board.white_checkers[20] = 2  # Deep anchor
+    board.white_checkers[13] = 3
+    board.white_checkers[11] = 2
+    board.white_checkers[9] = 2
+    board.white_checkers[8] = 2
+    board.white_checkers[7] = 2
+    board.white_checkers[6] = 2
+
+    # Black: Racing ahead, some blots
+    board.black_checkers[8] = 1  # Blot (shot for white)
+    board.black_checkers[7] = 2
+    board.black_checkers[6] = 3
+    board.black_checkers[5] = 3
+    board.black_checkers[4] = 2
+    board.black_checkers[3] = 2
+    board.black_checkers[2] = 2
+
+    board.player_to_move = Player.WHITE
+    return board
+
+
+def back_game_position() -> Board:
+    """Back game position (multiple deep anchors).
+
+    Teaches advanced back game strategy: holding 2 anchors,
+    timing, waiting for shots.
+
+    Returns:
+        Board with back game position
+    """
+    board = empty_board()
+
+    # White: Two anchors (20-point and 23-point)
+    board.white_checkers[23] = 2  # 2-point anchor
+    board.white_checkers[20] = 2  # 5-point anchor
+    # Remaining checkers spread for timing
+    board.white_checkers[13] = 3
+    board.white_checkers[12] = 2
+    board.white_checkers[11] = 2
+    board.white_checkers[10] = 2
+    board.white_checkers[9] = 2
+
+    # Black: Breaking home board (vulnerable)
+    board.black_checkers[10] = 2  # Blots being created
+    board.black_checkers[9] = 1
+    board.black_checkers[6] = 3
+    board.black_checkers[5] = 3
+    board.black_checkers[4] = 2
+    board.black_checkers[3] = 2
+    board.black_checkers[2] = 2
+
+    board.player_to_move = Player.WHITE
+    return board
+
+
+def running_game_position() -> Board:
+    """Running game with one player ahead.
+
+    Teaches doubling strategy and pure race evaluation.
+
+    Returns:
+        Board with running game position
+    """
+    board = empty_board()
+
+    # White: Ahead in race
+    board.white_checkers[10] = 2
+    board.white_checkers[9] = 2
+    board.white_checkers[8] = 3
+    board.white_checkers[6] = 3
+    board.white_checkers[5] = 2
+    board.white_checkers[4] = 2
+    board.white_checkers[3] = 1
+
+    # Black: Behind in race
+    board.black_checkers[14] = 2
+    board.black_checkers[13] = 2
+    board.black_checkers[12] = 3
+    board.black_checkers[19] = 3
+    board.black_checkers[20] = 2
+    board.black_checkers[21] = 2
+    board.black_checkers[22] = 1
+
+    board.player_to_move = Player.WHITE
+    return board
+
+
+def get_concept_teaching_positions() -> List[Board]:
+    """Get positions demonstrating specific backgammon concepts.
+
+    These midgame positions teach advanced concepts that don't appear
+    in simplified variants:
+    - Priming strategy (building consecutive made points)
+    - Blitz attacks (aggressive hitting + closeout)
+    - Holding games (deep anchor + waiting)
+    - Back games (multiple anchors + timing)
+    - Running games (pure race evaluation)
+
+    Returns:
+        List of concept-teaching positions
+    """
+    return [
+        prime_building_position(),
+        blitz_position(),
+        holding_game_position(),
+        back_game_position(),
+        running_game_position(),
+    ]
+
+
+def random_variant_start(rng: Optional[np.random.Generator] = None) -> Board:
+    """Select a random variant starting position.
+
+    Args:
+        rng: Numpy random generator (creates new one if None)
+
+    Returns:
+        Random variant starting position
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    variants = get_all_variant_starts()
+    idx = rng.integers(0, len(variants))
+    return variants[idx]
