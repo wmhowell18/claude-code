@@ -205,6 +205,7 @@ def save_checkpoint(state: train_state.TrainState, config: TrainingConfig, step:
         target=state,
         step=step,
         keep=5,  # Keep last 5 checkpoints
+        overwrite=True,  # Allow overwriting existing checkpoints
     )
 
 
