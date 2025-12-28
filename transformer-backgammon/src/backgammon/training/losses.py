@@ -69,27 +69,39 @@ def compute_combined_loss(
     """Compute combined policy + value loss.
 
     Args:
-        policy_logits: Network policy logits
+        policy_logits: Network policy logits (None for value-only mode)
         value_pred: Network value predictions
-        target_policy: Target policy
+        target_policy: Target policy (ignored in value-only mode)
         value_target: Target values
-        mask: Action mask
+        mask: Action mask (ignored in value-only mode)
         policy_weight: Weight for policy loss
         value_weight: Weight for value loss
 
     Returns:
         Tuple of (total_loss, metrics_dict)
     """
-    policy_loss = compute_policy_loss(policy_logits, target_policy, mask)
     value_loss = compute_value_loss(value_pred, value_target)
 
-    total_loss = policy_weight * policy_loss + value_weight * value_loss
+    # Check if policy head is enabled
+    if policy_logits is not None:
+        # Combined policy + value training
+        policy_loss = compute_policy_loss(policy_logits, target_policy, mask)
+        total_loss = policy_weight * policy_loss + value_weight * value_loss
 
-    metrics = {
-        'policy_loss': policy_loss,
-        'value_loss': value_loss,
-        'total_loss': total_loss,
-    }
+        metrics = {
+            'policy_loss': policy_loss,
+            'value_loss': value_loss,
+            'total_loss': total_loss,
+        }
+    else:
+        # Value-only training
+        total_loss = value_weight * value_loss
+
+        metrics = {
+            'policy_loss': jnp.array(0.0),  # Placeholder
+            'value_loss': value_loss,
+            'total_loss': total_loss,
+        }
 
     return total_loss, metrics
 
@@ -256,11 +268,6 @@ def compute_metrics(
         equity[:, 4] * (-3.0)
     )
 
-    # Compute accuracy (top-1)
-    predictions = jnp.argmax(policy_logits, axis=-1)
-    targets = jnp.argmax(batch['target_policy'], axis=-1)
-    accuracy = jnp.mean(predictions == targets)
-
     # Compute loss
     loss, loss_metrics = compute_combined_loss(
         policy_logits,
@@ -271,10 +278,18 @@ def compute_metrics(
     )
 
     metrics = {
-        'accuracy': float(accuracy),
         'loss': float(loss),
         'policy_loss': float(loss_metrics['policy_loss']),
         'value_loss': float(loss_metrics['value_loss']),
     }
+
+    # Add policy accuracy if policy head is enabled
+    if policy_logits is not None:
+        predictions = jnp.argmax(policy_logits, axis=-1)
+        targets = jnp.argmax(batch['target_policy'], axis=-1)
+        accuracy = jnp.mean(predictions == targets)
+        metrics['accuracy'] = float(accuracy)
+    else:
+        metrics['accuracy'] = 0.0  # Placeholder for value-only mode
 
     return metrics
