@@ -12,6 +12,11 @@ import random
 
 from backgammon.training.self_play import GameResult, GameStep
 from backgammon.encoding.encoder import encode_board, raw_encoding_config
+from backgammon.encoding.action_encoder import (
+    encode_move_to_one_hot,
+    create_action_mask,
+    get_action_space_size,
+)
 from backgammon.core.types import Player
 
 
@@ -128,8 +133,9 @@ class ReplayBuffer:
         for step, value_target in sampled_steps:
             # Encode board state
             encoded = encode_board(self._encoding_config, step.board)
-            # Flatten the features (1, 26, feature_dim) -> (26 * feature_dim,)
-            board_enc = encoded.position_features.reshape(-1)
+            # Keep as (26, feature_dim) - don't flatten
+            # Remove batch dimension: (1, 26, feature_dim) -> (26, feature_dim)
+            board_enc = encoded.position_features[0]
             board_encodings.append(board_enc)
 
             # Create target policy from move taken
@@ -160,59 +166,37 @@ class ReplayBuffer:
         self,
         move_taken: tuple,
         legal_moves: List[tuple],
-        num_actions: int = 256,
     ) -> np.ndarray:
         """Create target policy distribution.
 
-        For now, creates a one-hot distribution on the move that was played.
+        Creates a one-hot distribution on the move that was played.
         In a more sophisticated version, this would use MCTS visit counts
         or other policy improvement methods.
 
         Args:
             move_taken: The move that was actually played
             legal_moves: All legal moves in this position
-            num_actions: Size of action space
 
         Returns:
-            Target policy distribution (num_actions,)
+            Target policy distribution (ACTION_SPACE_SIZE,)
         """
-        # Create zero policy
-        policy = np.zeros(num_actions, dtype=np.float32)
-
-        # Find index of move taken
-        # TODO: Proper move encoding
-        # For now, use hash as placeholder
-        move_idx = hash(move_taken) % num_actions
-        policy[move_idx] = 1.0
-
-        # Could also distribute probability among legal moves
-        # for a softer target (helps exploration)
-
-        return policy
+        # Use proper action encoder to create one-hot policy
+        return encode_move_to_one_hot(move_taken, legal_moves)
 
     def _create_action_mask(
         self,
         legal_moves: List[tuple],
-        num_actions: int = 256,
     ) -> np.ndarray:
         """Create mask of legal actions.
 
         Args:
             legal_moves: List of legal moves
-            num_actions: Size of action space
 
         Returns:
-            Boolean mask (num_actions,) - True for legal actions
+            Boolean mask (ACTION_SPACE_SIZE,) - True for legal actions
         """
-        mask = np.zeros(num_actions, dtype=bool)
-
-        # Mark legal moves as valid
-        # TODO: Proper move encoding
-        for move in legal_moves:
-            move_idx = hash(move) % num_actions
-            mask[move_idx] = True
-
-        return mask
+        # Use proper action encoder to create action mask
+        return create_action_mask(legal_moves)
 
     def clear(self) -> None:
         """Clear all data from buffer."""
@@ -333,7 +317,8 @@ class PrioritizedReplayBuffer(ReplayBuffer):
 
         for step, value_target in sampled_steps:
             encoded = encode_board(self._encoding_config, step.board)
-            board_enc = encoded.position_features.reshape(-1)
+            # Keep as (26, feature_dim) - don't flatten
+            board_enc = encoded.position_features[0]
             board_encodings.append(board_enc)
 
             target_policy = self._create_policy_target(

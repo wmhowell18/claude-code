@@ -100,21 +100,24 @@ class NeuralNetworkAgent:
                 value: (batch_size,) - value estimate
         """
         # Apply model (no gradient needed for inference)
-        output = self.state.apply_fn(
+        # Network returns (equity, policy, attention_weights)
+        equity, policy_logits, _ = self.state.apply_fn(
             {'params': self.state.params},
             encoded_board,
-            train=False,
+            training=False,
         )
 
-        # Network returns: (batch_size, num_outputs)
-        # We'll split into policy and value heads
-        # For now, assume the network has built-in heads
-        # TODO: May need to adjust based on actual network output format
-
-        # Placeholder: assume output is just logits for now
-        # In reality, we'd have separate policy and value heads
-        policy_logits = output  # Shape: (batch_size, num_actions)
-        value = jnp.zeros((output.shape[0],))  # Placeholder
+        # Extract value from equity (use expected value from equity distribution)
+        # Equity is [batch_size, 5]: [win_normal, win_gammon, win_backgammon, lose_gammon, lose_backgammon]
+        # Convert to single value estimate (simple weighted sum)
+        # Wins are positive, losses are negative
+        value = (
+            equity[:, 0] * 1.0 +  # win normal
+            equity[:, 1] * 2.0 +  # win gammon
+            equity[:, 2] * 3.0 +  # win backgammon
+            equity[:, 3] * (-2.0) +  # lose gammon
+            equity[:, 4] * (-3.0)  # lose backgammon
+        )
 
         return policy_logits, value
 

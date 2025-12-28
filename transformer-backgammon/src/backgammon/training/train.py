@@ -26,8 +26,14 @@ from backgammon.core.board import (
     get_mid_training_variants,
     get_late_training_variants,
 )
+from backgammon.core.types import TransformerConfig
+from backgammon.encoding.action_encoder import get_action_space_size
 from backgammon.evaluation.agents import pip_count_agent
+from backgammon.evaluation.network_agent import create_neural_agent
 from backgammon.training.self_play import generate_training_batch, compute_game_statistics
+from backgammon.training.replay_buffer import ReplayBuffer
+from backgammon.training.losses import train_step
+from backgammon.training.metrics import MetricsLogger
 from backgammon.network.network import BackgammonTransformer
 
 
@@ -46,16 +52,26 @@ class TrainingConfig:
     checkpoint_every_n_batches: int = 100
     log_every_n_batches: int = 10
 
-    # Model settings
-    d_model: int = 256
+    # Model settings (transformer architecture)
+    embed_dim: int = 256
     num_heads: int = 8
     num_layers: int = 6
+    ff_dim: int = 1024  # Feed-forward hidden dimension (typically 4x embed_dim)
     dropout_rate: float = 0.1
 
     # Optimizer settings
     learning_rate: float = 3e-4
     warmup_steps: int = 1000
     max_grad_norm: float = 1.0
+
+    # Replay buffer settings
+    replay_buffer_size: int = 100_000
+    replay_buffer_min_size: int = 1_000
+    training_batch_size: int = 256  # Neural network training batch size
+    train_steps_per_game_batch: int = 4  # Training steps per game batch
+
+    # Agent settings
+    neural_agent_temperature: float = 0.3  # Exploration during self-play
 
     # Paths
     checkpoint_dir: str = "checkpoints"
@@ -128,17 +144,25 @@ def create_train_state(config: TrainingConfig, rng: jax.random.PRNGKey) -> train
     Returns:
         Initialized training state
     """
-    # Initialize model
-    model = BackgammonTransformer(
-        d_model=config.d_model,
+    # Create transformer config
+    transformer_config = TransformerConfig(
+        embed_dim=config.embed_dim,
         num_heads=config.num_heads,
         num_layers=config.num_layers,
+        ff_dim=config.ff_dim,
         dropout_rate=config.dropout_rate,
+        input_feature_dim=2,  # Raw encoding has 2 features per position
+        use_policy_head=True,  # Enable policy prediction
+        num_actions=get_action_space_size(),  # Action space size from encoder
     )
 
-    # Dummy input for initialization (26-dim board encoding)
-    dummy_input = jnp.zeros((1, 26))
-    variables = model.init(rng, dummy_input, train=False)
+    # Initialize model
+    model = BackgammonTransformer(config=transformer_config)
+
+    # Dummy input for initialization (26 positions x 2 features = 52 dims)
+    # Note: The network expects raw features, not flattened encoding
+    dummy_input = jnp.zeros((1, 26, 2))
+    variables = model.init(rng, dummy_input, training=False)
 
     # Learning rate schedule with warmup
     schedule = optax.warmup_cosine_decay_schedule(
@@ -197,7 +221,7 @@ def save_metrics(metrics: TrainingMetrics, config: TrainingConfig):
 
 
 def train(config: Optional[TrainingConfig] = None):
-    """Main training loop.
+    """Main training loop with curriculum learning and self-play.
 
     Args:
         config: Training configuration (uses defaults if None)
@@ -210,97 +234,194 @@ def train(config: Optional[TrainingConfig] = None):
     jax_rng = jax.random.PRNGKey(config.seed)
 
     # Create training state
+    print("🔧 Initializing model and optimizer...")
     state = create_train_state(config, jax_rng)
+
+    # Create replay buffer
+    print("💾 Creating replay buffer...")
+    replay_buffer = ReplayBuffer(
+        max_size=config.replay_buffer_size,
+        min_size=config.replay_buffer_min_size,
+        eviction_policy='fifo',
+    )
+
+    # Create metrics logger
+    print("📊 Setting up metrics logging...")
+    metrics_logger = MetricsLogger(
+        log_dir=config.log_dir,
+        run_name="backgammon_training",
+        use_tensorboard=False,  # Optional: enable if tensorboard installed
+        use_wandb=False,  # Optional: enable if W&B configured
+        console_interval=config.log_every_n_batches,
+    )
+
+    # Log hyperparameters
+    metrics_logger.log_hyperparams(asdict(config))
 
     # Training phase manager
     phase_manager = TrainingPhase(config)
 
     # Create agents
     pip_agent = pip_count_agent()
-    # TODO: Create neural network agent wrapper
 
     batch_num = 0
+    total_train_steps = 0
 
-    print(f"🎲 Starting training with {config.warmstart_games} warmstart games")
-    print(f"📊 Early: {config.early_phase_games}, Mid: {config.mid_phase_games}, Late: {config.late_phase_games}")
-    print(f"💾 Checkpoints: {config.checkpoint_dir}, Logs: {config.log_dir}")
-    print()
+    print(f"\n🎲 Starting training:")
+    print(f"   Warmstart: {config.warmstart_games} games (pip count vs pip count)")
+    print(f"   Early:     {config.early_phase_games} games (simplified variants)")
+    print(f"   Mid:       {config.mid_phase_games} games (mixed variants)")
+    print(f"   Late:      {config.late_phase_games} games (full complexity)")
+    print(f"\n💾 Checkpoints: {config.checkpoint_dir}")
+    print(f"📊 Logs: {config.log_dir}\n")
 
-    while True:
-        batch_start = time.time()
+    try:
+        while True:
+            batch_start = time.time()
 
-        # Get current phase
-        phase_name, get_variants_fn = phase_manager.get_current_phase()
-        use_warmstart = phase_manager.should_use_pip_count_warmstart()
+            # Get current phase
+            phase_name, get_variants_fn = phase_manager.get_current_phase()
+            use_warmstart = phase_manager.should_use_pip_count_warmstart()
 
-        # Select agents
-        if use_warmstart:
-            white_agent = pip_agent
-            black_agent = pip_agent
-        else:
-            # TODO: Use neural network agents
-            white_agent = pip_agent  # Placeholder
-            black_agent = pip_agent
+            # Select agents for self-play
+            if use_warmstart:
+                # Warmstart: pip count vs pip count
+                white_agent = pip_agent
+                black_agent = pip_agent
+            else:
+                # Self-play: neural network vs itself (with exploration)
+                neural_agent = create_neural_agent(
+                    state=state,
+                    temperature=config.neural_agent_temperature,
+                    name="NeuralNet",
+                )
+                white_agent = neural_agent
+                black_agent = neural_agent
 
-        # Generate training batch
-        games = generate_training_batch(
-            num_games=config.games_per_batch,
-            get_variant_fn=get_variants_fn,
-            white_agent=white_agent,
-            black_agent=black_agent,
-            rng=rng,
-        )
+            # Generate training batch through self-play
+            games = generate_training_batch(
+                num_games=config.games_per_batch,
+                get_variant_fn=get_variants_fn,
+                white_agent=white_agent,
+                black_agent=black_agent,
+                rng=rng,
+            )
 
-        # Compute statistics
-        stats = compute_game_statistics(games)
+            # Add games to replay buffer
+            for game in games:
+                replay_buffer.add_game(game)
 
-        # Update counts
-        phase_manager.total_games_played += len(games)
-        batch_num += 1
+            # Compute game statistics
+            stats = compute_game_statistics(games)
 
-        # TODO: Train neural network on batch
-        # For now, just track statistics
+            # Update phase counts
+            phase_manager.total_games_played += len(games)
+            batch_num += 1
 
-        batch_time = time.time() - batch_start
+            # Train neural network (if buffer is ready)
+            train_loss = 0.0
+            train_acc = 0.0
 
-        # Create metrics
-        metrics = TrainingMetrics(
-            phase=phase_name,
-            batch_num=batch_num,
-            total_games=phase_manager.total_games_played,
-            white_win_rate=stats['white_win_rate'],
-            avg_moves=stats['avg_moves'],
-            gammons=stats['gammons'],
-            backgammons=stats['backgammons'],
-            loss=0.0,  # TODO: Real loss
-            accuracy=0.0,  # TODO: Real accuracy
-            learning_rate=config.learning_rate,  # TODO: Current LR
-            batch_time=batch_time,
-            games_per_second=len(games) / batch_time,
-        )
+            if replay_buffer.is_ready():
+                # Run multiple training steps per game batch
+                for _ in range(config.train_steps_per_game_batch):
+                    # Sample training batch from replay buffer
+                    train_batch = replay_buffer.sample_batch(config.training_batch_size)
 
-        # Logging
-        if batch_num % config.log_every_n_batches == 0:
-            print(f"[{phase_name:8s}] Batch {batch_num:4d} | "
-                  f"Games: {phase_manager.total_games_played:5d} | "
-                  f"WR: {stats['white_win_rate']:.3f} | "
-                  f"Moves: {stats['avg_moves']:.1f} | "
-                  f"Speed: {metrics.games_per_second:.1f} games/s")
+                    # Generate RNG for dropout
+                    jax_rng, step_rng = jax.random.split(jax_rng)
 
-            save_metrics(metrics, config)
+                    # Training step (gradient update)
+                    state, step_metrics = train_step(state, train_batch, step_rng)
 
-        # Checkpointing
-        if batch_num % config.checkpoint_every_n_batches == 0:
-            save_checkpoint(state, config, batch_num)
-            print(f"💾 Checkpoint saved at batch {batch_num}")
+                    # Accumulate metrics
+                    train_loss += float(step_metrics['total_loss'])
+                    # Note: We don't have accuracy easily available from train_step
+                    # Could add it if needed
 
-        # Check if training complete
-        total_target = (config.warmstart_games + config.early_phase_games +
-                       config.mid_phase_games + config.late_phase_games)
-        if phase_manager.total_games_played >= total_target:
-            print(f"\n✅ Training complete! {phase_manager.total_games_played} games played")
-            save_checkpoint(state, config, batch_num)
-            break
+                    total_train_steps += 1
+
+                # Average over training steps
+                train_loss /= config.train_steps_per_game_batch
+
+            batch_time = time.time() - batch_start
+
+            # Get current learning rate
+            # For simplicity, just use the peak learning rate from config
+            # (actual LR varies with warmup/cosine schedule)
+            current_lr = config.learning_rate
+
+            # Create metrics
+            metrics = TrainingMetrics(
+                phase=phase_name,
+                batch_num=batch_num,
+                total_games=phase_manager.total_games_played,
+                white_win_rate=stats['white_win_rate'],
+                avg_moves=stats['avg_moves'],
+                gammons=stats['gammons'],
+                backgammons=stats['backgammons'],
+                loss=train_loss,
+                accuracy=train_acc,
+                learning_rate=current_lr,
+                batch_time=batch_time,
+                games_per_second=len(games) / batch_time,
+            )
+
+            # Log metrics
+            metrics_logger.log_metrics({
+                'loss': train_loss,
+                'white_win_rate': stats['white_win_rate'],
+                'avg_moves': stats['avg_moves'],
+                'learning_rate': current_lr,
+                'games_per_second': metrics.games_per_second,
+                'replay_buffer_size': len(replay_buffer),
+                'total_train_steps': total_train_steps,
+            }, step=batch_num, prefix=f"{phase_name}/")
+
+            # Console logging
+            if batch_num % config.log_every_n_batches == 0:
+                buffer_status = f"{len(replay_buffer)}/{replay_buffer.max_size}"
+                print(f"[{phase_name:8s}] Batch {batch_num:4d} | "
+                      f"Games: {phase_manager.total_games_played:5d} | "
+                      f"Loss: {train_loss:.4f} | "
+                      f"WR: {stats['white_win_rate']:.3f} | "
+                      f"Moves: {stats['avg_moves']:.1f} | "
+                      f"Buffer: {buffer_status} | "
+                      f"Speed: {metrics.games_per_second:.1f} g/s")
+
+                # Save metrics to file
+                save_metrics(metrics, config)
+
+            # Checkpointing
+            if batch_num % config.checkpoint_every_n_batches == 0:
+                save_checkpoint(state, config, batch_num)
+                print(f"💾 Checkpoint saved at batch {batch_num}")
+
+            # Check if training complete
+            total_target = (config.warmstart_games + config.early_phase_games +
+                           config.mid_phase_games + config.late_phase_games)
+            if phase_manager.total_games_played >= total_target:
+                print(f"\n✅ Training complete! {phase_manager.total_games_played} games played")
+                print(f"   Total training steps: {total_train_steps}")
+                print(f"   Final loss: {train_loss:.4f}")
+
+                # Save final checkpoint
+                save_checkpoint(state, config, batch_num)
+
+                # Save summary
+                metrics_logger.save_summary({
+                    'total_games': phase_manager.total_games_played,
+                    'total_batches': batch_num,
+                    'total_train_steps': total_train_steps,
+                    'final_loss': train_loss,
+                    'final_learning_rate': current_lr,
+                })
+
+                break
+
+    finally:
+        # Clean up metrics logger
+        metrics_logger.close()
 
 
 if __name__ == "__main__":
