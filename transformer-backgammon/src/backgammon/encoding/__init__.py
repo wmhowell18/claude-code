@@ -39,6 +39,22 @@ from backgammon.encoding.encoder import (
     stack_encoded_boards,
 )
 
+from backgammon.encoding.action_encoder import (
+    # Action encoding
+    encode_move_to_action,
+    create_action_mask,
+    create_move_to_action_map,
+    encode_move_to_one_hot,
+    create_uniform_policy,
+    select_move_from_policy,
+    get_action_space_size,
+    analyze_move_collisions,
+
+    # Alternative encodings
+    encode_move_structured,
+    decode_move_structured,
+)
+
 __all__ = [
     # Configuration presets
     "raw_encoding_config",
@@ -76,4 +92,16 @@ __all__ = [
 
     # Batch utilities
     "stack_encoded_boards",
+
+    # Action encoding
+    "encode_move_to_action",
+    "create_action_mask",
+    "create_move_to_action_map",
+    "encode_move_to_one_hot",
+    "create_uniform_policy",
+    "select_move_from_policy",
+    "get_action_space_size",
+    "analyze_move_collisions",
+    "encode_move_structured",
+    "decode_move_structured",
 ]

@@ -94,10 +94,10 @@ def compute_combined_loss(
     return total_loss, metrics
 
 
-@jax.jit
 def train_step(
     state: train_state.TrainState,
     batch: Dict[str, jnp.ndarray],
+    rng: jax.random.PRNGKey,
     policy_weight: float = 1.0,
     value_weight: float = 0.5,
 ) -> Tuple[train_state.TrainState, Dict[str, jnp.ndarray]]:
@@ -106,10 +106,11 @@ def train_step(
     Args:
         state: Current training state
         batch: Training batch with keys:
-            - 'board_encoding': (batch_size, 26)
+            - 'board_encoding': (batch_size, 26, 2)
             - 'target_policy': (batch_size, num_actions)
             - 'value_target': (batch_size,)
             - 'action_mask': (batch_size, num_actions)
+        rng: RNG key for dropout
         policy_weight: Weight for policy loss
         value_weight: Weight for value loss
 
@@ -119,17 +120,24 @@ def train_step(
 
     def loss_fn(params):
         """Compute loss for gradient computation."""
-        # Forward pass
-        logits = state.apply_fn(
+        # Forward pass - network returns (equity, policy, attention_weights)
+        # Pass RNG for dropout
+        equity, policy_logits, _ = state.apply_fn(
             {'params': params},
             batch['board_encoding'],
-            train=True,
+            training=True,
+            rngs={'dropout': rng},
         )
 
-        # For now, assume logits are policy logits
-        # In a full implementation, we'd have separate heads
-        policy_logits = logits
-        value_pred = jnp.zeros((logits.shape[0],))  # Placeholder
+        # Extract value prediction from equity distribution
+        # Equity is [batch_size, 5]: [win_normal, win_gammon, win_backgammon, lose_gammon, lose_backgammon]
+        value_pred = (
+            equity[:, 0] * 1.0 +  # win normal
+            equity[:, 1] * 2.0 +  # win gammon
+            equity[:, 2] * 3.0 +  # win backgammon
+            equity[:, 3] * (-2.0) +  # lose gammon
+            equity[:, 4] * (-3.0)  # lose backgammon
+        )
 
         # Compute loss
         loss, metrics = compute_combined_loss(
@@ -232,15 +240,21 @@ def compute_metrics(
     Returns:
         Dictionary of metrics
     """
-    # Forward pass
-    logits = state.apply_fn(
+    # Forward pass - network returns (equity, policy, attention_weights)
+    equity, policy_logits, _ = state.apply_fn(
         {'params': state.params},
         batch['board_encoding'],
-        train=False,
+        training=False,
     )
 
-    policy_logits = logits
-    value_pred = jnp.zeros((logits.shape[0],))
+    # Extract value from equity
+    value_pred = (
+        equity[:, 0] * 1.0 +
+        equity[:, 1] * 2.0 +
+        equity[:, 2] * 3.0 +
+        equity[:, 3] * (-2.0) +
+        equity[:, 4] * (-3.0)
+    )
 
     # Compute accuracy (top-1)
     predictions = jnp.argmax(policy_logits, axis=-1)

@@ -275,6 +275,7 @@ class TransformerConfig:
         input_feature_dim: Dimension of input features per position
         use_learned_positional_encoding: Whether to use learned position embeddings
         use_policy_head: Whether to include policy prediction head
+        num_actions: Number of actions in policy head output
         return_attention_weights: Whether to return attention weights for visualization
     """
     num_layers: int = 4
@@ -286,6 +287,7 @@ class TransformerConfig:
     input_feature_dim: int = 2
     use_learned_positional_encoding: bool = True
     use_policy_head: bool = False
+    num_actions: int = 1024  # Default action space size
     return_attention_weights: bool = False
 
     def __post_init__(self):

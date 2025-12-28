@@ -405,7 +405,7 @@ class BackgammonTransformer(nn.Module):
         if self.config.use_policy_head:
             policy = PolicyHead(
                 config=self.config,
-                num_actions=1000,  # Placeholder - actual depends on position
+                num_actions=self.config.num_actions,
                 name='policy_head'
             )(x)
 
