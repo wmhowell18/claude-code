@@ -15,6 +15,14 @@ from backgammon.core.board import (
     apply_move,
     is_legal_move,
     board_to_string,
+    # Position variants
+    nackgammon_start,
+    split_back_checkers,
+    slotted_5_point,
+    slotted_bar_point,
+    advanced_anchor,
+    get_all_variant_starts,
+    random_variant_start,
 )
 from backgammon.core.types import Player, MoveStep, GameOutcome
 
@@ -360,3 +368,170 @@ class TestBoardDisplay:
         assert len(s) > 0
         assert "Player to move: white" in s
         assert "167" in s  # Pip count
+
+
+class TestPositionVariants:
+    """Tests for position variants (for training diversity)."""
+
+    def test_nackgammon_start(self):
+        """Test nackgammon variant starting position."""
+        board = nackgammon_start()
+
+        # White: 2 on 24, 2 on 23, 4 on 13, 3 on 8, 4 on 6
+        assert board.white_checkers[24] == 2
+        assert board.white_checkers[23] == 2
+        assert board.white_checkers[13] == 4  # Takes one from standard 5
+        assert board.white_checkers[8] == 3
+        assert board.white_checkers[6] == 4  # Takes one from standard 5
+
+        # Black mirror
+        assert board.black_checkers[1] == 2
+        assert board.black_checkers[2] == 2
+        assert board.black_checkers[12] == 4
+        assert board.black_checkers[17] == 3
+        assert board.black_checkers[19] == 4
+
+        # Total checkers still 15 each
+        assert sum(board.white_checkers) == 15
+        assert sum(board.black_checkers) == 15
+
+        # Pip count for nackgammon: 2*24 + 2*23 + 4*13 + 3*8 + 4*6 = 194
+        assert pip_count(board, Player.WHITE) == 194
+        assert pip_count(board, Player.BLACK) == 194
+
+    def test_split_back_checkers(self):
+        """Test split back checkers variant."""
+        board = split_back_checkers()
+
+        # White: 1 on 24, 1 on 23 (instead of 2 on 24)
+        assert board.white_checkers[24] == 1
+        assert board.white_checkers[23] == 1
+
+        # Black: 1 on 1, 1 on 2
+        assert board.black_checkers[1] == 1
+        assert board.black_checkers[2] == 1
+
+        # Rest should be standard
+        assert board.white_checkers[13] == 5
+        assert board.white_checkers[8] == 3
+        assert board.white_checkers[6] == 5
+
+        # Total still 15
+        assert sum(board.white_checkers) == 15
+        assert sum(board.black_checkers) == 15
+
+        # Pip count should be 166 (one less than standard)
+        assert pip_count(board, Player.WHITE) == 166
+        assert pip_count(board, Player.BLACK) == 166
+
+    def test_slotted_5_point(self):
+        """Test slotted 5-point variant."""
+        board = slotted_5_point()
+
+        # White: 4 on 6-point, 1 on 5-point (slotted)
+        assert board.white_checkers[6] == 4
+        assert board.white_checkers[5] == 1
+
+        # Black: 4 on 19-point, 1 on 20-point
+        assert board.black_checkers[19] == 4
+        assert board.black_checkers[20] == 1
+
+        # Total still 15
+        assert sum(board.white_checkers) == 15
+        assert sum(board.black_checkers) == 15
+
+        # Pip count should be 166 (moved one pip closer)
+        assert pip_count(board, Player.WHITE) == 166
+        assert pip_count(board, Player.BLACK) == 166
+
+    def test_slotted_bar_point(self):
+        """Test slotted bar point (7-point) variant."""
+        board = slotted_bar_point()
+
+        # White: 4 on 13, 1 on 7 (bar point)
+        assert board.white_checkers[13] == 4
+        assert board.white_checkers[7] == 1
+
+        # Black: 4 on 12, 1 on 18
+        assert board.black_checkers[12] == 4
+        assert board.black_checkers[18] == 1
+
+        # Total still 15
+        assert sum(board.white_checkers) == 15
+        assert sum(board.black_checkers) == 15
+
+        # Pip count should be 161 (6 pips closer for white)
+        assert pip_count(board, Player.WHITE) == 161
+        assert pip_count(board, Player.BLACK) == 161
+
+    def test_advanced_anchor(self):
+        """Test advanced anchor variant."""
+        board = advanced_anchor()
+
+        # White: no checkers on 24, 2 on 20 (opponent's 5-point)
+        assert board.white_checkers[24] == 0
+        assert board.white_checkers[20] == 2
+
+        # Black: no checkers on 1, 2 on 5
+        assert board.black_checkers[1] == 0
+        assert board.black_checkers[5] == 2
+
+        # Total still 15
+        assert sum(board.white_checkers) == 15
+        assert sum(board.black_checkers) == 15
+
+        # Pip count should be 159 (8 pips closer)
+        assert pip_count(board, Player.WHITE) == 159
+        assert pip_count(board, Player.BLACK) == 159
+
+    def test_get_all_variant_starts(self):
+        """Test getting all variant starting positions."""
+        variants = get_all_variant_starts()
+
+        # Should return 6 variants (standard + 5 variants)
+        assert len(variants) == 6
+
+        # All should be valid boards with 15 checkers each
+        for board in variants:
+            assert sum(board.white_checkers) == 15
+            assert sum(board.black_checkers) == 15
+
+        # First should be standard
+        standard = variants[0]
+        assert standard.white_checkers[24] == 2
+        assert standard.white_checkers[6] == 5
+
+    def test_random_variant_start(self):
+        """Test random variant selection."""
+        import numpy as np
+
+        # Use fixed seed for reproducibility
+        rng = np.random.default_rng(42)
+        board = random_variant_start(rng)
+
+        # Should be valid board
+        assert sum(board.white_checkers) == 15
+        assert sum(board.black_checkers) == 15
+
+        # Try multiple times to ensure variety
+        boards = [random_variant_start(rng) for _ in range(20)]
+
+        # Should get different variants (check pip counts)
+        pip_counts = [pip_count(b, Player.WHITE) for b in boards]
+        unique_pip_counts = set(pip_counts)
+
+        # Should have at least 2 different variants in 20 tries
+        assert len(unique_pip_counts) >= 2
+
+    def test_variants_are_playable(self):
+        """Test that all variants can generate legal moves."""
+        variants = get_all_variant_starts()
+
+        for board in variants:
+            # Should be able to generate moves from opening position
+            moves = generate_legal_moves(board, Player.WHITE, (3, 1))
+            assert len(moves) > 0
+
+            # Should be able to apply a move
+            new_board = apply_move(board, Player.WHITE, moves[0])
+            assert new_board.player_to_move == Player.BLACK

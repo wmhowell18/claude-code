@@ -805,3 +805,165 @@ def is_legal_move(board: Board, player: Player, dice: Dice, move: Move) -> bool:
     """
     legal_moves = generate_legal_moves(board, player, dice)
     return move in legal_moves
+
+
+# ==============================================================================
+# POSITION VARIANTS (for training diversity)
+# ==============================================================================
+
+
+def nackgammon_start() -> Board:
+    """Create nackgammon starting position.
+
+    Nackgammon is a popular variant with a different starting setup:
+    - Splits back checkers: 2 on 24, 2 on 23 (instead of 2 on 24)
+    - Takes one each from 13 and 6: 4 on 13, 4 on 6 (instead of 5 on each)
+    - Black setup is mirrored
+
+    This reduces the penalty for early hitting and creates more dynamic opening play.
+
+    Returns:
+        Board in nackgammon starting position
+    """
+    board = Board()
+
+    # White checkers
+    board.white_checkers[24] = 2
+    board.white_checkers[23] = 2
+    board.white_checkers[13] = 4  # Takes one from standard 5
+    board.white_checkers[8] = 3
+    board.white_checkers[6] = 4  # Takes one from standard 5
+
+    # Black checkers
+    board.black_checkers[1] = 2
+    board.black_checkers[2] = 2
+    board.black_checkers[12] = 4  # Takes one from standard 5
+    board.black_checkers[17] = 3
+    board.black_checkers[19] = 4  # Takes one from standard 5
+
+    board.player_to_move = Player.WHITE
+    return board
+
+
+def split_back_checkers() -> Board:
+    """Starting position with back checkers split.
+
+    White: 1 on 24, 1 on 23 instead of 2 on 24
+    Black: 1 on 1, 1 on 2 instead of 2 on 1
+
+    This is a common opening variation that gives more flexibility.
+
+    Returns:
+        Board with split back checkers
+    """
+    board = initial_board()
+
+    # White: move one checker from 24 to 23
+    board.white_checkers[24] = 1
+    board.white_checkers[23] = 1
+
+    # Black: move one checker from 1 to 2
+    board.black_checkers[1] = 1
+    board.black_checkers[2] = 1
+
+    return board
+
+
+def slotted_5_point() -> Board:
+    """Starting position with 5-point slotted.
+
+    Move one checker from 6-point to 5-point for white,
+    one from 19-point to 20-point for black.
+
+    Returns:
+        Board with slotted 5-points
+    """
+    board = initial_board()
+
+    # White: slot the 5-point
+    board.white_checkers[6] = 4
+    board.white_checkers[5] = 1
+
+    # Black: slot the 20-point
+    board.black_checkers[19] = 4
+    board.black_checkers[20] = 1
+
+    return board
+
+
+def slotted_bar_point() -> Board:
+    """Starting position with bar point (7-point) slotted.
+
+    Move one checker to 7-point for white, 18-point for black.
+
+    Returns:
+        Board with slotted bar points
+    """
+    board = initial_board()
+
+    # White: slot the 7-point (take from 13)
+    board.white_checkers[13] = 4
+    board.white_checkers[7] = 1
+
+    # Black: slot the 18-point (take from 12)
+    board.black_checkers[12] = 4
+    board.black_checkers[18] = 1
+
+    return board
+
+
+def advanced_anchor() -> Board:
+    """Starting position with advanced anchors.
+
+    Move back checkers forward to 20-point for white, 5-point for black.
+    Creates an immediate anchor in opponent's board.
+
+    Returns:
+        Board with advanced anchors
+    """
+    board = initial_board()
+
+    # White: move from 24 to 20 (opponent's 5-point)
+    board.white_checkers[24] = 0
+    board.white_checkers[20] = 2
+
+    # Black: move from 1 to 5 (opponent's 20-point)
+    board.black_checkers[1] = 0
+    board.black_checkers[5] = 2
+
+    return board
+
+
+def get_all_variant_starts() -> List[Board]:
+    """Get all predefined variant starting positions.
+
+    Useful for training diversity.
+
+    Returns:
+        List of all variant starting positions
+    """
+    return [
+        initial_board(),
+        nackgammon_start(),
+        split_back_checkers(),
+        slotted_5_point(),
+        slotted_bar_point(),
+        advanced_anchor(),
+    ]
+
+
+def random_variant_start(rng: Optional[np.random.Generator] = None) -> Board:
+    """Select a random variant starting position.
+
+    Args:
+        rng: Numpy random generator (creates new one if None)
+
+    Returns:
+        Random variant starting position
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    variants = get_all_variant_starts()
+    idx = rng.integers(0, len(variants))
+    return variants[idx]
