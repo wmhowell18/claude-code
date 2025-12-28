@@ -53,11 +53,15 @@ class TrainingConfig:
     log_every_n_batches: int = 10
 
     # Model settings (transformer architecture)
-    embed_dim: int = 256
+    # Default: smaller model for faster iteration (colleague's recommendation)
+    embed_dim: int = 128  # Start small, scale up after validation
     num_heads: int = 8
-    num_layers: int = 6
-    ff_dim: int = 1024  # Feed-forward hidden dimension (typically 4x embed_dim)
+    num_layers: int = 4  # Reduced from 6 for faster training
+    ff_dim: int = 512  # 4x embed_dim
     dropout_rate: float = 0.1
+
+    # Training mode
+    train_policy: bool = False  # If False, value-only training (simpler)
 
     # Optimizer settings
     learning_rate: float = 3e-4
@@ -152,8 +156,8 @@ def create_train_state(config: TrainingConfig, rng: jax.random.PRNGKey) -> train
         ff_dim=config.ff_dim,
         dropout_rate=config.dropout_rate,
         input_feature_dim=2,  # Raw encoding has 2 features per position
-        use_policy_head=True,  # Enable policy prediction
-        num_actions=get_action_space_size(),  # Action space size from encoder
+        use_policy_head=config.train_policy,  # Enable policy prediction based on config
+        num_actions=get_action_space_size() if config.train_policy else 0,
     )
 
     # Initialize model
@@ -201,6 +205,7 @@ def save_checkpoint(state: train_state.TrainState, config: TrainingConfig, step:
         target=state,
         step=step,
         keep=5,  # Keep last 5 checkpoints
+        overwrite=True,  # Allow overwriting existing checkpoints
     )
 
 

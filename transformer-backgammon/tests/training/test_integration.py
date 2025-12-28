@@ -81,7 +81,13 @@ class TestCreateTrainState:
 
     def test_state_inference(self):
         """Test that state can perform inference."""
-        config = TrainingConfig(embed_dim=64, num_heads=4, num_layers=2, ff_dim=256)
+        config = TrainingConfig(
+            embed_dim=64,
+            num_heads=4,
+            num_layers=2,
+            ff_dim=256,
+            train_policy=True,  # Enable policy for this test
+        )
         rng = jax.random.PRNGKey(42)
 
         state = create_train_state(config, rng)
@@ -108,7 +114,13 @@ class TestSelfPlayIntegration:
     def test_neural_agent_self_play(self):
         """Test that neural agent can play games."""
         # Create small network
-        config = TrainingConfig(embed_dim=64, num_heads=4, num_layers=2, ff_dim=256)
+        config = TrainingConfig(
+            embed_dim=64,
+            num_heads=4,
+            num_layers=2,
+            ff_dim=256,
+            train_policy=True,  # Enable policy for neural agent
+        )
         rng_key = jax.random.PRNGKey(42)
         state = create_train_state(config, rng_key)
 
@@ -142,7 +154,13 @@ class TestReplayBufferIntegration:
     def test_buffer_with_neural_games(self):
         """Test replay buffer with games from neural agents."""
         # Create network and agent
-        config = TrainingConfig(embed_dim=64, num_heads=4, num_layers=2, ff_dim=256)
+        config = TrainingConfig(
+            embed_dim=64,
+            num_heads=4,
+            num_layers=2,
+            ff_dim=256,
+            train_policy=True,  # Enable policy for neural agent
+        )
         rng_key = jax.random.PRNGKey(42)
         state = create_train_state(config, rng_key)
 
@@ -209,6 +227,9 @@ class TestEndToEndTraining:
                 num_layers=2,
                 ff_dim=256,
 
+                # Enable policy for neural self-play
+                train_policy=True,
+
                 # Replay buffer
                 replay_buffer_size=100,
                 replay_buffer_min_size=10,
@@ -274,6 +295,9 @@ class TestEndToEndTraining:
                 num_heads=4,
                 num_layers=2,
                 ff_dim=256,
+
+                # Enable policy for neural self-play
+                train_policy=True,
 
                 replay_buffer_size=100,
                 replay_buffer_min_size=5,
@@ -354,6 +378,34 @@ class TestCheckpointing:
 class TestConfigurationVariations:
     """Test different configuration variations."""
 
+    def test_value_only_mode(self):
+        """Test value-only training mode (no policy head)."""
+        config = TrainingConfig(
+            embed_dim=64,
+            num_heads=4,
+            num_layers=2,
+            ff_dim=256,
+            train_policy=False,  # Value-only mode
+        )
+        rng = jax.random.PRNGKey(42)
+        state = create_train_state(config, rng)
+
+        # Verify state was created
+        assert state is not None
+
+        # Test forward pass
+        dummy_input = jnp.zeros((1, 26, 2))
+        output = state.apply_fn(
+            {'params': state.params},
+            dummy_input,
+            training=False,
+        )
+
+        # Check outputs - policy should be None in value-only mode
+        equity, policy, _ = output
+        assert equity.shape == (1, 5)  # Equity prediction
+        assert policy is None  # No policy in value-only mode
+
     def test_different_network_sizes(self):
         """Test with different network configurations."""
         for embed_dim in [32, 64]:
@@ -369,6 +421,7 @@ class TestConfigurationVariations:
                 ff_dim=embed_dim * 4,
                 num_heads=2 if embed_dim == 32 else 4,
                 num_layers=1,
+                train_policy=True,  # Enable policy for this test
 
                 checkpoint_every_n_batches=100,
             )
