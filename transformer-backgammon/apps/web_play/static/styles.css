@@ -1,0 +1,444 @@
+/* ============================================================================
+   BACKGAMMON WEB INTERFACE - STYLES
+   ============================================================================ */
+
+:root {
+    --bg-primary: #1a1a2e;
+    --bg-secondary: #16213e;
+    --bg-tertiary: #0f3460;
+    --accent: #e94560;
+    --accent-hover: #d63651;
+    --text-primary: #eaeaea;
+    --text-secondary: #a0a0a0;
+    --board-bg: #8b4513;
+    --board-border: #5c2e0f;
+    --point-dark: #654321;
+    --point-light: #d4a574;
+    --checker-white: #f5f5f5;
+    --checker-black: #2c2c2c;
+    --checker-border: #666;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+    color: var(--text-primary);
+    min-height: 100vh;
+    padding: 20px;
+}
+
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+/* ============================================================================
+   HEADER
+   ============================================================================ */
+
+header {
+    text-align: center;
+    margin-bottom: 30px;
+}
+
+header h1 {
+    font-size: 2.5em;
+    margin-bottom: 10px;
+    color: var(--text-primary);
+}
+
+header .subtitle {
+    font-size: 1.1em;
+    color: var(--text-secondary);
+}
+
+/* ============================================================================
+   GAME CONTAINER
+   ============================================================================ */
+
+.game-container {
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    gap: 30px;
+    margin-bottom: 30px;
+}
+
+@media (max-width: 1024px) {
+    .game-container {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ============================================================================
+   INFO PANEL
+   ============================================================================ */
+
+.info-panel {
+    background: var(--bg-secondary);
+    border-radius: 12px;
+    padding: 25px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+.info-section {
+    margin-bottom: 25px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--bg-tertiary);
+}
+
+.info-section:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+}
+
+.info-section h3 {
+    font-size: 1.2em;
+    margin-bottom: 15px;
+    color: var(--accent);
+}
+
+.info-section p {
+    margin: 8px 0;
+    font-size: 0.95em;
+}
+
+.info-section strong {
+    color: var(--text-primary);
+}
+
+.info-section span {
+    color: var(--text-secondary);
+}
+
+/* Buttons */
+.btn {
+    width: 100%;
+    padding: 12px 20px;
+    margin: 8px 0;
+    border: none;
+    border-radius: 8px;
+    font-size: 1em;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.btn-primary {
+    background: var(--accent);
+    color: white;
+}
+
+.btn-primary:hover {
+    background: var(--accent-hover);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(233, 69, 96, 0.3);
+}
+
+.btn-secondary {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.btn-secondary:hover {
+    background: #1a4d8f;
+}
+
+.btn-ai {
+    background: #28a745;
+    color: white;
+}
+
+.btn-ai:hover {
+    background: #218838;
+}
+
+.btn-hint {
+    background: #ffc107;
+    color: #1a1a2e;
+}
+
+.btn-hint:hover {
+    background: #e0a800;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Player selection */
+.player-select {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.player-select label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.player-select label:hover {
+    background: var(--bg-tertiary);
+}
+
+.player-select input[type="radio"] {
+    cursor: pointer;
+}
+
+/* ============================================================================
+   BOARD CONTAINER
+   ============================================================================ */
+
+.board-container {
+    background: var(--bg-secondary);
+    border-radius: 12px;
+    padding: 30px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+.board {
+    background: var(--board-bg);
+    border: 8px solid var(--board-border);
+    border-radius: 8px;
+    padding: 20px;
+    box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.3);
+}
+
+/* Board halves */
+.board-half {
+    margin: 10px 0;
+}
+
+.points-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: stretch;
+    height: 200px;
+}
+
+.quarter {
+    display: flex;
+    gap: 8px;
+    flex: 1;
+}
+
+.bar {
+    width: 40px;
+    background: var(--board-border);
+    margin: 0 10px;
+    border-radius: 4px;
+}
+
+/* Points */
+.point {
+    flex: 1;
+    position: relative;
+    cursor: pointer;
+    transition: opacity 0.2s;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.point-up {
+    justify-content: flex-start;
+}
+
+.point-down {
+    justify-content: flex-start;
+    flex-direction: column-reverse;
+}
+
+.point[data-color="dark"] {
+    background: linear-gradient(180deg, var(--point-dark) 0%, transparent 50%);
+}
+
+.point[data-color="light"] {
+    background: linear-gradient(180deg, var(--point-light) 0%, transparent 50%);
+}
+
+.point.point-down[data-color="dark"] {
+    background: linear-gradient(0deg, var(--point-dark) 0%, transparent 50%);
+}
+
+.point.point-down[data-color="light"] {
+    background: linear-gradient(0deg, var(--point-light) 0%, transparent 50%);
+}
+
+.point:hover {
+    opacity: 0.8;
+}
+
+.point.selected {
+    outline: 3px solid var(--accent);
+    outline-offset: -3px;
+}
+
+/* Point labels */
+.point-labels {
+    display: flex;
+    justify-content: space-between;
+    padding: 5px 0;
+    font-size: 0.85em;
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.point-labels .quarter {
+    display: flex;
+    justify-content: space-around;
+    flex: 1;
+    gap: 8px;
+}
+
+.point-labels span {
+    flex: 1;
+    text-align: center;
+}
+
+.bar-spacer {
+    width: 60px;
+}
+
+.top-labels {
+    order: 2;
+}
+
+/* Middle bar */
+.board-middle {
+    height: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--board-border);
+    margin: 10px 0;
+    border-radius: 4px;
+}
+
+.bar-area {
+    font-size: 1.2em;
+    font-weight: bold;
+    color: var(--text-secondary);
+    letter-spacing: 2px;
+}
+
+/* Checkers */
+.checker {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: 2px solid var(--checker-border);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    margin: 2px 0;
+    position: relative;
+    cursor: pointer;
+    transition: transform 0.2s;
+}
+
+.checker:hover {
+    transform: scale(1.1);
+}
+
+.checker.white {
+    background: radial-gradient(circle at 30% 30%, var(--checker-white), #c0c0c0);
+}
+
+.checker.black {
+    background: radial-gradient(circle at 30% 30%, #4a4a4a, var(--checker-black));
+}
+
+.checker-count {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 0.75em;
+    font-weight: bold;
+    color: var(--accent);
+    text-shadow: 0 0 2px rgba(0, 0, 0, 0.8);
+}
+
+/* Borne off area */
+.borne-off {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 2px solid var(--board-border);
+}
+
+.borne-off-section h4 {
+    margin-bottom: 10px;
+    color: var(--text-secondary);
+    font-size: 0.9em;
+}
+
+.off-area {
+    min-height: 40px;
+    background: var(--bg-tertiary);
+    border-radius: 6px;
+    padding: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+/* ============================================================================
+   FOOTER
+   ============================================================================ */
+
+footer {
+    text-align: center;
+    padding: 20px;
+    color: var(--text-secondary);
+    font-size: 0.9em;
+}
+
+footer a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+footer a:hover {
+    text-decoration: underline;
+}
+
+footer p {
+    margin: 5px 0;
+}
+
+/* ============================================================================
+   RESPONSIVE
+   ============================================================================ */
+
+@media (max-width: 768px) {
+    header h1 {
+        font-size: 2em;
+    }
+
+    .points-row {
+        height: 150px;
+    }
+
+    .checker {
+        width: 24px;
+        height: 24px;
+    }
+
+    .bar {
+        width: 30px;
+    }
+}

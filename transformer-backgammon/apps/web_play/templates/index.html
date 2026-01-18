@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Backgammon vs AI</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎲 Backgammon vs AI</h1>
+            <p class="subtitle">Play against your trained transformer model</p>
+        </header>
+
+        <div class="game-container">
+            <!-- Game Info Panel -->
+            <div class="info-panel">
+                <div class="info-section">
+                    <h3>Game Status</h3>
+                    <p><strong>Current Player:</strong> <span id="current-player">White</span></p>
+                    <p><strong>Dice:</strong> <span id="dice-display">--</span></p>
+                    <p><strong>Legal Moves:</strong> <span id="legal-moves-count">0</span></p>
+                </div>
+
+                <div class="info-section">
+                    <h3>Controls</h3>
+                    <button id="new-game-btn" class="btn btn-primary">New Game</button>
+                    <button id="roll-dice-btn" class="btn btn-secondary">Roll Dice</button>
+                    <button id="ai-move-btn" class="btn btn-ai">AI Move</button>
+                    <button id="hint-btn" class="btn btn-hint">Get Hint</button>
+                </div>
+
+                <div class="info-section">
+                    <h3>You are playing as:</h3>
+                    <div class="player-select">
+                        <label>
+                            <input type="radio" name="player-color" value="white" checked>
+                            White (moves 24→1)
+                        </label>
+                        <label>
+                            <input type="radio" name="player-color" value="black">
+                            Black (moves 1→24)
+                        </label>
+                    </div>
+                </div>
+
+                <div class="info-section" id="hint-section" style="display: none;">
+                    <h3>AI Hint</h3>
+                    <p id="hint-text"></p>
+                </div>
+
+                <div class="info-section" id="game-over-section" style="display: none;">
+                    <h3>🎉 Game Over!</h3>
+                    <p id="winner-text"></p>
+                </div>
+            </div>
+
+            <!-- Backgammon Board -->
+            <div class="board-container">
+                <div class="board">
+                    <!-- Top half (points 13-24) -->
+                    <div class="board-half top-half">
+                        <div class="points-row">
+                            <!-- Points 13-18 -->
+                            <div class="quarter left-quarter">
+                                <div class="point point-down" data-point="13" data-color="dark"></div>
+                                <div class="point point-down" data-point="14" data-color="light"></div>
+                                <div class="point point-down" data-point="15" data-color="dark"></div>
+                                <div class="point point-down" data-point="16" data-color="light"></div>
+                                <div class="point point-down" data-point="17" data-color="dark"></div>
+                                <div class="point point-down" data-point="18" data-color="light"></div>
+                            </div>
+
+                            <div class="bar" id="bar-top"></div>
+
+                            <!-- Points 19-24 -->
+                            <div class="quarter right-quarter">
+                                <div class="point point-down" data-point="19" data-color="dark"></div>
+                                <div class="point point-down" data-point="20" data-color="light"></div>
+                                <div class="point point-down" data-point="21" data-color="dark"></div>
+                                <div class="point point-down" data-point="22" data-color="light"></div>
+                                <div class="point point-down" data-point="23" data-color="dark"></div>
+                                <div class="point point-down" data-point="24" data-color="light"></div>
+                            </div>
+                        </div>
+
+                        <div class="point-labels top-labels">
+                            <div class="quarter"><span>13</span><span>14</span><span>15</span><span>16</span><span>17</span><span>18</span></div>
+                            <div class="bar-spacer"></div>
+                            <div class="quarter"><span>19</span><span>20</span><span>21</span><span>22</span><span>23</span><span>24</span></div>
+                        </div>
+                    </div>
+
+                    <!-- Middle bar -->
+                    <div class="board-middle">
+                        <div class="bar-area">
+                            <span>BAR</span>
+                        </div>
+                    </div>
+
+                    <!-- Bottom half (points 12-1) -->
+                    <div class="board-half bottom-half">
+                        <div class="point-labels bottom-labels">
+                            <div class="quarter"><span>12</span><span>11</span><span>10</span><span>9</span><span>8</span><span>7</span></div>
+                            <div class="bar-spacer"></div>
+                            <div class="quarter"><span>6</span><span>5</span><span>4</span><span>3</span><span>2</span><span>1</span></div>
+                        </div>
+
+                        <div class="points-row">
+                            <!-- Points 12-7 -->
+                            <div class="quarter left-quarter">
+                                <div class="point point-up" data-point="12" data-color="light"></div>
+                                <div class="point point-up" data-point="11" data-color="dark"></div>
+                                <div class="point point-up" data-point="10" data-color="light"></div>
+                                <div class="point point-up" data-point="9" data-color="dark"></div>
+                                <div class="point point-up" data-point="8" data-color="light"></div>
+                                <div class="point point-up" data-point="7" data-color="dark"></div>
+                            </div>
+
+                            <div class="bar" id="bar-bottom"></div>
+
+                            <!-- Points 6-1 -->
+                            <div class="quarter right-quarter">
+                                <div class="point point-up" data-point="6" data-color="light"></div>
+                                <div class="point point-up" data-point="5" data-color="dark"></div>
+                                <div class="point point-up" data-point="4" data-color="light"></div>
+                                <div class="point point-up" data-point="3" data-color="dark"></div>
+                                <div class="point point-up" data-point="2" data-color="light"></div>
+                                <div class="point point-up" data-point="1" data-color="dark"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Borne off checkers -->
+                <div class="borne-off">
+                    <div class="borne-off-section">
+                        <h4>Black Off</h4>
+                        <div id="black-off" class="off-area"></div>
+                    </div>
+                    <div class="borne-off-section">
+                        <h4>White Off</h4>
+                        <div id="white-off" class="off-area"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            <p>Built with <a href="https://github.com/wmhowell18/claude-code/tree/main/transformer-backgammon">Transformer Backgammon</a></p>
+            <p>Adapted from <a href="https://github.com/MateiCosa/backgammon-ai">MateiCosa/backgammon-ai</a></p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='game.js') }}"></script>
+</body>
+</html>

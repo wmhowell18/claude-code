@@ -160,16 +160,32 @@ pip install numpy pytest
 pip install wandb  # optional: for experiment tracking
 ```
 
-### Usage (once implemented)
+### Play Against Your Trained Model (Web Interface)
+
+**NEW!** Play against your AI in a beautiful web interface:
+
+```bash
+cd apps/web_play
+python server.py --checkpoint /path/to/checkpoint
+# Open http://localhost:8002 in your browser
+```
+
+Features:
+- 🎨 Visual backgammon board
+- 🤖 Play vs your transformer AI
+- 💡 Get hints from the AI
+- 📱 Works on desktop and mobile
+
+See [`apps/web_play/README.md`](apps/web_play/README.md) for details.
+
+### Training and Evaluation
+
 ```bash
 # Train from scratch
 python main.py train --config configs/baseline.json
 
 # Evaluate against GNU BG
 python main.py evaluate --model checkpoints/best.pkl --opponent gnubg
-
-# Play interactively
-python main.py play --model checkpoints/best.pkl
 
 # Run benchmarks
 python main.py benchmark --model checkpoints/best.pkl --suite xg_positions
