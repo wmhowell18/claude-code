@@ -10,10 +10,10 @@ from backgammon.training.replay_buffer import (
 )
 from backgammon.training.self_play import GameResult, GameStep
 from backgammon.core.board import initial_board
-from backgammon.core.types import Player
+from backgammon.core.types import Player, GameOutcome
 
 
-def create_dummy_game(num_steps: int = 10, outcome: str = 'white_wins') -> GameResult:
+def create_dummy_game(num_steps: int = 10, winner: Player = Player.WHITE, points: int = 1) -> GameResult:
     """Create a dummy game for testing."""
     board = initial_board()
     steps = []
@@ -30,7 +30,7 @@ def create_dummy_game(num_steps: int = 10, outcome: str = 'white_wins') -> GameR
 
     return GameResult(
         steps=steps,
-        outcome=outcome,
+        outcome=GameOutcome(winner=winner, points=points),
         num_moves=num_steps,
         starting_position=board,
     )
@@ -135,7 +135,7 @@ class TestReplayBuffer:
         # Check batch structure
         assert 'board_encoding' in batch
         assert 'target_policy' in batch
-        assert 'value_target' in batch
+        assert 'equity_target' in batch
         assert 'action_mask' in batch
 
         # Check shapes (raw_encoding_config has feature_dim=2)
@@ -143,13 +143,13 @@ class TestReplayBuffer:
         # Action space size is 1024 (from action_encoder.ACTION_SPACE_SIZE)
         assert batch['board_encoding'].shape == (32, 26, 2)
         assert batch['target_policy'].shape == (32, 1024)
-        assert batch['value_target'].shape == (32,)
+        assert batch['equity_target'].shape == (32, 5)
         assert batch['action_mask'].shape == (32, 1024)
 
         # Check types
         assert batch['board_encoding'].dtype == jnp.float32
         assert batch['target_policy'].dtype == jnp.float32
-        assert batch['value_target'].dtype == jnp.float32
+        assert batch['equity_target'].dtype == jnp.float32
         assert batch['action_mask'].dtype == jnp.bool_
 
     def test_sample_batch_respects_size(self):
@@ -164,22 +164,27 @@ class TestReplayBuffer:
         batch = buffer.sample_batch(32)
         assert batch['board_encoding'].shape[0] == 20
 
-    def test_value_targets_from_outcome(self):
-        """Test value targets are correctly computed from game outcome."""
+    def test_equity_targets_from_outcome(self):
+        """Test equity targets are correctly computed from game outcome."""
         buffer = ReplayBuffer(max_size=1000, min_size=5)
 
-        # Add white win
-        white_win = create_dummy_game(num_steps=6, outcome='white_wins')
+        # Add white normal win
+        white_win = create_dummy_game(num_steps=6, winner=Player.WHITE, points=1)
         buffer.add_game(white_win)
 
-        # Sample and check values
+        # Sample and check equity targets
         batch = buffer.sample_batch(6)
-        values = batch['value_target']
+        equities = batch['equity_target']
 
-        # White moves (steps 0, 2, 4) should have +1
-        # Black moves (steps 1, 3, 5) should have -1
-        # We can't know exact order after sampling, but all should be ±1
-        assert all(v in [-1.0, 1.0] for v in values)
+        # Shape should be (6, 5)
+        assert equities.shape == (6, 5)
+
+        # Each row should be a valid probability distribution component
+        # For white steps: win_normal=1.0, rest=0.0
+        # For black steps: all zeros (lose_normal is implicit)
+        for eq in equities:
+            # All values should be 0 or 1
+            assert all(v in [0.0, 1.0] for v in eq)
 
     def test_clear_buffer(self):
         """Test clearing buffer."""
@@ -210,10 +215,8 @@ class TestReplayBuffer:
         stats = buffer.get_statistics()
         assert stats['size'] == 30
         assert stats['utilization'] == 0.3  # 30/100
-        assert 'avg_value' in stats
-        assert 'std_value' in stats
-        assert 'min_value' in stats
-        assert 'max_value' in stats
+        assert 'avg_win_prob' in stats
+        assert 'std_win_prob' in stats
 
 
 class TestPrioritizedReplayBuffer:
@@ -302,19 +305,24 @@ class TestReplayBufferIntegration:
         buffer = ReplayBuffer(max_size=1000, min_size=10)
 
         # Add mix of white and black wins
-        buffer.add_game(create_dummy_game(num_steps=10, outcome='white_wins'))
-        buffer.add_game(create_dummy_game(num_steps=10, outcome='black_wins'))
-        buffer.add_game(create_dummy_game(num_steps=10, outcome='white_wins'))
+        buffer.add_game(create_dummy_game(num_steps=10, winner=Player.WHITE))
+        buffer.add_game(create_dummy_game(num_steps=10, winner=Player.BLACK))
+        buffer.add_game(create_dummy_game(num_steps=10, winner=Player.WHITE))
 
         assert len(buffer) == 30
 
-        # Sample and verify we get variety
+        # Sample and verify we get variety of equity targets
         batch = buffer.sample_batch(30)
-        values = batch['value_target']
+        equities = batch['equity_target']
 
-        # Should have both +1 and -1 values
-        assert any(v == 1.0 for v in values)
-        assert any(v == -1.0 for v in values)
+        # Should have shape (30, 5)
+        assert equities.shape == (30, 5)
+
+        # Should have some win_normal=1.0 entries (white win from white's perspective)
+        # and some all-zeros entries (white win from black's perspective = lose_normal)
+        win_normal_values = equities[:, 0]
+        assert any(v == 1.0 for v in win_normal_values)
+        assert any(v == 0.0 for v in win_normal_values)
 
     def test_replay_buffer_with_training_loop(self):
         """Test buffer works in a simple training loop simulation."""

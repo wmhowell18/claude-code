@@ -427,4 +427,4 @@ class TestModelComponents:
         # Both heads should produce output
         assert equity.shape == (1, 5)
         assert policy is not None
-        assert policy.shape == (1, 1000)  # Placeholder num_actions
+        assert policy.shape == (1, config.num_actions)
