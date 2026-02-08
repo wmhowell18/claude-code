@@ -77,6 +77,11 @@ class TrainingConfig:
     # Agent settings
     neural_agent_temperature: float = 0.3  # Exploration during self-play
 
+    # Evaluation settings
+    eval_every_n_batches: int = 50  # Evaluate model strength periodically
+    eval_games_vs_random: int = 50  # Games per eval vs random agent
+    eval_games_vs_pip_count: int = 50  # Games per eval vs pip count agent
+
     # Paths
     checkpoint_dir: str = "checkpoints"
     log_dir: str = "logs"
@@ -263,6 +268,16 @@ def train(config: Optional[TrainingConfig] = None):
     # Log hyperparameters
     metrics_logger.log_hyperparams(asdict(config))
 
+    # Create evaluator for periodic win rate tracking
+    # (lazy import to avoid circular dependency with evaluation module)
+    from backgammon.evaluation.evaluator import TrainingEvaluator, EvalConfig
+    eval_config = EvalConfig(
+        eval_every_n_batches=config.eval_every_n_batches,
+        games_vs_random=config.eval_games_vs_random,
+        games_vs_pip_count=config.eval_games_vs_pip_count,
+    )
+    evaluator = TrainingEvaluator(eval_config)
+
     # Training phase manager
     phase_manager = TrainingPhase(config)
 
@@ -397,6 +412,20 @@ def train(config: Optional[TrainingConfig] = None):
                 # Save metrics to file
                 save_metrics(metrics, config)
 
+            # Periodic evaluation against reference agents
+            eval_metrics = evaluator.maybe_evaluate(batch_num, state)
+            if eval_metrics:
+                metrics_logger.log_metrics(
+                    eval_metrics, step=batch_num, prefix="eval/"
+                )
+                wr_rand = eval_metrics.get('vs_random_wr', 0)
+                wr_pip = eval_metrics.get('vs_pip_wr', 0)
+                eval_time = eval_metrics.get('eval_time_s', 0)
+                print(f"  EVAL @ batch {batch_num}: "
+                      f"vs random={wr_rand:.1%}, "
+                      f"vs pip_count={wr_pip:.1%} "
+                      f"({eval_time:.1f}s)")
+
             # Checkpointing
             if batch_num % config.checkpoint_every_n_batches == 0:
                 save_checkpoint(state, config, batch_num)
@@ -410,17 +439,27 @@ def train(config: Optional[TrainingConfig] = None):
                 print(f"   Total training steps: {total_train_steps}")
                 print(f"   Final loss: {train_loss:.4f}")
 
+                # Final evaluation
+                print("\n📊 Final evaluation...")
+                final_eval = evaluator.evaluate(state, batch_num)
+                evaluator.print_summary()
+
                 # Save final checkpoint
                 save_checkpoint(state, config, batch_num)
 
-                # Save summary
-                metrics_logger.save_summary({
+                # Save summary (include eval history)
+                summary = {
                     'total_games': phase_manager.total_games_played,
                     'total_batches': batch_num,
                     'total_train_steps': total_train_steps,
                     'final_loss': train_loss,
                     'final_learning_rate': current_lr,
-                })
+                    'eval_history': evaluator.history,
+                }
+                if final_eval:
+                    summary['final_vs_random_wr'] = final_eval.get('vs_random_wr', 0)
+                    summary['final_vs_pip_wr'] = final_eval.get('vs_pip_wr', 0)
+                metrics_logger.save_summary(summary)
 
                 break
 
