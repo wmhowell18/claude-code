@@ -106,7 +106,7 @@ def _batch_evaluate(
     encoded = _encode_boards_batch(boards, encoding_config)
     encoded_jax = jnp.array(encoded)
 
-    equity, _, _ = state.apply_fn(
+    equity, _, _, _ = state.apply_fn(
         {'params': state.params},
         encoded_jax,
         training=False,

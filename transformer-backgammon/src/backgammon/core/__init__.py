@@ -9,6 +9,12 @@ from backgammon.core.types import (
     Point,
     GameOutcome,
     Equity,
+    CubeOwner,
+    CubeAction,
+    CubeState,
+    MatchState,
+    CubeEquity,
+    CubeDecisionQuality,
 )
 
 __all__ = [
@@ -20,4 +26,10 @@ __all__ = [
     "Point",
     "GameOutcome",
     "Equity",
+    "CubeOwner",
+    "CubeAction",
+    "CubeState",
+    "MatchState",
+    "CubeEquity",
+    "CubeDecisionQuality",
 ]
