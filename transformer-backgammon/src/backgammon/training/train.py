@@ -32,7 +32,7 @@ from backgammon.evaluation.agents import pip_count_agent
 from backgammon.evaluation.network_agent import create_neural_agent
 from backgammon.training.self_play import generate_training_batch, compute_game_statistics
 from backgammon.training.replay_buffer import ReplayBuffer
-from backgammon.training.losses import train_step
+from backgammon.training.losses import train_step, compute_metrics
 from backgammon.training.metrics import MetricsLogger
 from backgammon.network.network import BackgammonTransformer
 from backgammon.evaluation.benchmark import (
@@ -87,6 +87,14 @@ class TrainingConfig:
     # TD(lambda) settings
     td_lambda: float = 0.7  # TD(lambda) parameter (0=TD(0), 1=MC, 0.7=recommended)
     use_td_lambda: bool = True  # Enable TD(lambda) targets (requires neural self-play)
+
+    # Position weighting
+    use_position_weighting: bool = True  # Weight positions by importance for sampling
+
+    # Validation and early stopping
+    validation_fraction: float = 0.1  # Fraction of games used for validation
+    early_stopping_patience: int = 5  # Stop after N eval checkpoints without improvement
+    use_early_stopping: bool = True  # Enable early stopping
 
     # Evaluation settings
     eval_every_n_batches: int = 50  # Run evaluation checkpoint every N batches
@@ -283,13 +291,21 @@ def train(config: Optional[TrainingConfig] = None):
     print("🔧 Initializing model and optimizer...")
     state = create_train_state(config, jax_rng)
 
-    # Create replay buffer
+    # Create replay buffer (training)
     print("💾 Creating replay buffer...")
     replay_buffer = ReplayBuffer(
         max_size=config.replay_buffer_size,
         min_size=config.replay_buffer_min_size,
         eviction_policy='fifo',
+        use_position_weighting=config.use_position_weighting,
     )
+
+    # Create validation buffer (for early stopping)
+    val_buffer = ReplayBuffer(
+        max_size=max(1000, config.replay_buffer_size // 10),
+        min_size=100,
+        eviction_policy='fifo',
+    ) if config.validation_fraction > 0 else None
 
     # Create metrics logger
     print("📊 Setting up metrics logging...")
@@ -310,6 +326,11 @@ def train(config: Optional[TrainingConfig] = None):
     # Evaluation history
     eval_history = EvalHistory()
     eval_rng = np.random.default_rng(config.seed + 1000)
+
+    # Early stopping state
+    best_val_loss = float('inf')
+    patience_counter = 0
+    best_state_step = 0
 
     # Create agents
     pip_agent = pip_count_agent()
@@ -362,9 +383,14 @@ def train(config: Optional[TrainingConfig] = None):
             )
 
             # Add games to replay buffer (with TD(lambda) targets if enabled)
+            # Split between training and validation buffers
             td_lambda_param = config.td_lambda if record_values else None
             for game in games:
-                replay_buffer.add_game(game, td_lambda=td_lambda_param)
+                if (val_buffer is not None and
+                        rng.random() < config.validation_fraction):
+                    val_buffer.add_game(game, td_lambda=td_lambda_param)
+                else:
+                    replay_buffer.add_game(game, td_lambda=td_lambda_param)
 
             # Compute game statistics
             stats = compute_game_statistics(games)
@@ -461,6 +487,35 @@ def train(config: Optional[TrainingConfig] = None):
                     rng=eval_rng,
                     verbose=True,
                 )
+
+                # Validation loss for early stopping
+                if val_buffer is not None and val_buffer.is_ready():
+                    val_batch = val_buffer.sample_batch(
+                        min(config.training_batch_size, len(val_buffer))
+                    )
+                    val_metrics = compute_metrics(state, val_batch)
+                    val_loss = val_metrics['loss']
+
+                    if batch_num % config.log_every_n_batches == 0:
+                        print(f"  Val loss: {val_loss:.4f} "
+                              f"(best: {best_val_loss:.4f}, "
+                              f"patience: {patience_counter}/{config.early_stopping_patience})")
+
+                    if val_loss < best_val_loss:
+                        best_val_loss = val_loss
+                        patience_counter = 0
+                        best_state_step = batch_num
+                        # Save best model checkpoint
+                        save_checkpoint(state, config, batch_num)
+                    else:
+                        patience_counter += 1
+
+                    if (config.use_early_stopping and
+                            patience_counter >= config.early_stopping_patience):
+                        print(f"\n⏹ Early stopping triggered at batch {batch_num}")
+                        print(f"  Best val loss: {best_val_loss:.4f} at step {best_state_step}")
+                        print(f"  No improvement for {patience_counter} eval checkpoints")
+                        break
 
             # Checkpointing
             if batch_num % config.checkpoint_every_n_batches == 0:

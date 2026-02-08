@@ -24,7 +24,6 @@ from backgammon.core.board import initial_board
 from backgammon.core.types import Player
 from backgammon.evaluation.agents import Agent, random_agent, pip_count_agent
 from backgammon.evaluation.network_agent import create_neural_agent
-from backgammon.training.self_play import play_game
 
 
 @dataclass
@@ -65,6 +64,9 @@ def evaluate_vs_opponent(
     Returns:
         Dictionary with win_rate, gammon_rate, avg_moves, etc.
     """
+    # Lazy import to avoid circular dependency (evaluation <-> training)
+    from backgammon.training.self_play import play_game
+
     wins = 0
     gammons = 0
     backgammons = 0

@@ -1,8 +1,8 @@
 # Backgammon Transformer — Feature Roadmap & TODO
 
-> **Status**: Search, benchmarking, and training improvements complete. 0/1/2-ply search with batch evaluation, move ordering with progressive deepening, transposition table, and TD(lambda) training implemented. Win rate tracking and benchmark positions integrated into training loop. Race equity formula for pure race positions.
+> **Status**: Search, benchmarking, and training improvements complete. 0/1/2-ply search with batch evaluation, move ordering with progressive deepening, transposition table, and TD(lambda) training implemented. Win rate tracking, benchmark positions, position weighting, validation splits, and early stopping integrated into training loop. Race equity formula for pure race positions.
 >
-> **Current Maturity**: ~6/10 for competitive play. Solid game engine + neural training + search + benchmarking + TD(lambda) + exploration schedule + global encoding features + race evaluation. Missing cube, GnuBG interface, and rollout-based training.
+> **Current Maturity**: ~6.5/10 for competitive play. Solid game engine + neural training + search + benchmarking + TD(lambda) + exploration schedule + global encoding features + race evaluation + training infrastructure (position weighting, validation, early stopping). Missing cube, GnuBG interface, and rollout-based training.
 
 ---
 
@@ -56,7 +56,7 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [ ] **18. Rollout-based training targets** — 1-ply rollout equity gives much better targets than raw game outcome. Key technique from gnubg. (Effort: L, Impact: large)
 - [x] **19. Exploration schedule** — Linear temperature decay from 1.0 → 0.1 over training. Configurable start/end temperatures. Logged per-batch. Warmstart phase uses fixed temperature. (Effort: S, Impact: moderate) *(Feb 2026)*
 - [ ] **20. Opponent diversity** — Periodically play against older snapshots and baseline agents, not just self. Prevents forgetting. (Effort: M, Impact: moderate)
-- [ ] **21. Position weighting** — Weight endgame and critical (high-equity-error) positions more heavily in training. (Effort: S, Impact: moderate)
+- [x] **21. Position weighting** — Weight positions by game progress (late game = higher weight) and equity uncertainty (50/50 positions = higher weight). Integrated into replay buffer with weighted sampling. (Effort: S, Impact: moderate) *(Feb 2026)*
 - [ ] **22. More warmstart games** — Current 500 games is thin. Consider 2000-5000 pip count warmstart games. (Effort: S, Impact: small)
 - [ ] **23. Performance-tied LR scheduling** — Reduce LR when validation equity error plateaus, not just cosine decay. (Effort: S, Impact: moderate)
 - [ ] **24. Gradient clipping diagnostics** — Log when gradient clipping activates, how often, and magnitude. (Effort: S, Impact: small)
@@ -112,8 +112,8 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [ ] **50. Distributed training** — Scale across multiple GPUs/TPUs with data parallelism. (Effort: L, Impact: large for speed)
 - [ ] **51. Async game generation** — Generate self-play games in parallel with gradient updates. (Effort: M, Impact: large for speed)
 - [ ] **52. Hyperparameter search** — Grid or Bayesian optimization over architecture, LR, batch size, etc. (Effort: M, Impact: moderate)
-- [ ] **53. Train/validation/test splits** — Proper held-out evaluation to detect overfitting. (Effort: S, Impact: moderate)
-- [ ] **54. Early stopping** — Stop training when validation equity error stops improving. (Effort: S, Impact: moderate)
+- [x] **53. Train/validation/test splits** — Games randomly split between training and validation buffers (configurable fraction, default 10%). Validation loss computed at eval checkpoints. (Effort: S, Impact: moderate) *(Feb 2026)*
+- [x] **54. Early stopping** — Training stops when validation loss hasn't improved for N consecutive eval checkpoints (configurable patience, default 5). Saves best model automatically. (Effort: S, Impact: moderate) *(Feb 2026)*
 - [ ] **55. Best-model tracking** — Keep the checkpoint with best validation metric, not just latest. (Effort: S, Impact: small)
 
 ---
@@ -231,4 +231,8 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [x] **Global encoding features** — Contact detection, pip counts, home board control, prime detection, and bearoff progress. 8 global features broadcast to all 26 positions. New `enhanced_encoding_config()` and `full_encoding_config()` presets. (Feb 2026)
 - [x] **Bearoff progress features** — Checkers borne off as a normalized feature. Part of global features (feature index 7). (Feb 2026)
 - [x] **Race equity formula** — Effective Pip Count with positional corrections (gap, crossover, bar, wastage) and sigmoid mapping to equity. Standalone evaluation for pure race positions in `evaluation/race.py`. (Feb 2026)
+- [x] **Position weighting** — Replay buffer weighted sampling based on game progress and equity uncertainty. Late-game and uncertain positions sampled more frequently. (Feb 2026)
+- [x] **Train/validation splits** — Random game-level split between training and validation buffers. Validation loss tracked at evaluation checkpoints. (Feb 2026)
+- [x] **Early stopping** — Patience-based early stopping on validation loss. Best model checkpoint saved automatically. (Feb 2026)
+- [x] **Fix circular import** — Lazy import of `play_game` in `evaluator.py` to break `evaluation <-> training` circular dependency. (Feb 2026)
 - [x] **Fix value-only agent crash** — 0-ply `NeuralNetworkAgent` now falls back to value-based search when policy head is disabled. (Feb 2026)
