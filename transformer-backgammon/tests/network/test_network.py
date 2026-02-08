@@ -158,7 +158,7 @@ class TestForwardPass:
         """Test forward pass with single board."""
         model, params, encoded, rng_key = setup_network
 
-        equity, policy, attn_weights = forward(model, params, encoded, training=False)
+        equity, policy, cube_dec, attn_weights = forward(model, params, encoded, training=False)
 
         # Check output shapes
         assert equity.shape == (1, 5)  # Batch=1, 5 equity components
@@ -178,7 +178,7 @@ class TestForwardPass:
         from backgammon.encoding.encoder import encode_boards
         encoded_batch = encode_boards(encoding_config, boards)
 
-        equity, policy, attn_weights = forward_batch(
+        equity, policy, cube_dec, attn_weights = forward_batch(
             model, params, encoded_batch, training=False
         )
 
@@ -191,8 +191,8 @@ class TestForwardPass:
 
         rng_key1, rng_key2 = jax.random.split(rng_key)
 
-        equity1, _, _ = forward(model, params, encoded, training=True, rng_key=rng_key1)
-        equity2, _, _ = forward(model, params, encoded, training=True, rng_key=rng_key2)
+        equity1, _, _, _ = forward(model, params, encoded, training=True, rng_key=rng_key1)
+        equity2, _, _, _ = forward(model, params, encoded, training=True, rng_key=rng_key2)
 
         # Different dropout keys should give slightly different results
         # (though for small network difference might be small)
@@ -211,7 +211,7 @@ class TestForwardPass:
         board = initial_board()
         encoded = encode_board(encoding_config, board)
 
-        equity, policy, attn_weights = forward(model, params, encoded, training=False)
+        equity, policy, cube_dec, attn_weights = forward(model, params, encoded, training=False)
 
         # Should return attention weights
         assert attn_weights is not None
@@ -404,11 +404,12 @@ class TestModelComponents:
 
         # Initialize and run
         params = model.init(rng_key, dummy_input, training=False)
-        equity, policy, attn = model.apply(params, dummy_input, training=False)
+        equity, policy, cube_dec, attn = model.apply(params, dummy_input, training=False)
 
         # Check shapes
         assert equity.shape == (2, 5)
         assert policy is None  # Not using policy head
+        assert cube_dec is None  # Not using cube head
 
     def test_transformer_with_policy_head(self):
         """Test transformer with policy head enabled."""
@@ -422,9 +423,10 @@ class TestModelComponents:
         dummy_input = jnp.ones((1, 26, 2), dtype=jnp.float32)
 
         params = model.init(rng_key, dummy_input, training=False)
-        equity, policy, attn = model.apply(params, dummy_input, training=False)
+        equity, policy, cube_dec, attn = model.apply(params, dummy_input, training=False)
 
         # Both heads should produce output
         assert equity.shape == (1, 5)
         assert policy is not None
         assert policy.shape == (1, config.num_actions)
+        assert cube_dec is None  # Not using cube head

@@ -137,9 +137,9 @@ def train_step(
 
     def loss_fn(params):
         """Compute loss for gradient computation."""
-        # Forward pass - network returns (equity, policy, attention_weights)
+        # Forward pass - network returns (equity, policy, cube_decision, attention_weights)
         # Pass RNG for dropout
-        equity_pred, policy_logits, _ = state.apply_fn(
+        equity_pred, policy_logits, _, _ = state.apply_fn(
             {'params': params},
             batch['board_encoding'],
             training=True,
@@ -263,8 +263,8 @@ def compute_metrics(
     Returns:
         Dictionary of metrics
     """
-    # Forward pass - network returns (equity, policy, attention_weights)
-    equity_pred, policy_logits, _ = state.apply_fn(
+    # Forward pass - network returns (equity, policy, cube_decision, attention_weights)
+    equity_pred, policy_logits, _, _ = state.apply_fn(
         {'params': state.params},
         batch['board_encoding'],
         training=False,

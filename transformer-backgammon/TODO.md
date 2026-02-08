@@ -1,8 +1,8 @@
 # Backgammon Transformer — Feature Roadmap & TODO
 
-> **Status**: Search and benchmarking complete. 0/1/2-ply search with batch evaluation implemented. Win rate tracking and benchmark positions integrated into training loop. Pipeline trains and evaluates correctly.
+> **Status**: Search, benchmarking, and doubling cube complete. 0/1/2-ply search with batch evaluation. Win rate tracking and benchmark positions in training loop. Full doubling cube with match play, match equity tables, cubeful equity, and cube decision network head.
 >
-> **Current Maturity**: ~5/10 for competitive play. Solid game engine + neural training + search + benchmarking. Missing cube, advanced training techniques (TD(lambda)), and GnuBG interface.
+> **Current Maturity**: ~6/10 for competitive play. Solid game engine + neural training + search + benchmarking + doubling cube + match play. Missing advanced training techniques (TD(lambda)), GnuBG interface, and MCTS.
 
 ---
 
@@ -24,16 +24,16 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [x] **1. 1-ply lookahead with dice averaging** — Evaluate all legal moves, for each apply the move, then average the equity over all 21 dice rolls. This is the single biggest strength multiplier (~10x). See Jacob Hilton's approach. (Effort: M, Impact: massive) *(Feb 2025)*
 - [x] **2. 2-ply search** — After your move, consider opponent's best response across all their dice rolls. (Effort: M, Impact: large) *(Feb 2026)*
 - [x] **3. Batch evaluation of multiple positions** — Feed all candidate resulting positions into the network in one GPU forward pass instead of one-by-one. Critical for search speed. (Effort: S, Impact: large for speed) *(Feb 2025)*
-- [ ] **4. Move ordering heuristics** — Evaluate most promising moves first to enable pruning. Sort by pip count improvement, hits, etc. (Effort: S, Impact: moderate)
+- [x] **4. Move ordering heuristics** — `order_moves()` and `select_move_2ply_pruned()` in `evaluation/search.py`. Scores by pip improvement, hits, points made, blot penalties. (Effort: S, Impact: moderate) *(Feb 2026)*
 - [ ] **5. Transposition table / position cache** — Avoid re-evaluating identical positions across search. Hash board state → equity. (Effort: M, Impact: moderate)
 - [x] **6. Parallel move evaluation** — Batch all candidate resulting positions into one network call. Complementary to item 3. (Effort: S, Impact: large for speed) *(Feb 2025)*
 
 ### Doubling Cube (essential for real backgammon)
 
-- [ ] **7. Cube state tracking in Board** — Add cube value, cube owner, centered flag to Board dataclass. (Effort: S, Impact: foundational)
-- [ ] **8. Cube decision network** — Separate network head or model for double/no-double/take/pass decisions. (Effort: M, Impact: large)
-- [ ] **9. Match equity tables** — Implement Kazaross/Rockwell tables for score-dependent cube decisions. (Effort: S, Impact: large for match play)
-- [ ] **10. Cube-aware equity calculation** — Game value = points × cube value. Integrate into training targets. (Effort: S, Impact: large)
+- [x] **7. Cube state tracking in Board** — CubeState, CubeOwner, CubeAction types in `core/types.py`. Full cube module at `core/cube.py` with can_double, apply_cube_action, legal_cube_actions. (Effort: S, Impact: foundational) *(Feb 2026)*
+- [x] **8. Cube decision network** — CubeHead in `network/network.py` with 4-output (no_double, double, take, pass). Optional via `use_cube_head` config. Cube state encoding in `core/cube.py`. (Effort: M, Impact: large) *(Feb 2026)*
+- [x] **9. Match equity tables** — Kazaross/Rockwell 15x15 MET in `core/cube.py`. Match state tracking with Crawford rule. (Effort: S, Impact: large for match play) *(Feb 2026)*
+- [x] **10. Cube-aware equity calculation** — Cubeful equity for money and match play. should_double/should_take decisions. evaluate_cube_decision quality metrics. (Effort: S, Impact: large) *(Feb 2026)*
 
 ### Evaluation & Benchmarking (can't improve what you can't measure)
 
@@ -63,14 +63,14 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 
 ### Encoding Improvements
 
-- [ ] **25. Contact vs race detection** — Binary or continuous feature indicating whether pieces are still in contact. Fundamentally different strategies apply. (Effort: S, Impact: large)
-- [ ] **26. Pip count as input feature** — Normalized total pip count for each player. Cheap and informative. (Effort: S, Impact: moderate)
-- [ ] **27. Home board control features** — How many home board points are made, how close to bearing off. (Effort: S, Impact: moderate)
+- [x] **25. Contact vs race detection** — `is_past_contact()` in `core/board.py` and encoded in `encode_global_board_features()`. (Effort: S, Impact: large) *(Feb 2026)*
+- [x] **26. Pip count as input feature** — Normalized pip counts (our/opp/diff) in `encode_global_board_features()`. (Effort: S, Impact: moderate) *(Feb 2026)*
+- [x] **27. Home board control features** — `home_board_points_made()` in `core/board.py`, encoded as fraction (0-1) in global features. (Effort: S, Impact: moderate) *(Feb 2026)*
 - [ ] **28. Prime detection** — Length and location of longest prime for each player. (Effort: S, Impact: moderate)
 - [ ] **29. Blot vulnerability encoding** — Which checkers are within direct/indirect hitting range. (Effort: M, Impact: moderate)
 - [ ] **30. Escape features** — How many dice rolls let a trapped/back checker escape. (Effort: M, Impact: moderate)
-- [ ] **31. Race equity estimate** — Pure pip count equity formula as input feature for race positions. (Effort: S, Impact: small)
-- [ ] **32. Bearoff progress features** — Number of checkers already borne off for each player. (Effort: S, Impact: small)
+- [x] **31. Race equity estimate** — `race_equity_estimate()` using adjusted pip count / Keith count formula in `core/board.py`. Encoded in global features. (Effort: S, Impact: small) *(Feb 2026)*
+- [x] **32. Bearoff progress features** — Fraction of checkers borne off for each player in `encode_global_board_features()`. (Effort: S, Impact: small) *(Feb 2026)*
 
 ### Architecture
 
@@ -86,16 +86,16 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 
 ### Match Play
 
-- [ ] **36. Match score tracking** — Track scores across multiple games in a match. (Effort: S, Impact: foundational)
+- [x] **36. Match score tracking** — MatchState in `core/types.py` and `core/cube.py` with update_match_score, is_match_over, match_winner. (Effort: S, Impact: foundational) *(Feb 2026)*
 - [ ] **37. Score-dependent strategy** — Different play when leading vs trailing in match. (Effort: M, Impact: large for match play)
-- [ ] **38. Match equity table implementation** — Kazaross/Rockwell tables. (Effort: S, Impact: large for match play)
-- [ ] **39. Cube handling in match context** — Gammon-go, too-good-to-double, etc. (Effort: M, Impact: large)
-- [ ] **40. Crawford rule and post-Crawford** — Special cube rules near end of match. (Effort: S, Impact: moderate)
+- [x] **38. Match equity table implementation** — Kazaross/Rockwell 15×15 table in `core/cube.py`. See item 9. (Effort: S, Impact: large for match play) *(Feb 2026)*
+- [x] **39. Cube handling in match context** — can_double_in_match, cubeful equity for match play, encode_match_state. Gammon-go/too-good logic via should_double/should_take. (Effort: M, Impact: large) *(Feb 2026)*
+- [x] **40. Crawford rule and post-Crawford** — Crawford/post-Crawford state tracking, is_crawford_game check disables doubling. (Effort: S, Impact: moderate) *(Feb 2026)*
 
 ### Endgame
 
 - [ ] **41. Bearoff database (<=6 checkers)** — Precomputed perfect play for simplified endgame positions. (Effort: L, Impact: large for endgame)
-- [ ] **42. Race equity formula** — Effective Pip Count / Keith count for pure race evaluation. (Effort: S, Impact: moderate)
+- [x] **42. Race equity formula** — `race_equity_estimate()` in `core/board.py` using adjusted pip count. See also item 31. (Effort: S, Impact: moderate) *(Feb 2026)*
 - [ ] **43. One-sided bearoff database** — No contact, just bear off optimally. (Effort: M, Impact: moderate)
 - [ ] **44. Contact endgame tablebases** — Perfect play for simple contact positions. (Effort: L, Impact: moderate)
 
@@ -175,7 +175,7 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [ ] **86. Match format support** — 1-point, 3-point, 5-point, 7-point matches. (Effort: S, Impact: moderate)
 - [ ] **87. Chouette support** — Multi-player variant. (Effort: M, Impact: niche)
 - [ ] **88. Jacoby rule** — Gammons don't count if cube not turned (money game variant). (Effort: S, Impact: small)
-- [ ] **89. Beaver/raccoon support** — Advanced cube actions. (Effort: S, Impact: niche)
+- [x] **89. Beaver/raccoon support** — Beaver action implemented in `core/cube.py` apply_cube_action. (Effort: S, Impact: niche) *(Feb 2026)*
 - [ ] **90. Automatic doubling support** — House rule variant. (Effort: S, Impact: niche)
 
 ---
@@ -201,9 +201,9 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 
 1. ~~**Items 1-3, 6** (1-ply search + batch eval)~~ — DONE (search.py)
 2. ~~**Items 12, 13, 15** (benchmarking)~~ — DONE (benchmark.py + training loop integration)
-3. **Longer training run** with the fixed pipeline — see where the model plateaus
-4. **Items 16-18** (TD(lambda) + rollout targets) — dramatically better training signal
-5. **Items 7-10** (doubling cube) — needed for real backgammon
+3. ~~**Items 7-10** (doubling cube)~~ — DONE (core/cube.py + types + network cube head)
+4. **Longer training run** with the fixed pipeline — see where the model plateaus
+5. **Items 16-18** (TD(lambda) + rollout targets) — dramatically better training signal
 6. **Items 25-28** (better encoding) — more signal for the network to learn from
 7. **Items 45-46** (MCTS) — sophisticated search for strongest play
 
@@ -223,3 +223,13 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [x] **Win rate tracking over training** — `run_evaluation_checkpoint()` callback integrated into training loop. Evaluates vs random & pip count agents at configurable intervals. (Feb 2026)
 - [x] **Equity error metric** — MAE/RMSE/max-error on benchmark positions with per-position breakdown. (Feb 2026)
 - [x] **Fix value-only agent crash** — 0-ply `NeuralNetworkAgent` now falls back to value-based search when policy head is disabled. (Feb 2026)
+- [x] **Doubling cube types & state** — CubeState, CubeOwner, CubeAction in `core/types.py`. Full cube module at `core/cube.py`. (Feb 2026)
+- [x] **Cube decision network head** — CubeHead (4-output) in `network/network.py` with `use_cube_head` config. (Feb 2026)
+- [x] **Match equity tables** — Kazaross/Rockwell 15×15 MET in `core/cube.py`. (Feb 2026)
+- [x] **Cubeful equity calculation** — Money and match cubeful equity, should_double/should_take, evaluate_cube_decision. (Feb 2026)
+- [x] **Match play** — MatchState with score tracking, Crawford/post-Crawford rule, match equity lookups. (Feb 2026)
+- [x] **Cube encoding** — encode_cube_state (4-dim) and encode_match_state (5-dim) for network input. (Feb 2026)
+- [x] **Global board features** — `encode_global_board_features()` with 8-dim vector: pip counts, contact detection, race equity, bearoff progress, home board control. (Feb 2026)
+- [x] **Contact vs race detection** — `is_past_contact()` in `core/board.py`. (Feb 2026)
+- [x] **Race equity formula** — `race_equity_estimate()` using adjusted pip count / Keith count. (Feb 2026)
+- [x] **Move ordering heuristics** — `order_moves()` and `select_move_2ply_pruned()` for top-K pruning at 2-ply. (Feb 2026)

@@ -323,6 +323,39 @@ class PolicyHead(nn.Module):
         return x
 
 
+class CubeHead(nn.Module):
+    """Cube decision head for double/no-double/take/pass predictions.
+
+    Converts transformer output to cube action probabilities.
+    Output has 4 dimensions: [no_double, double, take, pass].
+
+    Attributes:
+        config: Transformer configuration
+    """
+    config: TransformerConfig
+
+    @nn.compact
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+        """Predict cube action probabilities from transformer output.
+
+        Args:
+            x: Transformer output of shape [batch, seq_len, embed_dim]
+
+        Returns:
+            Cube decision logits of shape [batch, 4]
+            (no_double, double, take, pass)
+        """
+        # Global mean pooling
+        pooled = jnp.mean(x, axis=1)  # [batch, embed_dim]
+
+        # MLP head
+        x = nn.Dense(self.config.ff_dim // 4, name='fc1')(pooled)
+        x = nn.gelu(x)
+        x = nn.Dense(4, name='cube_decision')(x)
+
+        return x
+
+
 # ==============================================================================
 # MAIN TRANSFORMER MODEL
 # ==============================================================================
@@ -348,7 +381,7 @@ class BackgammonTransformer(nn.Module):
         self,
         x: jnp.ndarray,
         training: bool = False
-    ) -> Tuple[jnp.ndarray, Optional[jnp.ndarray], Optional[jnp.ndarray]]:
+    ) -> Tuple[jnp.ndarray, Optional[jnp.ndarray], Optional[jnp.ndarray], Optional[jnp.ndarray]]:
         """Forward pass through the transformer.
 
         Args:
@@ -356,9 +389,10 @@ class BackgammonTransformer(nn.Module):
             training: Whether in training mode (for dropout)
 
         Returns:
-            Tuple of (equity, policy, attention_weights)
+            Tuple of (equity, policy, cube_decision, attention_weights)
             - equity: [batch, 5] - equity predictions
             - policy: [batch, num_actions] or None
+            - cube_decision: [batch, 4] or None (no_double, double, take, pass)
             - attention_weights: [batch, num_layers, num_heads, seq_len, seq_len] or None
         """
         batch_size, seq_len, feature_dim = x.shape
@@ -409,13 +443,21 @@ class BackgammonTransformer(nn.Module):
                 name='policy_head'
             )(x)
 
+        # Cube decision head (optional)
+        cube_decision = None
+        if self.config.use_cube_head:
+            cube_decision = CubeHead(
+                config=self.config,
+                name='cube_head'
+            )(x)
+
         # Stack attention weights
         if all_attention_weights:
             attention_weights = jnp.stack(all_attention_weights, axis=1)
         else:
             attention_weights = None
 
-        return equity, policy, attention_weights
+        return equity, policy, cube_decision, attention_weights
 
     def _get_sinusoidal_encoding(
         self,
@@ -511,7 +553,7 @@ def forward(
     encoded_board: EncodedBoard,
     training: bool = False,
     rng_key: Optional[jax.random.PRNGKey] = None
-) -> Tuple[jnp.ndarray, Optional[jnp.ndarray], Optional[jnp.ndarray]]:
+) -> Tuple[jnp.ndarray, Optional[jnp.ndarray], Optional[jnp.ndarray], Optional[jnp.ndarray]]:
     """Perform forward pass through the network.
 
     Args:
@@ -522,27 +564,27 @@ def forward(
         rng_key: Random key (for dropout in training mode)
 
     Returns:
-        Tuple of (equity, policy, attention_weights)
+        Tuple of (equity, policy, cube_decision, attention_weights)
     """
     # Extract features as JAX array
     features = jnp.array(encoded_board.position_features, dtype=jnp.float32)
 
     # Forward pass
     if training and rng_key is not None:
-        equity, policy, attention_weights = model.apply(
+        equity, policy, cube_decision, attention_weights = model.apply(
             params,
             features,
             training=training,
             rngs={'dropout': rng_key}
         )
     else:
-        equity, policy, attention_weights = model.apply(
+        equity, policy, cube_decision, attention_weights = model.apply(
             params,
             features,
             training=training
         )
 
-    return equity, policy, attention_weights
+    return equity, policy, cube_decision, attention_weights
 
 
 def forward_batch(
@@ -551,7 +593,7 @@ def forward_batch(
     encoded_boards: EncodedBoard,
     training: bool = False,
     rng_key: Optional[jax.random.PRNGKey] = None
-) -> Tuple[jnp.ndarray, Optional[jnp.ndarray], Optional[jnp.ndarray]]:
+) -> Tuple[jnp.ndarray, Optional[jnp.ndarray], Optional[jnp.ndarray], Optional[jnp.ndarray]]:
     """Batched forward pass (GPU-optimized).
 
     Args:
@@ -562,7 +604,7 @@ def forward_batch(
         rng_key: Random key (for dropout)
 
     Returns:
-        Tuple of (equity_batch, policy_batch, attention_weights_batch)
+        Tuple of (equity_batch, policy_batch, cube_decision_batch, attention_weights_batch)
     """
     return forward(model, params, encoded_boards, training, rng_key)
 
@@ -698,7 +740,7 @@ def train_step(
         Tuple of (updated_state, loss_value)
     """
     def loss_fn(params):
-        equity_pred, _, _ = state.apply_fn(
+        equity_pred, _, _, _ = state.apply_fn(
             params,
             features,
             training=True,
@@ -728,7 +770,7 @@ def eval_step(
     Returns:
         Loss value (scalar JAX array)
     """
-    equity_pred, _, _ = state.apply_fn(
+    equity_pred, _, _, _ = state.apply_fn(
         state.params,
         features,
         training=False

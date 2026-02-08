@@ -102,8 +102,8 @@ class TestCreateTrainState:
             training=False,
         )
 
-        # Check outputs (network returns tuple of (equity, policy_logits, attention_weights))
-        equity, policy_logits, _ = output
+        # Check outputs (network returns tuple of (equity, policy_logits, cube_decision, attention_weights))
+        equity, policy_logits, _, _ = output
         assert equity.shape == (1, 5)  # Equity prediction (5 outcomes)
         assert policy_logits.shape == (1, 1024)  # Action space size
 
@@ -402,7 +402,7 @@ class TestConfigurationVariations:
         )
 
         # Check outputs - policy should be None in value-only mode
-        equity, policy, _ = output
+        equity, policy, _, _ = output
         assert equity.shape == (1, 5)  # Equity prediction
         assert policy is None  # No policy in value-only mode
 
@@ -440,6 +440,6 @@ class TestConfigurationVariations:
                 training=False,
             )
 
-            equity, policy, _ = output
+            equity, policy, _, _ = output
             assert equity.shape == (1, 5)  # Equity prediction
             assert policy.shape == (1, 1024)  # Policy logits
