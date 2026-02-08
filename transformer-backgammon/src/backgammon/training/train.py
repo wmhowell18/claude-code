@@ -80,6 +80,9 @@ class TrainingConfig:
 
     # Agent settings
     neural_agent_temperature: float = 0.3  # Exploration during self-play
+    temperature_start: float = 1.0  # Starting temperature for exploration schedule
+    temperature_end: float = 0.1  # Final temperature for exploration schedule
+    use_temperature_schedule: bool = True  # Enable temperature decay over training
 
     # TD(lambda) settings
     td_lambda: float = 0.7  # TD(lambda) parameter (0=TD(0), 1=MC, 0.7=recommended)
@@ -149,6 +152,31 @@ class TrainingPhase:
     def should_use_pip_count_warmstart(self) -> bool:
         """Check if we should use pip count agents (warmstart phase)."""
         return self.total_games_played < self.config.warmstart_games
+
+    def get_current_temperature(self) -> float:
+        """Get current exploration temperature based on training progress.
+
+        Linearly decays from temperature_start to temperature_end over
+        the course of training. During warmstart, returns temperature_start.
+
+        Returns:
+            Current temperature value.
+        """
+        if not self.config.use_temperature_schedule:
+            return self.config.neural_agent_temperature
+
+        total_target = (self.config.warmstart_games + self.config.early_phase_games +
+                        self.config.mid_phase_games + self.config.late_phase_games)
+        # Progress through non-warmstart training
+        neural_games = max(0, self.total_games_played - self.config.warmstart_games)
+        neural_total = total_target - self.config.warmstart_games
+        if neural_total <= 0:
+            return self.config.temperature_start
+
+        progress = min(1.0, neural_games / neural_total)
+        return self.config.temperature_start + progress * (
+            self.config.temperature_end - self.config.temperature_start
+        )
 
 
 def create_train_state(config: TrainingConfig, rng: jax.random.PRNGKey) -> train_state.TrainState:
@@ -312,9 +340,10 @@ def train(config: Optional[TrainingConfig] = None):
                 black_agent = pip_agent
             else:
                 # Self-play: neural network vs itself (with exploration)
+                current_temp = phase_manager.get_current_temperature()
                 neural_agent = create_neural_agent(
                     state=state,
-                    temperature=config.neural_agent_temperature,
+                    temperature=current_temp,
                     name="NeuralNet",
                 )
                 white_agent = neural_agent
@@ -407,11 +436,13 @@ def train(config: Optional[TrainingConfig] = None):
             # Console logging
             if batch_num % config.log_every_n_batches == 0:
                 buffer_status = f"{len(replay_buffer)}/{replay_buffer.max_size}"
+                temp_str = f"Temp: {phase_manager.get_current_temperature():.2f} | " if not use_warmstart else ""
                 print(f"[{phase_name:8s}] Batch {batch_num:4d} | "
                       f"Games: {phase_manager.total_games_played:5d} | "
                       f"Loss: {train_loss:.4f} | "
                       f"WR: {stats['white_win_rate']:.3f} | "
                       f"Moves: {stats['avg_moves']:.1f} | "
+                      f"{temp_str}"
                       f"Buffer: {buffer_status} | "
                       f"Speed: {metrics.games_per_second:.1f} g/s")
 

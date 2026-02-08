@@ -2,7 +2,7 @@
 
 > **Status**: Search, benchmarking, and training improvements complete. 0/1/2-ply search with batch evaluation, move ordering with progressive deepening, transposition table, and TD(lambda) training implemented. Win rate tracking and benchmark positions integrated into training loop.
 >
-> **Current Maturity**: ~5.5/10 for competitive play. Solid game engine + neural training + search + benchmarking + TD(lambda). Missing cube, GnuBG interface, and encoding improvements.
+> **Current Maturity**: ~6/10 for competitive play. Solid game engine + neural training + search + benchmarking + TD(lambda) + exploration schedule + global encoding features. Missing cube, GnuBG interface, and rollout-based training.
 
 ---
 
@@ -54,7 +54,7 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [x] **16. TD(lambda) returns** — Full TD(lambda) implementation following TD-Gammon (Tesauro 1995). Records network equity estimates during self-play, computes targets using backward eligibility traces in fixed-perspective (White) 6-dim equity space. Configurable lambda (default 0.7). Integrated into replay buffer and training loop. (Effort: M, Impact: large) *(Feb 2026)*
 - [ ] **17. N-step bootstrapping** — Use V(s') from the network for truncated episodes instead of waiting for game end. (Effort: M, Impact: large)
 - [ ] **18. Rollout-based training targets** — 1-ply rollout equity gives much better targets than raw game outcome. Key technique from gnubg. (Effort: L, Impact: large)
-- [ ] **19. Exploration schedule** — Decay self-play temperature over training (e.g., 1.0 → 0.1). Currently fixed at 0.3. (Effort: S, Impact: moderate)
+- [x] **19. Exploration schedule** — Linear temperature decay from 1.0 → 0.1 over training. Configurable start/end temperatures. Logged per-batch. Warmstart phase uses fixed temperature. (Effort: S, Impact: moderate) *(Feb 2026)*
 - [ ] **20. Opponent diversity** — Periodically play against older snapshots and baseline agents, not just self. Prevents forgetting. (Effort: M, Impact: moderate)
 - [ ] **21. Position weighting** — Weight endgame and critical (high-equity-error) positions more heavily in training. (Effort: S, Impact: moderate)
 - [ ] **22. More warmstart games** — Current 500 games is thin. Consider 2000-5000 pip count warmstart games. (Effort: S, Impact: small)
@@ -63,10 +63,10 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 
 ### Encoding Improvements
 
-- [ ] **25. Contact vs race detection** — Binary or continuous feature indicating whether pieces are still in contact. Fundamentally different strategies apply. (Effort: S, Impact: large)
-- [ ] **26. Pip count as input feature** — Normalized total pip count for each player. Cheap and informative. (Effort: S, Impact: moderate)
-- [ ] **27. Home board control features** — How many home board points are made, how close to bearing off. (Effort: S, Impact: moderate)
-- [ ] **28. Prime detection** — Length and location of longest prime for each player. (Effort: S, Impact: moderate)
+- [x] **25. Contact vs race detection** — Binary feature indicating whether checkers are still in contact. Checks furthest/closest checkers + bar state. Part of global features. (Effort: S, Impact: large) *(Feb 2026)*
+- [x] **26. Pip count as input feature** — Normalized pip count for both players (0-1 range, 167 max). Part of global features broadcast to all positions. (Effort: S, Impact: moderate) *(Feb 2026)*
+- [x] **27. Home board control features** — Count of made points (2+ checkers) in each player's home board, normalized to [0-1]. Part of global features. (Effort: S, Impact: moderate) *(Feb 2026)*
+- [x] **28. Prime detection** — Length of longest prime for each player, capped at 6, normalized. Part of global features. (Effort: S, Impact: moderate) *(Feb 2026)*
 - [ ] **29. Blot vulnerability encoding** — Which checkers are within direct/indirect hitting range. (Effort: M, Impact: moderate)
 - [ ] **30. Escape features** — How many dice rolls let a trapped/back checker escape. (Effort: M, Impact: moderate)
 - [ ] **31. Race equity estimate** — Pure pip count equity formula as input feature for race positions. (Effort: S, Impact: small)
@@ -203,8 +203,8 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 2. ~~**Items 12, 13, 15** (benchmarking)~~ — DONE (benchmark.py + training loop integration)
 3. ~~**Items 4-5** (move ordering + transposition table)~~ — DONE (search.py: progressive deepening, TranspositionTable)
 4. ~~**Item 16** (TD(lambda))~~ — DONE (td_lambda.py + self_play.py + replay_buffer.py)
-5. **Longer training run** with the fixed pipeline — see where the model plateaus
-6. **Items 19, 25-28** (exploration schedule + better encoding) — more signal for the network
+5. ~~**Items 19, 25-28** (exploration schedule + encoding improvements)~~ — DONE (encoder.py + train.py)
+6. **Longer training run** with the improved pipeline — see where the model plateaus
 7. **Items 7-10** (doubling cube) — needed for real backgammon
 8. **Items 17-18** (N-step bootstrapping + rollout targets) — even better training signal
 9. **Items 45-46** (MCTS) — sophisticated search for strongest play
@@ -227,4 +227,6 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [x] **Move ordering + progressive deepening** — Heuristic-based move scoring for ordering. 2-ply uses 0-ply pre-screening to select top-k candidates. (Feb 2026)
 - [x] **Transposition table** — MD5-based position caching with configurable size and LRU eviction. (Feb 2026)
 - [x] **TD(lambda) returns** — Full implementation with 6-dim equity, fixed-perspective TD computation, backward eligibility traces. Integrated into self-play, replay buffer, and training loop. (Feb 2026)
+- [x] **Exploration schedule** — Linear temperature decay (1.0→0.1) over training for self-play exploration. (Feb 2026)
+- [x] **Global encoding features** — Contact detection, pip counts, home board control, prime detection, and bearoff progress. 8 global features broadcast to all 26 positions. New `enhanced_encoding_config()` and `full_encoding_config()` presets. (Feb 2026)
 - [x] **Fix value-only agent crash** — 0-ply `NeuralNetworkAgent` now falls back to value-based search when policy head is disabled. (Feb 2026)

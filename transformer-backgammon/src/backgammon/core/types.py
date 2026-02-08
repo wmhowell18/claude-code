@@ -252,12 +252,17 @@ class EncodingConfig:
         include_geometric_features: Add geometric features (distance to home, etc.)
         include_strategic_features: Add strategic features (blots, anchors, etc.)
         include_dice_encoding: Include dice features in encoding
+        include_global_features: Add global board features broadcast to each position.
+            Adds 8 features: is_contact, our_pip_norm, opp_pip_norm,
+            our_home_points, opp_home_points, our_prime_len, opp_prime_len,
+            our_bearoff_progress.
         feature_dim: Resulting feature dimension per position
     """
     use_one_hot_counts: bool = False
     include_geometric_features: bool = False
     include_strategic_features: bool = False
     include_dice_encoding: bool = False
+    include_global_features: bool = False
     feature_dim: int = 2  # Will be computed based on flags
 
 
