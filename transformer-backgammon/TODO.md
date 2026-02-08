@@ -24,7 +24,7 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [x] **1. 1-ply lookahead with dice averaging** — Evaluate all legal moves, for each apply the move, then average the equity over all 21 dice rolls. This is the single biggest strength multiplier (~10x). See Jacob Hilton's approach. (Effort: M, Impact: massive) *(Feb 2025)*
 - [x] **2. 2-ply search** — After your move, consider opponent's best response across all their dice rolls. (Effort: M, Impact: large) *(Feb 2026)*
 - [x] **3. Batch evaluation of multiple positions** — Feed all candidate resulting positions into the network in one GPU forward pass instead of one-by-one. Critical for search speed. (Effort: S, Impact: large for speed) *(Feb 2025)*
-- [ ] **4. Move ordering heuristics** — Evaluate most promising moves first to enable pruning. Sort by pip count improvement, hits, etc. (Effort: S, Impact: moderate)
+- [x] **4. Move ordering heuristics** — `order_moves()` and `select_move_2ply_pruned()` in `evaluation/search.py`. Scores by pip improvement, hits, points made, blot penalties. (Effort: S, Impact: moderate) *(Feb 2026)*
 - [ ] **5. Transposition table / position cache** — Avoid re-evaluating identical positions across search. Hash board state → equity. (Effort: M, Impact: moderate)
 - [x] **6. Parallel move evaluation** — Batch all candidate resulting positions into one network call. Complementary to item 3. (Effort: S, Impact: large for speed) *(Feb 2025)*
 
@@ -232,3 +232,4 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [x] **Global board features** — `encode_global_board_features()` with 8-dim vector: pip counts, contact detection, race equity, bearoff progress, home board control. (Feb 2026)
 - [x] **Contact vs race detection** — `is_past_contact()` in `core/board.py`. (Feb 2026)
 - [x] **Race equity formula** — `race_equity_estimate()` using adjusted pip count / Keith count. (Feb 2026)
+- [x] **Move ordering heuristics** — `order_moves()` and `select_move_2ply_pruned()` for top-K pruning at 2-ply. (Feb 2026)
