@@ -2,7 +2,8 @@
 
 Wraps the transformer network to work with the Agent interface.
 Handles board encoding, network inference, and move selection.
-Supports 0-ply (direct evaluation) and 1-ply (dice-averaged lookahead).
+Supports 0-ply (direct evaluation), 1-ply (dice-averaged lookahead),
+and 2-ply (opponent uses 1-ply response).
 """
 
 import jax
@@ -88,6 +89,14 @@ class NeuralNetworkAgent:
 
         # Run network inference
         policy_logits, value = self._forward(encoded_board)
+
+        # If no policy head, fall back to value-based 0-ply search
+        if policy_logits is None:
+            best_move, _ = search_select_move(
+                self.state, board, player, dice, legal_moves,
+                ply=0, encoding_config=self.encoding_config,
+            )
+            return best_move
 
         # Compute probabilities for each legal move
         move_probs = self._score_legal_moves(policy_logits[0], legal_moves)
@@ -210,7 +219,7 @@ def create_neural_agent(
         state: Flax training state
         temperature: Sampling temperature (only used at 0-ply)
         name: Agent name
-        ply: Search depth (0 = policy head, 1 = dice-averaged lookahead)
+        ply: Search depth (0 = policy head, 1 = 1-ply lookahead, 2 = 2-ply)
 
     Returns:
         Agent compatible with existing interface

@@ -35,6 +35,10 @@ from backgammon.training.replay_buffer import ReplayBuffer
 from backgammon.training.losses import train_step
 from backgammon.training.metrics import MetricsLogger
 from backgammon.network.network import BackgammonTransformer
+from backgammon.evaluation.benchmark import (
+    EvalHistory,
+    run_evaluation_checkpoint,
+)
 
 
 @dataclass
@@ -78,9 +82,9 @@ class TrainingConfig:
     neural_agent_temperature: float = 0.3  # Exploration during self-play
 
     # Evaluation settings
-    eval_every_n_batches: int = 50  # Evaluate model strength periodically
-    eval_games_vs_random: int = 50  # Games per eval vs random agent
-    eval_games_vs_pip_count: int = 50  # Games per eval vs pip count agent
+    eval_every_n_batches: int = 50  # Run evaluation checkpoint every N batches
+    eval_num_games: int = 50  # Games per opponent during evaluation
+    eval_ply: int = 0  # Search depth for evaluation (0 is fast, 1 is slow)
 
     # Paths
     checkpoint_dir: str = "checkpoints"
@@ -268,18 +272,12 @@ def train(config: Optional[TrainingConfig] = None):
     # Log hyperparameters
     metrics_logger.log_hyperparams(asdict(config))
 
-    # Create evaluator for periodic win rate tracking
-    # (lazy import to avoid circular dependency with evaluation module)
-    from backgammon.evaluation.evaluator import TrainingEvaluator, EvalConfig
-    eval_config = EvalConfig(
-        eval_every_n_batches=config.eval_every_n_batches,
-        games_vs_random=config.eval_games_vs_random,
-        games_vs_pip_count=config.eval_games_vs_pip_count,
-    )
-    evaluator = TrainingEvaluator(eval_config)
-
     # Training phase manager
     phase_manager = TrainingPhase(config)
+
+    # Evaluation history
+    eval_history = EvalHistory()
+    eval_rng = np.random.default_rng(config.seed + 1000)
 
     # Create agents
     pip_agent = pip_count_agent()
@@ -412,19 +410,18 @@ def train(config: Optional[TrainingConfig] = None):
                 # Save metrics to file
                 save_metrics(metrics, config)
 
-            # Periodic evaluation against reference agents
-            eval_metrics = evaluator.maybe_evaluate(batch_num, state)
-            if eval_metrics:
-                metrics_logger.log_metrics(
-                    eval_metrics, step=batch_num, prefix="eval/"
+            # Evaluation checkpoint
+            if batch_num % config.eval_every_n_batches == 0 and replay_buffer.is_ready():
+                run_evaluation_checkpoint(
+                    state=state,
+                    step=batch_num,
+                    games_played=phase_manager.total_games_played,
+                    eval_history=eval_history,
+                    num_eval_games=config.eval_num_games,
+                    ply=config.eval_ply,
+                    rng=eval_rng,
+                    verbose=True,
                 )
-                wr_rand = eval_metrics.get('vs_random_wr', 0)
-                wr_pip = eval_metrics.get('vs_pip_wr', 0)
-                eval_time = eval_metrics.get('eval_time_s', 0)
-                print(f"  EVAL @ batch {batch_num}: "
-                      f"vs random={wr_rand:.1%}, "
-                      f"vs pip_count={wr_pip:.1%} "
-                      f"({eval_time:.1f}s)")
 
             # Checkpointing
             if batch_num % config.checkpoint_every_n_batches == 0:
@@ -439,27 +436,34 @@ def train(config: Optional[TrainingConfig] = None):
                 print(f"   Total training steps: {total_train_steps}")
                 print(f"   Final loss: {train_loss:.4f}")
 
-                # Final evaluation
-                print("\n📊 Final evaluation...")
-                final_eval = evaluator.evaluate(state, batch_num)
-                evaluator.print_summary()
-
                 # Save final checkpoint
                 save_checkpoint(state, config, batch_num)
 
-                # Save summary (include eval history)
-                summary = {
+                # Final evaluation
+                print("\n📊 Final evaluation:")
+                run_evaluation_checkpoint(
+                    state=state,
+                    step=batch_num,
+                    games_played=phase_manager.total_games_played,
+                    eval_history=eval_history,
+                    num_eval_games=config.eval_num_games,
+                    ply=config.eval_ply,
+                    rng=eval_rng,
+                    verbose=True,
+                )
+
+                print("\n📈 Evaluation history:")
+                print(eval_history.summary())
+
+                # Save summary
+                metrics_logger.save_summary({
                     'total_games': phase_manager.total_games_played,
                     'total_batches': batch_num,
                     'total_train_steps': total_train_steps,
                     'final_loss': train_loss,
                     'final_learning_rate': current_lr,
-                    'eval_history': evaluator.history,
-                }
-                if final_eval:
-                    summary['final_vs_random_wr'] = final_eval.get('vs_random_wr', 0)
-                    summary['final_vs_pip_wr'] = final_eval.get('vs_pip_wr', 0)
-                metrics_logger.save_summary(summary)
+                    'eval_history': eval_history.entries,
+                })
 
                 break
 

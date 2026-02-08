@@ -480,6 +480,219 @@ def select_move_1ply(
     return legal_moves[best_idx], float(move_values[best_idx])
 
 
+def evaluate_move_2ply(
+    state: train_state.TrainState,
+    board: Board,
+    player: Player,
+    move: Move,
+    encoding_config: Optional[EncodingConfig] = None,
+) -> float:
+    """Evaluate a single move at 2-ply (opponent uses 1-ply response).
+
+    Apply the move, then for each of 21 opponent dice rolls, the opponent
+    selects their best move using 1-ply evaluation (dice-averaged lookahead
+    from their perspective). This gives a much more accurate assessment
+    than 1-ply at the cost of significantly more computation.
+
+    Args:
+        state: Network training state.
+        board: Current board state.
+        player: Player making the move.
+        move: Move to evaluate.
+        encoding_config: Encoding config (defaults to raw).
+
+    Returns:
+        Value estimate from player's perspective (higher = better).
+    """
+    if encoding_config is None:
+        encoding_config = raw_encoding_config()
+
+    new_board = apply_move(board, player, move)
+
+    if is_game_over(new_board):
+        return _terminal_value(new_board, player)
+
+    opponent = player.opponent()
+
+    weighted_value = 0.0
+
+    for dice_roll in ALL_DICE_ROLLS:
+        prob = DICE_PROBABILITIES[dice_roll]
+        opp_moves = generate_legal_moves(new_board, opponent, dice_roll)
+
+        if not opp_moves:
+            # Opponent has no legal moves — position stays the same.
+            # Evaluate from our perspective with 0-ply (no further search).
+            values = _batch_evaluate(state, [new_board], encoding_config)
+            our_val = float(values[0])
+            weighted_value += prob * our_val
+            continue
+
+        # Opponent picks the move that maximizes THEIR value.
+        # Each opponent move is evaluated at 1-ply from the opponent's
+        # perspective (they average over OUR dice responses).
+        opp_best = -np.inf
+
+        for opp_move in opp_moves:
+            after_opp = apply_move(new_board, opponent, opp_move)
+
+            if is_game_over(after_opp):
+                opp_val = _terminal_value(after_opp, opponent)
+            else:
+                # Evaluate at 1-ply from opponent's perspective.
+                # This means: for each of OUR dice rolls, we pick our best
+                # response (at 0-ply), and opponent averages the results.
+                opp_val = _evaluate_position_1ply(
+                    state, after_opp, opponent, encoding_config
+                )
+
+            opp_best = max(opp_best, opp_val)
+
+        # Convert back to our perspective
+        weighted_value += prob * (-opp_best)
+
+    return weighted_value
+
+
+def _evaluate_position_1ply(
+    state: train_state.TrainState,
+    board: Board,
+    perspective: Player,
+    encoding_config: EncodingConfig,
+) -> float:
+    """Evaluate a position at 1-ply from a given player's perspective.
+
+    For each of 21 dice rolls for the OTHER player, that player picks
+    their best 0-ply move, and we average the resulting values.
+
+    This is the "inner loop" of 2-ply search: it tells the opponent
+    how good a position is for them after they've moved.
+
+    Args:
+        state: Network training state.
+        board: Board state to evaluate (it's perspective's "turn").
+        perspective: Player whose perspective we evaluate from.
+        encoding_config: Encoding configuration.
+
+    Returns:
+        Value from perspective's point of view.
+    """
+    other = perspective.opponent()
+
+    # Collect all boards we need to evaluate in one batch
+    all_boards = []
+    dice_info = []  # (n_network, has_terminal, terminal_val)
+
+    for dice_roll in ALL_DICE_ROLLS:
+        moves = generate_legal_moves(board, perspective, dice_roll)
+
+        if not moves:
+            # No legal moves — use current board value
+            all_boards.append(board)
+            dice_info.append((1, False, 0.0))
+            continue
+
+        terminal_found = False
+        terminal_val = -np.inf
+        n_network = 0
+
+        for m in moves:
+            after = apply_move(board, perspective, m)
+            if is_game_over(after):
+                v = _terminal_value(after, perspective)
+                if v > terminal_val:
+                    terminal_val = v
+                    terminal_found = True
+            else:
+                all_boards.append(after)
+                n_network += 1
+
+        dice_info.append((n_network, terminal_found, terminal_val))
+
+    # Batch evaluate
+    if all_boards:
+        all_values = _batch_evaluate(state, all_boards, encoding_config)
+    else:
+        all_values = np.array([])
+
+    # Compute dice-averaged value
+    board_cursor = 0
+    weighted_value = 0.0
+
+    for dice_idx, (n_network, has_terminal, terminal_val) in enumerate(dice_info):
+        prob = DICE_PROBABILITIES[ALL_DICE_ROLLS[dice_idx]]
+
+        # Perspective picks the best move for this dice roll
+        best_val = -np.inf
+
+        if has_terminal:
+            best_val = max(best_val, terminal_val)
+
+        for _ in range(n_network):
+            # Value is from the board's next player_to_move perspective,
+            # which is the OTHER player after perspective moves.
+            # Negate to get perspective's value.
+            other_val = float(all_values[board_cursor])
+            our_val = -other_val
+            best_val = max(best_val, our_val)
+            board_cursor += 1
+
+        if best_val == -np.inf:
+            best_val = 0.0
+
+        weighted_value += prob * best_val
+
+    return weighted_value
+
+
+def select_move_2ply(
+    state: train_state.TrainState,
+    board: Board,
+    player: Player,
+    legal_moves: LegalMoves,
+    encoding_config: Optional[EncodingConfig] = None,
+) -> Tuple[Move, float]:
+    """Select best move using 2-ply evaluation.
+
+    For each legal move, computes 2-ply value (opponent uses 1-ply
+    responses) and picks the best. This is significantly more expensive
+    than 1-ply but provides stronger play.
+
+    Args:
+        state: Network training state.
+        board: Current board state.
+        player: Player to move.
+        legal_moves: List of legal moves.
+        encoding_config: Encoding config (defaults to raw).
+
+    Returns:
+        Tuple of (best_move, best_value).
+    """
+    if encoding_config is None:
+        encoding_config = raw_encoding_config()
+
+    if not legal_moves:
+        return (), 0.0
+    if len(legal_moves) == 1:
+        val = evaluate_move_2ply(
+            state, board, player, legal_moves[0], encoding_config
+        )
+        return legal_moves[0], val
+
+    best_move = legal_moves[0]
+    best_value = -np.inf
+
+    for move in legal_moves:
+        val = evaluate_move_2ply(
+            state, board, player, move, encoding_config
+        )
+        if val > best_value:
+            best_value = val
+            best_move = move
+
+    return best_move, best_value
+
+
 def select_move(
     state: train_state.TrainState,
     board: Board,
@@ -499,7 +712,7 @@ def select_move(
         player: Player to move.
         dice: Current dice roll (unused for evaluation, but part of interface).
         legal_moves: List of legal moves.
-        ply: Search depth (0 or 1).
+        ply: Search depth (0, 1, or 2).
         encoding_config: Encoding config (defaults to raw).
 
     Returns:
@@ -513,5 +726,9 @@ def select_move(
         return select_move_1ply(
             state, board, player, legal_moves, encoding_config
         )
+    elif ply == 2:
+        return select_move_2ply(
+            state, board, player, legal_moves, encoding_config
+        )
     else:
-        raise ValueError(f"Unsupported ply depth: {ply}. Use 0 or 1.")
+        raise ValueError(f"Unsupported ply depth: {ply}. Use 0, 1, or 2.")
