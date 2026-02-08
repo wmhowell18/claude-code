@@ -63,14 +63,14 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 
 ### Encoding Improvements
 
-- [ ] **25. Contact vs race detection** — Binary or continuous feature indicating whether pieces are still in contact. Fundamentally different strategies apply. (Effort: S, Impact: large)
-- [ ] **26. Pip count as input feature** — Normalized total pip count for each player. Cheap and informative. (Effort: S, Impact: moderate)
-- [ ] **27. Home board control features** — How many home board points are made, how close to bearing off. (Effort: S, Impact: moderate)
+- [x] **25. Contact vs race detection** — `is_past_contact()` in `core/board.py` and encoded in `encode_global_board_features()`. (Effort: S, Impact: large) *(Feb 2026)*
+- [x] **26. Pip count as input feature** — Normalized pip counts (our/opp/diff) in `encode_global_board_features()`. (Effort: S, Impact: moderate) *(Feb 2026)*
+- [x] **27. Home board control features** — `home_board_points_made()` in `core/board.py`, encoded as fraction (0-1) in global features. (Effort: S, Impact: moderate) *(Feb 2026)*
 - [ ] **28. Prime detection** — Length and location of longest prime for each player. (Effort: S, Impact: moderate)
 - [ ] **29. Blot vulnerability encoding** — Which checkers are within direct/indirect hitting range. (Effort: M, Impact: moderate)
 - [ ] **30. Escape features** — How many dice rolls let a trapped/back checker escape. (Effort: M, Impact: moderate)
-- [ ] **31. Race equity estimate** — Pure pip count equity formula as input feature for race positions. (Effort: S, Impact: small)
-- [ ] **32. Bearoff progress features** — Number of checkers already borne off for each player. (Effort: S, Impact: small)
+- [x] **31. Race equity estimate** — `race_equity_estimate()` using adjusted pip count / Keith count formula in `core/board.py`. Encoded in global features. (Effort: S, Impact: small) *(Feb 2026)*
+- [x] **32. Bearoff progress features** — Fraction of checkers borne off for each player in `encode_global_board_features()`. (Effort: S, Impact: small) *(Feb 2026)*
 
 ### Architecture
 
@@ -95,7 +95,7 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 ### Endgame
 
 - [ ] **41. Bearoff database (<=6 checkers)** — Precomputed perfect play for simplified endgame positions. (Effort: L, Impact: large for endgame)
-- [ ] **42. Race equity formula** — Effective Pip Count / Keith count for pure race evaluation. (Effort: S, Impact: moderate)
+- [x] **42. Race equity formula** — `race_equity_estimate()` in `core/board.py` using adjusted pip count. See also item 31. (Effort: S, Impact: moderate) *(Feb 2026)*
 - [ ] **43. One-sided bearoff database** — No contact, just bear off optimally. (Effort: M, Impact: moderate)
 - [ ] **44. Contact endgame tablebases** — Perfect play for simple contact positions. (Effort: L, Impact: moderate)
 
@@ -229,3 +229,6 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [x] **Cubeful equity calculation** — Money and match cubeful equity, should_double/should_take, evaluate_cube_decision. (Feb 2026)
 - [x] **Match play** — MatchState with score tracking, Crawford/post-Crawford rule, match equity lookups. (Feb 2026)
 - [x] **Cube encoding** — encode_cube_state (4-dim) and encode_match_state (5-dim) for network input. (Feb 2026)
+- [x] **Global board features** — `encode_global_board_features()` with 8-dim vector: pip counts, contact detection, race equity, bearoff progress, home board control. (Feb 2026)
+- [x] **Contact vs race detection** — `is_past_contact()` in `core/board.py`. (Feb 2026)
+- [x] **Race equity formula** — `race_equity_estimate()` using adjusted pip count / Keith count. (Feb 2026)
