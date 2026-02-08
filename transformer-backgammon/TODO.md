@@ -1,8 +1,8 @@
 # Backgammon Transformer — Feature Roadmap & TODO
 
-> **Status**: Search and benchmarking complete. 0/1/2-ply search with batch evaluation implemented. Win rate tracking and benchmark positions integrated into training loop. Pipeline trains and evaluates correctly.
+> **Status**: Search, benchmarking, and training improvements complete. 0/1/2-ply search with batch evaluation, move ordering with progressive deepening, transposition table, and TD(lambda) training implemented. Win rate tracking and benchmark positions integrated into training loop.
 >
-> **Current Maturity**: ~5/10 for competitive play. Solid game engine + neural training + search + benchmarking. Missing cube, advanced training techniques (TD(lambda)), and GnuBG interface.
+> **Current Maturity**: ~5.5/10 for competitive play. Solid game engine + neural training + search + benchmarking + TD(lambda). Missing cube, GnuBG interface, and encoding improvements.
 
 ---
 
@@ -24,8 +24,8 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [x] **1. 1-ply lookahead with dice averaging** — Evaluate all legal moves, for each apply the move, then average the equity over all 21 dice rolls. This is the single biggest strength multiplier (~10x). See Jacob Hilton's approach. (Effort: M, Impact: massive) *(Feb 2025)*
 - [x] **2. 2-ply search** — After your move, consider opponent's best response across all their dice rolls. (Effort: M, Impact: large) *(Feb 2026)*
 - [x] **3. Batch evaluation of multiple positions** — Feed all candidate resulting positions into the network in one GPU forward pass instead of one-by-one. Critical for search speed. (Effort: S, Impact: large for speed) *(Feb 2025)*
-- [ ] **4. Move ordering heuristics** — Evaluate most promising moves first to enable pruning. Sort by pip count improvement, hits, etc. (Effort: S, Impact: moderate)
-- [ ] **5. Transposition table / position cache** — Avoid re-evaluating identical positions across search. Hash board state → equity. (Effort: M, Impact: moderate)
+- [x] **4. Move ordering heuristics + progressive deepening** — Heuristic-based move scoring (hits, bearoffs, made points, blots) for ordering. 2-ply search uses progressive deepening: evaluate all moves at 0-ply, then only top-k candidates at 2-ply. (Effort: S, Impact: moderate) *(Feb 2026)*
+- [x] **5. Transposition table / position cache** — MD5-based board hashing with configurable cache size. Stores position evaluations keyed by board state + ply depth. LRU-style eviction. (Effort: M, Impact: moderate) *(Feb 2026)*
 - [x] **6. Parallel move evaluation** — Batch all candidate resulting positions into one network call. Complementary to item 3. (Effort: S, Impact: large for speed) *(Feb 2025)*
 
 ### Doubling Cube (essential for real backgammon)
@@ -51,7 +51,7 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 
 ### Training Methodology
 
-- [ ] **16. TD(lambda) returns** — Intermediate positions get discounted credit from future outcomes, not just final result. Much better training signal. (Effort: M, Impact: large)
+- [x] **16. TD(lambda) returns** — Full TD(lambda) implementation following TD-Gammon (Tesauro 1995). Records network equity estimates during self-play, computes targets using backward eligibility traces in fixed-perspective (White) 6-dim equity space. Configurable lambda (default 0.7). Integrated into replay buffer and training loop. (Effort: M, Impact: large) *(Feb 2026)*
 - [ ] **17. N-step bootstrapping** — Use V(s') from the network for truncated episodes instead of waiting for game end. (Effort: M, Impact: large)
 - [ ] **18. Rollout-based training targets** — 1-ply rollout equity gives much better targets than raw game outcome. Key technique from gnubg. (Effort: L, Impact: large)
 - [ ] **19. Exploration schedule** — Decay self-play temperature over training (e.g., 1.0 → 0.1). Currently fixed at 0.3. (Effort: S, Impact: moderate)
@@ -201,11 +201,13 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 
 1. ~~**Items 1-3, 6** (1-ply search + batch eval)~~ — DONE (search.py)
 2. ~~**Items 12, 13, 15** (benchmarking)~~ — DONE (benchmark.py + training loop integration)
-3. **Longer training run** with the fixed pipeline — see where the model plateaus
-4. **Items 16-18** (TD(lambda) + rollout targets) — dramatically better training signal
-5. **Items 7-10** (doubling cube) — needed for real backgammon
-6. **Items 25-28** (better encoding) — more signal for the network to learn from
-7. **Items 45-46** (MCTS) — sophisticated search for strongest play
+3. ~~**Items 4-5** (move ordering + transposition table)~~ — DONE (search.py: progressive deepening, TranspositionTable)
+4. ~~**Item 16** (TD(lambda))~~ — DONE (td_lambda.py + self_play.py + replay_buffer.py)
+5. **Longer training run** with the fixed pipeline — see where the model plateaus
+6. **Items 19, 25-28** (exploration schedule + better encoding) — more signal for the network
+7. **Items 7-10** (doubling cube) — needed for real backgammon
+8. **Items 17-18** (N-step bootstrapping + rollout targets) — even better training signal
+9. **Items 45-46** (MCTS) — sophisticated search for strongest play
 
 ---
 
@@ -222,4 +224,7 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [x] **Benchmark position suite** — 10 curated positions in `evaluation/benchmark.py` covering opening, race, bearoff, contact, prime, gammon. (Feb 2026)
 - [x] **Win rate tracking over training** — `run_evaluation_checkpoint()` callback integrated into training loop. Evaluates vs random & pip count agents at configurable intervals. (Feb 2026)
 - [x] **Equity error metric** — MAE/RMSE/max-error on benchmark positions with per-position breakdown. (Feb 2026)
+- [x] **Move ordering + progressive deepening** — Heuristic-based move scoring for ordering. 2-ply uses 0-ply pre-screening to select top-k candidates. (Feb 2026)
+- [x] **Transposition table** — MD5-based position caching with configurable size and LRU eviction. (Feb 2026)
+- [x] **TD(lambda) returns** — Full implementation with 6-dim equity, fixed-perspective TD computation, backward eligibility traces. Integrated into self-play, replay buffer, and training loop. (Feb 2026)
 - [x] **Fix value-only agent crash** — 0-ply `NeuralNetworkAgent` now falls back to value-based search when policy head is disabled. (Feb 2026)

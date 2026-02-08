@@ -81,6 +81,10 @@ class TrainingConfig:
     # Agent settings
     neural_agent_temperature: float = 0.3  # Exploration during self-play
 
+    # TD(lambda) settings
+    td_lambda: float = 0.7  # TD(lambda) parameter (0=TD(0), 1=MC, 0.7=recommended)
+    use_td_lambda: bool = True  # Enable TD(lambda) targets (requires neural self-play)
+
     # Evaluation settings
     eval_every_n_batches: int = 50  # Run evaluation checkpoint every N batches
     eval_num_games: int = 50  # Games per opponent during evaluation
@@ -317,17 +321,21 @@ def train(config: Optional[TrainingConfig] = None):
                 black_agent = neural_agent
 
             # Generate training batch through self-play
+            # Record value estimates for TD(lambda) during neural self-play
+            record_values = config.use_td_lambda and not use_warmstart
             games = generate_training_batch(
                 num_games=config.games_per_batch,
                 get_variant_fn=get_variants_fn,
                 white_agent=white_agent,
                 black_agent=black_agent,
                 rng=rng,
+                record_value_estimates=record_values,
             )
 
-            # Add games to replay buffer
+            # Add games to replay buffer (with TD(lambda) targets if enabled)
+            td_lambda_param = config.td_lambda if record_values else None
             for game in games:
-                replay_buffer.add_game(game)
+                replay_buffer.add_game(game, td_lambda=td_lambda_param)
 
             # Compute game statistics
             stats = compute_game_statistics(games)

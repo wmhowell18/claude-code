@@ -55,20 +55,37 @@ class ReplayBuffer:
         """Check if buffer has enough data for sampling."""
         return len(self._steps) >= self.min_size
 
-    def add_game(self, game_result: GameResult) -> None:
+    def add_game(
+        self,
+        game_result: GameResult,
+        td_lambda: Optional[float] = None,
+    ) -> None:
         """Add a complete game to the buffer.
 
         Args:
             game_result: Completed game with trajectory and outcome
+            td_lambda: If set, use TD(lambda) targets instead of pure
+                Monte Carlo targets. Requires value_estimates in game_result.
+                Typical value: 0.7. If None, uses pure MC targets (lambda=1.0).
         """
         if game_result.outcome is None:
             return  # Skip draws (max moves reached)
 
-        # Add each step with its equity target from the perspective of the
-        # player to move at that step.
-        for step in game_result.steps:
-            equity = outcome_to_equity(game_result.outcome, step.player)
-            value_target = equity.to_array()  # shape (5,)
+        # Compute targets using TD(lambda) if available, else Monte Carlo
+        if td_lambda is not None and game_result.value_estimates is not None:
+            from backgammon.training.td_lambda import compute_td_lambda_targets
+            targets = compute_td_lambda_targets(game_result, lambda_param=td_lambda)
+        else:
+            targets = None
+
+        # Add each step with its equity target
+        for i, step in enumerate(game_result.steps):
+            if targets is not None and i < len(targets):
+                value_target = targets[i]
+            else:
+                # Fallback: pure Monte Carlo target
+                equity = outcome_to_equity(game_result.outcome, step.player)
+                value_target = equity.to_array()  # shape (5,)
 
             self._add_step(step, value_target)
 
