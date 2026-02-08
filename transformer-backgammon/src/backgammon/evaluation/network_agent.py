@@ -2,6 +2,7 @@
 
 Wraps the transformer network to work with the Agent interface.
 Handles board encoding, network inference, and move selection.
+Supports 0-ply (direct evaluation) and 1-ply (dice-averaged lookahead).
 """
 
 import jax
@@ -15,6 +16,7 @@ from backgammon.core.types import Player, Move, Dice, LegalMoves
 from backgammon.encoding.encoder import encode_board, raw_encoding_config
 from backgammon.encoding.action_encoder import encode_move_to_action
 from backgammon.evaluation.agents import Agent
+from backgammon.evaluation.search import select_move as search_select_move
 
 
 class NeuralNetworkAgent:
@@ -34,10 +36,12 @@ class NeuralNetworkAgent:
         state: train_state.TrainState,
         temperature: float = 0.0,
         name: str = "NeuralNet",
+        ply: int = 0,
     ):
         self.state = state
         self.temperature = temperature
         self.name = name
+        self.ply = ply
         self.encoding_config = raw_encoding_config()
 
     def select_move(
@@ -64,6 +68,20 @@ class NeuralNetworkAgent:
         if len(legal_moves) == 1:
             return legal_moves[0]
 
+        # Use search-based evaluation when ply > 0
+        if self.ply > 0:
+            best_move, _ = search_select_move(
+                self.state,
+                board,
+                player,
+                dice,
+                legal_moves,
+                ply=self.ply,
+                encoding_config=self.encoding_config,
+            )
+            return best_move
+
+        # 0-ply: use policy head for move selection
         # Encode board state
         encoded = encode_board(self.encoding_config, board)
         encoded_board = encoded.position_features  # Shape: (1, 26, feature_dim)
@@ -184,18 +202,20 @@ def create_neural_agent(
     state: train_state.TrainState,
     temperature: float = 0.0,
     name: str = "NeuralNet",
+    ply: int = 0,
 ) -> Agent:
     """Create an Agent from a neural network.
 
     Args:
         state: Flax training state
-        temperature: Sampling temperature
+        temperature: Sampling temperature (only used at 0-ply)
         name: Agent name
+        ply: Search depth (0 = policy head, 1 = dice-averaged lookahead)
 
     Returns:
         Agent compatible with existing interface
     """
-    network_agent = NeuralNetworkAgent(state, temperature, name)
+    network_agent = NeuralNetworkAgent(state, temperature, name, ply=ply)
 
     # Wrap in Agent interface
     return Agent(

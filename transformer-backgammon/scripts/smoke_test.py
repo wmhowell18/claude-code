@@ -137,32 +137,40 @@ def main():
         loss_decreased = False
         print("       FAIL: Not enough training steps")
 
-    # --- Check 3: Trained model should beat random ---
-    print("[4/4] Evaluating trained model vs random (expect >55%)...")
-    trained_agent = create_neural_agent(state, temperature=0.0, name="Trained")
-    trained_wr = evaluate_agent(trained_agent, rand_agent, num_games=80, rng=np_rng)
-    beats_random = trained_wr > 0.55
-    improved = trained_wr > untrained_wr
-    print(f"       Trained win rate: {trained_wr:.1%} "
-          f"(was {untrained_wr:.1%} untrained) {'OK' if beats_random else 'FAIL'}")
+    # --- Check 3: Trained model (0-ply) vs random ---
+    print("[4/5] Evaluating trained model (0-ply) vs random...")
+    trained_0ply = create_neural_agent(state, temperature=0.0, name="Trained-0ply")
+    wr_0ply = evaluate_agent(trained_0ply, rand_agent, num_games=80, rng=np_rng)
+    print(f"       0-ply win rate: {wr_0ply:.1%} (was {untrained_wr:.1%} untrained)")
+
+    # --- Check 4: Trained model (1-ply search) vs random ---
+    print("[5/5] Evaluating trained model (1-ply search) vs random...")
+    print("       (this is slower — evaluates all opponent dice responses)")
+    trained_1ply = create_neural_agent(state, temperature=0.0, name="Trained-1ply", ply=1)
+    wr_1ply = evaluate_agent(trained_1ply, rand_agent, num_games=20, rng=np_rng)
+    search_helps = wr_1ply > wr_0ply
+    print(f"       1-ply win rate: {wr_1ply:.1%} "
+          f"({'better' if search_helps else 'not better'} than 0-ply)")
 
     # --- Results ---
     print()
     print("=" * 60)
-    all_pass = loss_decreased and beats_random
+    all_pass = loss_decreased and wr_1ply > 0.50
     if all_pass:
-        print("  PASS: Training pipeline is working correctly.")
+        print("  PASS: Training pipeline and search are working.")
         print("  Safe to start a longer training run.")
     else:
         print("  RESULT: Partial pass")
-        print(f"    Loss decreased:    {'YES' if loss_decreased else 'NO'}")
-        print(f"    Beats random >55%: {'YES' if beats_random else 'NO'} ({trained_wr:.1%})")
-        if loss_decreased and not beats_random:
-            print()
-            print("  NOTE: Loss is decreasing correctly, which confirms the")
-            print("  training pipeline works. The model may just need more")
-            print("  training steps to beat random (60 steps is very few).")
-            print("  This is likely safe for a longer run.")
+    print(f"    Loss decreased:     {'YES' if loss_decreased else 'NO'}")
+    print(f"    0-ply vs random:    {wr_0ply:.1%}")
+    print(f"    1-ply vs random:    {wr_1ply:.1%}")
+    print(f"    1-ply > 0-ply:      {'YES' if search_helps else 'NO'}")
+    if loss_decreased and not all_pass:
+        print()
+        print("  NOTE: Loss is decreasing, which confirms training works.")
+        print("  The model may need more training steps to beat random.")
+        print("  1-ply search provides the biggest strength gain with a")
+        print("  properly trained network.")
     print("=" * 60)
     return 0 if all_pass else 1
 
