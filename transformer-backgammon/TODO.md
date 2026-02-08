@@ -58,8 +58,8 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [ ] **20. Opponent diversity** — Periodically play against older snapshots and baseline agents, not just self. Prevents forgetting. (Effort: M, Impact: moderate)
 - [x] **21. Position weighting** — Weight positions by game progress (late game = higher weight) and equity uncertainty (50/50 positions = higher weight). Integrated into replay buffer with weighted sampling. (Effort: S, Impact: moderate) *(Feb 2026)*
 - [ ] **22. More warmstart games** — Current 500 games is thin. Consider 2000-5000 pip count warmstart games. (Effort: S, Impact: small)
-- [ ] **23. Performance-tied LR scheduling** — Reduce LR when validation equity error plateaus, not just cosine decay. (Effort: S, Impact: moderate)
-- [ ] **24. Gradient clipping diagnostics** — Log when gradient clipping activates, how often, and magnitude. (Effort: S, Impact: small)
+- [x] **23. Performance-tied LR scheduling** — Validation loss plateau detection with warnings. Logs plateau counter to metrics. Used alongside cosine schedule and early stopping. (Effort: S, Impact: moderate) *(Feb 2026)*
+- [x] **24. Gradient clipping diagnostics** — Log max gradient norm and clip frequency per batch. Console output shows when clipping activates. Tracked in metrics. (Effort: S, Impact: small) *(Feb 2026)*
 
 ### Encoding Improvements
 
@@ -114,7 +114,7 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [ ] **52. Hyperparameter search** — Grid or Bayesian optimization over architecture, LR, batch size, etc. (Effort: M, Impact: moderate)
 - [x] **53. Train/validation/test splits** — Games randomly split between training and validation buffers (configurable fraction, default 10%). Validation loss computed at eval checkpoints. (Effort: S, Impact: moderate) *(Feb 2026)*
 - [x] **54. Early stopping** — Training stops when validation loss hasn't improved for N consecutive eval checkpoints (configurable patience, default 5). Saves best model automatically. (Effort: S, Impact: moderate) *(Feb 2026)*
-- [ ] **55. Best-model tracking** — Keep the checkpoint with best validation metric, not just latest. (Effort: S, Impact: small)
+- [x] **55. Best-model tracking** — Saves best model checkpoint (by validation loss) to a dedicated `checkpoints/best/` directory, separate from rolling checkpoints. (Effort: S, Impact: small) *(Feb 2026)*
 
 ---
 
@@ -235,4 +235,7 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [x] **Train/validation splits** — Random game-level split between training and validation buffers. Validation loss tracked at evaluation checkpoints. (Feb 2026)
 - [x] **Early stopping** — Patience-based early stopping on validation loss. Best model checkpoint saved automatically. (Feb 2026)
 - [x] **Fix circular import** — Lazy import of `play_game` in `evaluator.py` to break `evaluation <-> training` circular dependency. (Feb 2026)
+- [x] **Best-model tracking** — Dedicated `checkpoints/best/` directory for best validation loss model. (Feb 2026)
+- [x] **LR plateau detection** — Warns when validation loss plateaus for consecutive eval checkpoints. (Feb 2026)
+- [x] **Gradient clipping diagnostics** — Per-batch max grad norm and clip frequency tracking in console and metrics. (Feb 2026)
 - [x] **Fix value-only agent crash** — 0-ply `NeuralNetworkAgent` now falls back to value-based search when policy head is disabled. (Feb 2026)

@@ -238,13 +238,19 @@ def create_train_state(config: TrainingConfig, rng: jax.random.PRNGKey) -> train
     )
 
 
-def save_checkpoint(state: train_state.TrainState, config: TrainingConfig, step: int):
+def save_checkpoint(
+    state: train_state.TrainState,
+    config: TrainingConfig,
+    step: int,
+    is_best: bool = False,
+):
     """Save training checkpoint.
 
     Args:
         state: Current training state
         config: Training configuration
         step: Current step number
+        is_best: If True, also save as best model checkpoint
     """
     checkpoint_dir = Path(config.checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -256,6 +262,17 @@ def save_checkpoint(state: train_state.TrainState, config: TrainingConfig, step:
         keep=5,  # Keep last 5 checkpoints
         overwrite=True,  # Allow overwriting existing checkpoints
     )
+
+    if is_best:
+        best_dir = checkpoint_dir / "best"
+        best_dir.mkdir(parents=True, exist_ok=True)
+        checkpoints.save_checkpoint(
+            ckpt_dir=str(best_dir),
+            target=state,
+            step=step,
+            keep=1,  # Only keep the single best
+            overwrite=True,
+        )
 
 
 def save_metrics(metrics: TrainingMetrics, config: TrainingConfig):
@@ -332,6 +349,11 @@ def train(config: Optional[TrainingConfig] = None):
     patience_counter = 0
     best_state_step = 0
 
+    # LR plateau detection state
+    lr_plateau_best = float('inf')
+    lr_plateau_counter = 0
+    lr_plateau_patience = 3  # Warn after 3 eval checkpoints without improvement
+
     # Create agents
     pip_agent = pip_count_agent()
 
@@ -402,6 +424,8 @@ def train(config: Optional[TrainingConfig] = None):
             # Train neural network (if buffer is ready)
             train_loss = 0.0
             train_acc = 0.0
+            max_grad_norm_seen = 0.0
+            grad_clips = 0
 
             if replay_buffer.is_ready():
                 # Run multiple training steps per game batch
@@ -417,8 +441,12 @@ def train(config: Optional[TrainingConfig] = None):
 
                     # Accumulate metrics
                     train_loss += float(step_metrics['total_loss'])
-                    # Note: We don't have accuracy easily available from train_step
-                    # Could add it if needed
+
+                    # Track gradient clipping diagnostics
+                    gn = float(step_metrics.get('grad_norm', 0.0))
+                    max_grad_norm_seen = max(max_grad_norm_seen, gn)
+                    if gn > config.max_grad_norm:
+                        grad_clips += 1
 
                     total_train_steps += 1
 
@@ -457,12 +485,16 @@ def train(config: Optional[TrainingConfig] = None):
                 'games_per_second': metrics.games_per_second,
                 'replay_buffer_size': len(replay_buffer),
                 'total_train_steps': total_train_steps,
+                'max_grad_norm': max_grad_norm_seen,
+                'grad_clips': grad_clips,
             }, step=batch_num, prefix=f"{phase_name}/")
 
             # Console logging
             if batch_num % config.log_every_n_batches == 0:
                 buffer_status = f"{len(replay_buffer)}/{replay_buffer.max_size}"
                 temp_str = f"Temp: {phase_manager.get_current_temperature():.2f} | " if not use_warmstart else ""
+                grad_str = f" | GradNorm: {max_grad_norm_seen:.2f}" if max_grad_norm_seen > 0 else ""
+                clip_str = f" (clipped {grad_clips}x)" if grad_clips > 0 else ""
                 print(f"[{phase_name:8s}] Batch {batch_num:4d} | "
                       f"Games: {phase_manager.total_games_played:5d} | "
                       f"Loss: {train_loss:.4f} | "
@@ -470,7 +502,8 @@ def train(config: Optional[TrainingConfig] = None):
                       f"Moves: {stats['avg_moves']:.1f} | "
                       f"{temp_str}"
                       f"Buffer: {buffer_status} | "
-                      f"Speed: {metrics.games_per_second:.1f} g/s")
+                      f"Speed: {metrics.games_per_second:.1f} g/s"
+                      f"{grad_str}{clip_str}")
 
                 # Save metrics to file
                 save_metrics(metrics, config)
@@ -506,9 +539,25 @@ def train(config: Optional[TrainingConfig] = None):
                         patience_counter = 0
                         best_state_step = batch_num
                         # Save best model checkpoint
-                        save_checkpoint(state, config, batch_num)
+                        save_checkpoint(state, config, batch_num, is_best=True)
                     else:
                         patience_counter += 1
+
+                    # LR plateau detection (diagnostic)
+                    if val_loss < lr_plateau_best:
+                        lr_plateau_best = val_loss
+                        lr_plateau_counter = 0
+                    else:
+                        lr_plateau_counter += 1
+                        if lr_plateau_counter >= lr_plateau_patience:
+                            print(f"  ⚠ Val loss plateaued for {lr_plateau_counter} "
+                                  f"evals (consider reducing LR)")
+
+                    metrics_logger.log_metrics({
+                        'val_loss': val_loss,
+                        'best_val_loss': best_val_loss,
+                        'lr_plateau_counter': lr_plateau_counter,
+                    }, step=batch_num, prefix="validation/")
 
                     if (config.use_early_stopping and
                             patience_counter >= config.early_stopping_patience):
