@@ -1,8 +1,8 @@
 # Backgammon Transformer — Feature Roadmap & TODO
 
-> **Status**: Search, benchmarking, and training improvements complete. 0/1/2-ply search with batch evaluation, move ordering with progressive deepening, transposition table, and TD(lambda) training implemented. Win rate tracking and benchmark positions integrated into training loop.
+> **Status**: Search, benchmarking, and training improvements complete. 0/1/2-ply search with batch evaluation, move ordering with progressive deepening, transposition table, and TD(lambda) training implemented. Win rate tracking and benchmark positions integrated into training loop. Race equity formula for pure race positions.
 >
-> **Current Maturity**: ~6/10 for competitive play. Solid game engine + neural training + search + benchmarking + TD(lambda) + exploration schedule + global encoding features. Missing cube, GnuBG interface, and rollout-based training.
+> **Current Maturity**: ~6/10 for competitive play. Solid game engine + neural training + search + benchmarking + TD(lambda) + exploration schedule + global encoding features + race evaluation. Missing cube, GnuBG interface, and rollout-based training.
 
 ---
 
@@ -69,8 +69,8 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [x] **28. Prime detection** — Length of longest prime for each player, capped at 6, normalized. Part of global features. (Effort: S, Impact: moderate) *(Feb 2026)*
 - [ ] **29. Blot vulnerability encoding** — Which checkers are within direct/indirect hitting range. (Effort: M, Impact: moderate)
 - [ ] **30. Escape features** — How many dice rolls let a trapped/back checker escape. (Effort: M, Impact: moderate)
-- [ ] **31. Race equity estimate** — Pure pip count equity formula as input feature for race positions. (Effort: S, Impact: small)
-- [ ] **32. Bearoff progress features** — Number of checkers already borne off for each player. (Effort: S, Impact: small)
+- [ ] **31. Race equity estimate as encoding feature** — Wire race_equity() output as an input feature for the encoder (race.py formula already exists). (Effort: S, Impact: small)
+- [x] **32. Bearoff progress features** — Number of checkers already borne off for each player. Part of global features (feature[7]). (Effort: S, Impact: small) *(Feb 2026)*
 
 ### Architecture
 
@@ -95,7 +95,7 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 ### Endgame
 
 - [ ] **41. Bearoff database (<=6 checkers)** — Precomputed perfect play for simplified endgame positions. (Effort: L, Impact: large for endgame)
-- [ ] **42. Race equity formula** — Effective Pip Count / Keith count for pure race evaluation. (Effort: S, Impact: moderate)
+- [x] **42. Race equity formula** — Effective Pip Count / Keith count for pure race evaluation. Implemented in evaluation/race.py with EPC corrections (gap, crossover, bar, wastage) and sigmoid equity mapping. (Effort: S, Impact: moderate) *(Feb 2026)*
 - [ ] **43. One-sided bearoff database** — No contact, just bear off optimally. (Effort: M, Impact: moderate)
 - [ ] **44. Contact endgame tablebases** — Perfect play for simple contact positions. (Effort: L, Impact: moderate)
 
@@ -229,4 +229,6 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [x] **TD(lambda) returns** — Full implementation with 6-dim equity, fixed-perspective TD computation, backward eligibility traces. Integrated into self-play, replay buffer, and training loop. (Feb 2026)
 - [x] **Exploration schedule** — Linear temperature decay (1.0→0.1) over training for self-play exploration. (Feb 2026)
 - [x] **Global encoding features** — Contact detection, pip counts, home board control, prime detection, and bearoff progress. 8 global features broadcast to all 26 positions. New `enhanced_encoding_config()` and `full_encoding_config()` presets. (Feb 2026)
+- [x] **Bearoff progress features** — Checkers borne off as a normalized feature. Part of global features (feature index 7). (Feb 2026)
+- [x] **Race equity formula** — Effective Pip Count with positional corrections (gap, crossover, bar, wastage) and sigmoid mapping to equity. Standalone evaluation for pure race positions in `evaluation/race.py`. (Feb 2026)
 - [x] **Fix value-only agent crash** — 0-ply `NeuralNetworkAgent` now falls back to value-based search when policy head is disabled. (Feb 2026)
