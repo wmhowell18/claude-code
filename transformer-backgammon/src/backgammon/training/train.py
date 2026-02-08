@@ -35,6 +35,10 @@ from backgammon.training.replay_buffer import ReplayBuffer
 from backgammon.training.losses import train_step
 from backgammon.training.metrics import MetricsLogger
 from backgammon.network.network import BackgammonTransformer
+from backgammon.evaluation.benchmark import (
+    EvalHistory,
+    run_evaluation_checkpoint,
+)
 
 
 @dataclass
@@ -76,6 +80,11 @@ class TrainingConfig:
 
     # Agent settings
     neural_agent_temperature: float = 0.3  # Exploration during self-play
+
+    # Evaluation settings
+    eval_every_n_batches: int = 50  # Run evaluation checkpoint every N batches
+    eval_num_games: int = 50  # Games per opponent during evaluation
+    eval_ply: int = 0  # Search depth for evaluation (0 is fast, 1 is slow)
 
     # Paths
     checkpoint_dir: str = "checkpoints"
@@ -266,6 +275,10 @@ def train(config: Optional[TrainingConfig] = None):
     # Training phase manager
     phase_manager = TrainingPhase(config)
 
+    # Evaluation history
+    eval_history = EvalHistory()
+    eval_rng = np.random.default_rng(config.seed + 1000)
+
     # Create agents
     pip_agent = pip_count_agent()
 
@@ -397,6 +410,19 @@ def train(config: Optional[TrainingConfig] = None):
                 # Save metrics to file
                 save_metrics(metrics, config)
 
+            # Evaluation checkpoint
+            if batch_num % config.eval_every_n_batches == 0 and replay_buffer.is_ready():
+                run_evaluation_checkpoint(
+                    state=state,
+                    step=batch_num,
+                    games_played=phase_manager.total_games_played,
+                    eval_history=eval_history,
+                    num_eval_games=config.eval_num_games,
+                    ply=config.eval_ply,
+                    rng=eval_rng,
+                    verbose=True,
+                )
+
             # Checkpointing
             if batch_num % config.checkpoint_every_n_batches == 0:
                 save_checkpoint(state, config, batch_num)
@@ -413,6 +439,22 @@ def train(config: Optional[TrainingConfig] = None):
                 # Save final checkpoint
                 save_checkpoint(state, config, batch_num)
 
+                # Final evaluation
+                print("\n📊 Final evaluation:")
+                run_evaluation_checkpoint(
+                    state=state,
+                    step=batch_num,
+                    games_played=phase_manager.total_games_played,
+                    eval_history=eval_history,
+                    num_eval_games=config.eval_num_games,
+                    ply=config.eval_ply,
+                    rng=eval_rng,
+                    verbose=True,
+                )
+
+                print("\n📈 Evaluation history:")
+                print(eval_history.summary())
+
                 # Save summary
                 metrics_logger.save_summary({
                     'total_games': phase_manager.total_games_played,
@@ -420,6 +462,7 @@ def train(config: Optional[TrainingConfig] = None):
                     'total_train_steps': total_train_steps,
                     'final_loss': train_loss,
                     'final_learning_rate': current_lr,
+                    'eval_history': eval_history.entries,
                 })
 
                 break

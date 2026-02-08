@@ -1,8 +1,8 @@
 # Backgammon Transformer — Feature Roadmap & TODO
 
-> **Status**: Foundation complete. 3 critical training bugs fixed (Feb 2025). Pipeline trains correctly (loss decreases). No search capability yet — this is the #1 priority.
+> **Status**: Search and benchmarking complete. 0/1/2-ply search with batch evaluation implemented. Win rate tracking and benchmark positions integrated into training loop. Pipeline trains and evaluates correctly.
 >
-> **Current Maturity**: ~4/10 for competitive play. Solid game engine + basic neural training, but missing search, cube, benchmarking.
+> **Current Maturity**: ~5/10 for competitive play. Solid game engine + neural training + search + benchmarking. Missing cube, advanced training techniques (TD(lambda)), and GnuBG interface.
 
 ---
 
@@ -21,12 +21,12 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 
 ### Search & Lookahead (the #1 gap)
 
-- [ ] **1. 1-ply lookahead with dice averaging** — Evaluate all legal moves, for each apply the move, then average the equity over all 21 dice rolls. This is the single biggest strength multiplier (~10x). See Jacob Hilton's approach. (Effort: M, Impact: massive)
-- [ ] **2. 2-ply search** — After your move, consider opponent's best response across all their dice rolls. (Effort: M, Impact: large)
-- [ ] **3. Batch evaluation of multiple positions** — Feed all candidate resulting positions into the network in one GPU forward pass instead of one-by-one. Critical for search speed. (Effort: S, Impact: large for speed)
+- [x] **1. 1-ply lookahead with dice averaging** — Evaluate all legal moves, for each apply the move, then average the equity over all 21 dice rolls. This is the single biggest strength multiplier (~10x). See Jacob Hilton's approach. (Effort: M, Impact: massive) *(Feb 2025)*
+- [x] **2. 2-ply search** — After your move, consider opponent's best response across all their dice rolls. (Effort: M, Impact: large) *(Feb 2026)*
+- [x] **3. Batch evaluation of multiple positions** — Feed all candidate resulting positions into the network in one GPU forward pass instead of one-by-one. Critical for search speed. (Effort: S, Impact: large for speed) *(Feb 2025)*
 - [ ] **4. Move ordering heuristics** — Evaluate most promising moves first to enable pruning. Sort by pip count improvement, hits, etc. (Effort: S, Impact: moderate)
 - [ ] **5. Transposition table / position cache** — Avoid re-evaluating identical positions across search. Hash board state → equity. (Effort: M, Impact: moderate)
-- [ ] **6. Parallel move evaluation** — Batch all candidate resulting positions into one network call. Complementary to item 3. (Effort: S, Impact: large for speed)
+- [x] **6. Parallel move evaluation** — Batch all candidate resulting positions into one network call. Complementary to item 3. (Effort: S, Impact: large for speed) *(Feb 2025)*
 
 ### Doubling Cube (essential for real backgammon)
 
@@ -38,10 +38,10 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 ### Evaluation & Benchmarking (can't improve what you can't measure)
 
 - [ ] **11. GnuBG interface** — Play games against gnubg, compare equity estimates position-by-position. (Effort: M, Impact: critical for development)
-- [ ] **12. Benchmark position suite** — Curate 50-100 positions with known correct equities from gnubg/XtremeGammon. (Effort: M, Impact: critical)
-- [ ] **13. Win rate tracking over training** — Plot win rate vs random, vs pip count, vs snapshots at regular intervals. (Effort: S, Impact: large)
+- [x] **12. Benchmark position suite** — 10 curated positions covering opening, race, bearoff, contact, prime, gammon threat categories with known equities. (Effort: M, Impact: critical) *(Feb 2026)*
+- [x] **13. Win rate tracking over training** — Periodic evaluation callback in training loop: win rate vs random & pip count agents, plus equity error on benchmark positions. (Effort: S, Impact: large) *(Feb 2026)*
 - [ ] **14. Move accuracy metric** — % of moves matching gnubg's top choice at 2-ply. (Effort: S, Impact: large)
-- [ ] **15. Equity error metric** — MAE/RMSE of network equity vs gnubg equity on benchmark positions. (Effort: S, Impact: large)
+- [x] **15. Equity error metric** — MAE/RMSE/max-error of network equity vs expected equity on benchmark positions. Computed per-position with detailed breakdown. (Effort: S, Impact: large) *(Feb 2026)*
 
 ---
 
@@ -199,8 +199,8 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 
 ## Recommended Order of Attack
 
-1. **Items 1-3, 6** (1-ply search + batch eval) — transforms 0-ply into something that can actually play
-2. **Items 11-15** (benchmarking) — so you can measure whether training runs help
+1. ~~**Items 1-3, 6** (1-ply search + batch eval)~~ — DONE (search.py)
+2. ~~**Items 12, 13, 15** (benchmarking)~~ — DONE (benchmark.py + training loop integration)
 3. **Longer training run** with the fixed pipeline — see where the model plateaus
 4. **Items 16-18** (TD(lambda) + rollout targets) — dramatically better training signal
 5. **Items 7-10** (doubling cube) — needed for real backgammon
@@ -216,3 +216,10 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [x] **Fix nondeterministic move encoding** — `network_agent.py:146` used `hash(move)` (Python-randomized). Fixed to use deterministic `encode_move_to_action()`. (Feb 2025)
 - [x] **Implement prepare_training_batch** — Was returning dummy zeros. Now properly encodes boards and computes equity targets. (Feb 2025)
 - [x] **Add smoke test script** — `scripts/smoke_test.py` validates loss decreases before committing to long training runs. (Feb 2025)
+- [x] **1-ply lookahead with dice averaging** — `evaluation/search.py` with batch GPU evaluation. (Feb 2025)
+- [x] **Batch position evaluation** — Single GPU forward pass for all candidate positions. (Feb 2025)
+- [x] **2-ply search** — Opponent uses 1-ply response. `evaluate_move_2ply` and `select_move_2ply` in search.py. (Feb 2026)
+- [x] **Benchmark position suite** — 10 curated positions in `evaluation/benchmark.py` covering opening, race, bearoff, contact, prime, gammon. (Feb 2026)
+- [x] **Win rate tracking over training** — `run_evaluation_checkpoint()` callback integrated into training loop. Evaluates vs random & pip count agents at configurable intervals. (Feb 2026)
+- [x] **Equity error metric** — MAE/RMSE/max-error on benchmark positions with per-position breakdown. (Feb 2026)
+- [x] **Fix value-only agent crash** — 0-ply `NeuralNetworkAgent` now falls back to value-based search when policy head is disabled. (Feb 2026)
