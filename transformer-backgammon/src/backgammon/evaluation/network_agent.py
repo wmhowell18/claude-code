@@ -2,6 +2,7 @@
 
 Wraps the transformer network to work with the Agent interface.
 Handles board encoding, network inference, and move selection.
+Supports 0-ply (direct evaluation) and 1-ply (dice-averaged lookahead).
 """
 
 import jax
@@ -13,7 +14,9 @@ from flax.training import train_state
 from backgammon.core.board import Board
 from backgammon.core.types import Player, Move, Dice, LegalMoves
 from backgammon.encoding.encoder import encode_board, raw_encoding_config
+from backgammon.encoding.action_encoder import encode_move_to_action
 from backgammon.evaluation.agents import Agent
+from backgammon.evaluation.search import select_move as search_select_move
 
 
 class NeuralNetworkAgent:
@@ -33,10 +36,12 @@ class NeuralNetworkAgent:
         state: train_state.TrainState,
         temperature: float = 0.0,
         name: str = "NeuralNet",
+        ply: int = 0,
     ):
         self.state = state
         self.temperature = temperature
         self.name = name
+        self.ply = ply
         self.encoding_config = raw_encoding_config()
 
     def select_move(
@@ -63,6 +68,20 @@ class NeuralNetworkAgent:
         if len(legal_moves) == 1:
             return legal_moves[0]
 
+        # Use search-based evaluation when ply > 0
+        if self.ply > 0:
+            best_move, _ = search_select_move(
+                self.state,
+                board,
+                player,
+                dice,
+                legal_moves,
+                ply=self.ply,
+                encoding_config=self.encoding_config,
+            )
+            return best_move
+
+        # 0-ply: use policy head for move selection
         # Encode board state
         encoded = encode_board(self.encoding_config, board)
         encoded_board = encoded.position_features  # Shape: (1, 26, feature_dim)
@@ -107,17 +126,22 @@ class NeuralNetworkAgent:
             training=False,
         )
 
-        # Extract value from equity (use expected value from equity distribution)
-        # Equity is [batch_size, 5]: [win_normal, win_gammon, win_backgammon, lose_gammon, lose_backgammon]
-        # Convert to single value estimate (simple weighted sum)
-        # Wins are positive, losses are negative
-        value = (
-            equity[:, 0] * 1.0 +  # win normal
-            equity[:, 1] * 2.0 +  # win gammon
-            equity[:, 2] * 3.0 +  # win backgammon
-            equity[:, 3] * (-2.0) +  # lose gammon
-            equity[:, 4] * (-3.0)  # lose backgammon
+        # Compute expected value from equity distribution using proper formula.
+        # Equity outputs: [win_normal, win_gammon, win_bg, lose_gammon, lose_bg]
+        # P(lose_normal) = 1 - sum(all 5 components)
+        # Expected value = sum(win_probs * points) - sum(lose_probs * points)
+        win_value = (
+            equity[:, 0] * 1.0 +   # win normal
+            equity[:, 1] * 2.0 +   # win gammon
+            equity[:, 2] * 3.0     # win backgammon
         )
+        lose_normal = 1.0 - jnp.sum(equity, axis=-1)
+        lose_value = (
+            lose_normal * 1.0 +     # lose normal
+            equity[:, 3] * 2.0 +   # lose gammon
+            equity[:, 4] * 3.0     # lose backgammon
+        )
+        value = win_value - lose_value
 
         return policy_logits, value
 
@@ -135,15 +159,13 @@ class NeuralNetworkAgent:
         Returns:
             Probability distribution over legal_moves
         """
-        # For each legal move, compute its score from the network
-        # This requires encoding each move and looking up its logit
+        # For each legal move, look up its logit from the policy head
+        # using the deterministic action encoder
 
         move_scores = []
         for move in legal_moves:
             # Encode move to get its index in the action space
-            # TODO: Implement proper move encoding
-            # For now, use a simple hash as placeholder
-            move_idx = hash(move) % len(policy_logits)
+            move_idx = encode_move_to_action(move)
             move_scores.append(float(policy_logits[move_idx]))
 
         # Convert to probabilities (softmax over legal moves only)
@@ -180,18 +202,20 @@ def create_neural_agent(
     state: train_state.TrainState,
     temperature: float = 0.0,
     name: str = "NeuralNet",
+    ply: int = 0,
 ) -> Agent:
     """Create an Agent from a neural network.
 
     Args:
         state: Flax training state
-        temperature: Sampling temperature
+        temperature: Sampling temperature (only used at 0-ply)
         name: Agent name
+        ply: Search depth (0 = policy head, 1 = dice-averaged lookahead)
 
     Returns:
         Agent compatible with existing interface
     """
-    network_agent = NeuralNetworkAgent(state, temperature, name)
+    network_agent = NeuralNetworkAgent(state, temperature, name, ply=ply)
 
     # Wrap in Agent interface
     return Agent(

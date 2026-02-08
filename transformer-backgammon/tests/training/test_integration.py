@@ -191,7 +191,7 @@ class TestReplayBufferIntegration:
         # Verify batch structure
         assert batch['board_encoding'].shape[0] == 16
         assert batch['target_policy'].shape == (16, 1024)
-        assert batch['value_target'].shape == (16,)
+        assert batch['equity_target'].shape == (16, 5)
         assert batch['action_mask'].shape == (16, 1024)
 
 

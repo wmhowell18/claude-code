@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 import random
 
 from backgammon.training.self_play import GameResult, GameStep
-from backgammon.encoding.encoder import encode_board, raw_encoding_config
+from backgammon.encoding.encoder import encode_board, raw_encoding_config, outcome_to_equity
 from backgammon.encoding.action_encoder import (
     encode_move_to_one_hot,
     create_action_mask,
@@ -61,17 +61,14 @@ class ReplayBuffer:
         Args:
             game_result: Completed game with trajectory and outcome
         """
-        # Compute value targets from game outcome
-        # Winner gets +1, loser gets -1
-        outcome_value = 1.0 if game_result.outcome == 'white_wins' else -1.0
+        if game_result.outcome is None:
+            return  # Skip draws (max moves reached)
 
-        # Add each step with its value target
+        # Add each step with its equity target from the perspective of the
+        # player to move at that step.
         for step in game_result.steps:
-            # Value is from perspective of current player
-            if step.player == Player.WHITE:
-                value_target = outcome_value
-            else:
-                value_target = -outcome_value
+            equity = outcome_to_equity(game_result.outcome, step.player)
+            value_target = equity.to_array()  # shape (5,)
 
             self._add_step(step, value_target)
 
@@ -107,9 +104,9 @@ class ReplayBuffer:
 
         Returns:
             Training batch dictionary with:
-                - 'board_encoding': (batch_size, 26)
+                - 'board_encoding': (batch_size, 26, feature_dim)
                 - 'target_policy': (batch_size, num_actions)
-                - 'value_target': (batch_size,)
+                - 'equity_target': (batch_size, 5)
                 - 'action_mask': (batch_size, num_actions)
 
         Raises:
@@ -127,10 +124,10 @@ class ReplayBuffer:
         # Prepare batch arrays
         board_encodings = []
         target_policies = []
-        value_targets = []
+        equity_targets = []
         action_masks = []
 
-        for step, value_target in sampled_steps:
+        for step, equity_target in sampled_steps:
             # Encode board state
             encoded = encode_board(self._encoding_config, step.board)
             # Keep as (26, feature_dim) - don't flatten
@@ -139,16 +136,14 @@ class ReplayBuffer:
             board_encodings.append(board_enc)
 
             # Create target policy from move taken
-            # For now, use one-hot on the move that was played
-            # TODO: In production, use MCTS policy or other improvement
             target_policy = self._create_policy_target(
                 step.move_taken,
                 step.legal_moves,
             )
             target_policies.append(target_policy)
 
-            # Value target (already computed)
-            value_targets.append(value_target)
+            # Equity target (already computed as 5-dim array)
+            equity_targets.append(equity_target)
 
             # Create action mask from legal moves
             action_mask = self._create_action_mask(step.legal_moves)
@@ -158,7 +153,7 @@ class ReplayBuffer:
         return {
             'board_encoding': jnp.array(board_encodings, dtype=jnp.float32),
             'target_policy': jnp.array(target_policies, dtype=jnp.float32),
-            'value_target': jnp.array(value_targets, dtype=jnp.float32),
+            'equity_target': jnp.array(equity_targets, dtype=jnp.float32),
             'action_mask': jnp.array(action_masks, dtype=jnp.bool_),
         }
 
@@ -213,19 +208,19 @@ class ReplayBuffer:
             return {
                 'size': 0,
                 'utilization': 0.0,
-                'avg_value': 0.0,
+                'avg_win_prob': 0.0,
             }
 
-        # Compute statistics
-        values = [v for _, v in self._steps]
+        # Compute statistics from equity targets
+        equities = np.array([v for _, v in self._steps])  # (N, 5)
+        # Win probability = sum of win components (indices 0,1,2)
+        win_probs = equities[:, 0] + equities[:, 1] + equities[:, 2]
 
         return {
             'size': len(self._steps),
             'utilization': len(self._steps) / self.max_size,
-            'avg_value': np.mean(values),
-            'std_value': np.std(values),
-            'min_value': np.min(values),
-            'max_value': np.max(values),
+            'avg_win_prob': float(np.mean(win_probs)),
+            'std_win_prob': float(np.std(win_probs)),
         }
 
 
@@ -312,10 +307,10 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         # Prepare batch (same as parent class)
         board_encodings = []
         target_policies = []
-        value_targets = []
+        equity_targets = []
         action_masks = []
 
-        for step, value_target in sampled_steps:
+        for step, equity_target in sampled_steps:
             encoded = encode_board(self._encoding_config, step.board)
             # Keep as (26, feature_dim) - don't flatten
             board_enc = encoded.position_features[0]
@@ -327,7 +322,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             )
             target_policies.append(target_policy)
 
-            value_targets.append(value_target)
+            equity_targets.append(equity_target)
 
             action_mask = self._create_action_mask(step.legal_moves)
             action_masks.append(action_mask)
@@ -335,7 +330,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         batch = {
             'board_encoding': jnp.array(board_encodings, dtype=jnp.float32),
             'target_policy': jnp.array(target_policies, dtype=jnp.float32),
-            'value_target': jnp.array(value_targets, dtype=jnp.float32),
+            'equity_target': jnp.array(equity_targets, dtype=jnp.float32),
             'action_mask': jnp.array(action_masks, dtype=jnp.bool_),
         }
 

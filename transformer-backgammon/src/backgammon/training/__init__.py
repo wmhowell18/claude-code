@@ -27,7 +27,7 @@ from backgammon.training.train import (
 
 from backgammon.training.losses import (
     compute_policy_loss,
-    compute_value_loss,
+    compute_equity_loss,
     compute_combined_loss,
     train_step,
     prepare_training_batch,
@@ -61,7 +61,7 @@ __all__ = [
     "save_metrics",
     # Loss functions
     "compute_policy_loss",
-    "compute_value_loss",
+    "compute_equity_loss",
     "compute_combined_loss",
     "train_step",
     "prepare_training_batch",
