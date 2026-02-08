@@ -413,7 +413,8 @@ def match_equity(player_away: int, opponent_away: int) -> float:
     p = min(player_away, 15) - 1
     o = min(opponent_away, 15) - 1
 
-    return float(_MATCH_EQUITY_TABLE[p][o])
+    # Table layout: rows indexed by opponent-away, columns by player-away
+    return float(_MATCH_EQUITY_TABLE[o][p])
 
 
 def match_equity_from_state(

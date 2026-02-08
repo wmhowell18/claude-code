@@ -158,7 +158,7 @@ class TestForwardPass:
         """Test forward pass with single board."""
         model, params, encoded, rng_key = setup_network
 
-        equity, policy, attn_weights = forward(model, params, encoded, training=False)
+        equity, policy, cube_dec, attn_weights = forward(model, params, encoded, training=False)
 
         # Check output shapes
         assert equity.shape == (1, 5)  # Batch=1, 5 equity components
@@ -178,7 +178,7 @@ class TestForwardPass:
         from backgammon.encoding.encoder import encode_boards
         encoded_batch = encode_boards(encoding_config, boards)
 
-        equity, policy, attn_weights = forward_batch(
+        equity, policy, cube_dec, attn_weights = forward_batch(
             model, params, encoded_batch, training=False
         )
 
@@ -191,8 +191,8 @@ class TestForwardPass:
 
         rng_key1, rng_key2 = jax.random.split(rng_key)
 
-        equity1, _, _ = forward(model, params, encoded, training=True, rng_key=rng_key1)
-        equity2, _, _ = forward(model, params, encoded, training=True, rng_key=rng_key2)
+        equity1, _, _, _ = forward(model, params, encoded, training=True, rng_key=rng_key1)
+        equity2, _, _, _ = forward(model, params, encoded, training=True, rng_key=rng_key2)
 
         # Different dropout keys should give slightly different results
         # (though for small network difference might be small)
@@ -211,7 +211,7 @@ class TestForwardPass:
         board = initial_board()
         encoded = encode_board(encoding_config, board)
 
-        equity, policy, attn_weights = forward(model, params, encoded, training=False)
+        equity, policy, cube_dec, attn_weights = forward(model, params, encoded, training=False)
 
         # Should return attention weights
         assert attn_weights is not None
