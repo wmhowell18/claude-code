@@ -1,8 +1,8 @@
 # Backgammon Transformer — Feature Roadmap & TODO
 
-> **Status**: Foundation complete. 3 critical training bugs fixed (Feb 2025). Pipeline trains correctly (loss decreases). No search capability yet — this is the #1 priority.
+> **Status**: Foundation complete. 3 critical training bugs fixed (Feb 2026). 1-ply search with batch evaluation implemented. Pipeline trains correctly (loss decreases). Next priority: benchmarking & evaluation infrastructure.
 >
-> **Current Maturity**: ~4/10 for competitive play. Solid game engine + basic neural training, but missing search, cube, benchmarking.
+> **Current Maturity**: ~5/10 for competitive play. Solid game engine + neural training + 1-ply search, but missing cube, benchmarking, and advanced training techniques.
 
 ---
 
@@ -21,12 +21,12 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 
 ### Search & Lookahead (the #1 gap)
 
-- [ ] **1. 1-ply lookahead with dice averaging** — Evaluate all legal moves, for each apply the move, then average the equity over all 21 dice rolls. This is the single biggest strength multiplier (~10x). See Jacob Hilton's approach. (Effort: M, Impact: massive)
+- [x] **1. 1-ply lookahead with dice averaging** — Evaluate all legal moves, for each apply the move, then average the equity over all 21 dice rolls. Implemented in `evaluation/search.py`. (Feb 2026)
 - [ ] **2. 2-ply search** — After your move, consider opponent's best response across all their dice rolls. (Effort: M, Impact: large)
-- [ ] **3. Batch evaluation of multiple positions** — Feed all candidate resulting positions into the network in one GPU forward pass instead of one-by-one. Critical for search speed. (Effort: S, Impact: large for speed)
+- [x] **3. Batch evaluation of multiple positions** — All candidate positions evaluated in one GPU forward pass. Implemented in `evaluation/search.py:_batch_evaluate()`. (Feb 2026)
 - [ ] **4. Move ordering heuristics** — Evaluate most promising moves first to enable pruning. Sort by pip count improvement, hits, etc. (Effort: S, Impact: moderate)
 - [ ] **5. Transposition table / position cache** — Avoid re-evaluating identical positions across search. Hash board state → equity. (Effort: M, Impact: moderate)
-- [ ] **6. Parallel move evaluation** — Batch all candidate resulting positions into one network call. Complementary to item 3. (Effort: S, Impact: large for speed)
+- [x] **6. Parallel move evaluation** — All candidate moves batched into single network call via `select_move_1ply()`. (Feb 2026)
 
 ### Doubling Cube (essential for real backgammon)
 
@@ -39,7 +39,7 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 
 - [ ] **11. GnuBG interface** — Play games against gnubg, compare equity estimates position-by-position. (Effort: M, Impact: critical for development)
 - [ ] **12. Benchmark position suite** — Curate 50-100 positions with known correct equities from gnubg/XtremeGammon. (Effort: M, Impact: critical)
-- [ ] **13. Win rate tracking over training** — Plot win rate vs random, vs pip count, vs snapshots at regular intervals. (Effort: S, Impact: large)
+- [x] **13. Win rate tracking over training** — `TrainingEvaluator` periodically plays vs random & pip count agents during training, logs to metrics. Integrated into training loop. (Feb 2026)
 - [ ] **14. Move accuracy metric** — % of moves matching gnubg's top choice at 2-ply. (Effort: S, Impact: large)
 - [ ] **15. Equity error metric** — MAE/RMSE of network equity vs gnubg equity on benchmark positions. (Effort: S, Impact: large)
 
@@ -215,4 +215,6 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [x] **Fix value loss semantic mismatch** — `losses.py` used MSE on a scalar weighted sum vs scalar target. Fixed to use cross-entropy on 5-dim equity distribution. (Feb 2025)
 - [x] **Fix nondeterministic move encoding** — `network_agent.py:146` used `hash(move)` (Python-randomized). Fixed to use deterministic `encode_move_to_action()`. (Feb 2025)
 - [x] **Implement prepare_training_batch** — Was returning dummy zeros. Now properly encodes boards and computes equity targets. (Feb 2025)
-- [x] **Add smoke test script** — `scripts/smoke_test.py` validates loss decreases before committing to long training runs. (Feb 2025)
+- [x] **Add smoke test script** — `scripts/smoke_test.py` validates loss decreases before committing to long training runs. (Feb 2026)
+- [x] **1-ply search with batch evaluation** — `evaluation/search.py` implements dice-averaged lookahead with batched network inference. Items 1, 3, 6 from Tier 1. (Feb 2026)
+- [x] **Win rate tracking during training** — `evaluation/evaluator.py` periodically evaluates model vs random & pip count agents. Integrated into training loop. (Feb 2026)
