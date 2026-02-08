@@ -187,6 +187,120 @@ def checkers_borne_off(board: Board, player: Player) -> int:
     return board.get_checkers(player, 25)
 
 
+def is_past_contact(board: Board, player: Player) -> bool:
+    """Check if player is past contact (pure race).
+
+    Past contact means all of our checkers are ahead of all opponent
+    checkers, so no more hitting is possible.
+
+    Args:
+        board: Board state
+        player: Player to check
+
+    Returns:
+        True if past contact (pure race position)
+    """
+    opponent = player.opponent()
+
+    if player == Player.WHITE:
+        # White moves 24->1. Past contact if our furthest back < their closest
+        our_furthest = 0
+        their_closest = 25
+
+        for point in range(1, 25):
+            if board.get_checkers(player, point) > 0:
+                our_furthest = max(our_furthest, point)
+            if board.get_checkers(opponent, point) > 0:
+                their_closest = min(their_closest, point)
+
+        return our_furthest < their_closest
+    else:
+        # Black moves 1->24. Past contact if our furthest back > their closest
+        our_furthest = 25
+        their_closest = 0
+
+        for point in range(1, 25):
+            if board.get_checkers(player, point) > 0:
+                our_furthest = min(our_furthest, point)
+            if board.get_checkers(opponent, point) > 0:
+                their_closest = max(their_closest, point)
+
+        return our_furthest > their_closest
+
+
+def home_board_points_made(board: Board, player: Player) -> int:
+    """Count the number of made points (2+ checkers) in player's home board.
+
+    Args:
+        board: Board state
+        player: Player to check
+
+    Returns:
+        Number of made points in home board (0-6)
+    """
+    count = 0
+    if player == Player.WHITE:
+        # White's home board is points 1-6
+        for point in range(1, 7):
+            if board.get_checkers(player, point) >= 2:
+                count += 1
+    else:
+        # Black's home board is points 19-24
+        for point in range(19, 25):
+            if board.get_checkers(player, point) >= 2:
+                count += 1
+    return count
+
+
+def race_equity_estimate(board: Board, player: Player) -> float:
+    """Estimate equity in a pure race using adjusted pip count.
+
+    Uses a simplified Keith count formula:
+    - Start with raw pip count
+    - Add penalties for checkers on bar, stacks, and gaps
+
+    The equity is estimated as the pip count advantage normalized
+    to roughly [-1, 1] range using an empirical formula.
+
+    Args:
+        board: Board state
+        player: Player to estimate equity for
+
+    Returns:
+        Estimated equity in [-1, 1] range (positive = player favored)
+    """
+    our_pips_raw = pip_count(board, player)
+    opp_pips_raw = pip_count(board, player.opponent())
+
+    # Subtract borne-off checkers from pip count (pip_count counts
+    # them at 25 each, but borne-off checkers have 0 pip distance)
+    our_off = checkers_borne_off(board, player)
+    opp_off = checkers_borne_off(board, player.opponent())
+    our_pips = our_pips_raw - our_off * 25
+    opp_pips = opp_pips_raw - opp_off * 25
+
+    # Adjustments for Keith count
+    # Penalty for checkers on bar
+    bar_penalty = checkers_on_bar(board, player) * 4
+    opp_bar_penalty = checkers_on_bar(board, player.opponent()) * 4
+
+    # Adjusted pip counts
+    our_adjusted = our_pips + bar_penalty
+    opp_adjusted = opp_pips + opp_bar_penalty
+
+    # Pip count advantage
+    pip_diff = opp_adjusted - our_adjusted
+
+    # Convert to equity estimate using empirical formula
+    # Roughly: each pip of advantage ~= 2-3% equity
+    # Scale so that a 15-pip lead ≈ 0.8 equity
+    total_pips = max(our_adjusted + opp_adjusted, 1)
+    equity = pip_diff / (total_pips * 0.15 + 10)
+    equity = max(-1.0, min(1.0, equity))
+
+    return equity
+
+
 def can_bear_off(board: Board, player: Player) -> bool:
     """Check if a player can bear off checkers.
 

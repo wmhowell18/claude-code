@@ -694,3 +694,81 @@ def stack_encoded_boards(boards: List[EncodedBoard]) -> EncodedBoard:
         sequence_length=26,
         feature_dim=feature_dim,
     )
+
+
+# ==============================================================================
+# GLOBAL BOARD FEATURES
+# ==============================================================================
+
+
+def encode_global_board_features(board: Board) -> NDArray[np.float32]:
+    """Encode global (board-wide) features for neural network input.
+
+    These are aggregate features that describe the overall position rather
+    than individual points. They provide the network with high-level
+    strategic information.
+
+    Features (8 total):
+    - our_pip_count_norm: Normalized pip count for player to move
+    - opp_pip_count_norm: Normalized pip count for opponent
+    - pip_count_diff_norm: Pip count advantage (positive = player ahead)
+    - is_contact: 1.0 if pieces are still in contact, 0.0 if pure race
+    - race_equity: Estimated equity in race positions [-1, 1]
+    - our_borne_off_norm: Fraction of our checkers borne off
+    - opp_borne_off_norm: Fraction of opponent's checkers borne off
+    - our_home_board_points: Fraction of home board points made (0-1)
+
+    Args:
+        board: Board state
+
+    Returns:
+        Array of shape (8,) with global features
+    """
+    from backgammon.core.board import (
+        pip_count,
+        is_past_contact,
+        checkers_borne_off,
+        home_board_points_made,
+        race_equity_estimate,
+    )
+
+    player = board.player_to_move
+    opponent = player.opponent()
+
+    # Pip counts (normalize by typical max ~167 for initial position)
+    our_pips = pip_count(board, player)
+    opp_pips = pip_count(board, opponent)
+    pip_norm = 167.0  # Approximate max pip count
+
+    our_pip_norm = our_pips / pip_norm
+    opp_pip_norm = opp_pips / pip_norm
+    pip_diff_norm = (opp_pips - our_pips) / pip_norm  # Positive = we're ahead
+
+    # Contact detection
+    past_contact = is_past_contact(board, player)
+    is_contact = 0.0 if past_contact else 1.0
+
+    # Race equity estimate
+    race_eq = race_equity_estimate(board, player)
+
+    # Bearoff progress
+    our_off = checkers_borne_off(board, player) / 15.0
+    opp_off = checkers_borne_off(board, opponent) / 15.0
+
+    # Home board control
+    our_home = home_board_points_made(board, player) / 6.0
+
+    return np.array([
+        our_pip_norm,
+        opp_pip_norm,
+        pip_diff_norm,
+        is_contact,
+        race_eq,
+        our_off,
+        opp_off,
+        our_home,
+    ], dtype=np.float32)
+
+
+# Global board feature dimension
+GLOBAL_FEATURE_DIM = 8
