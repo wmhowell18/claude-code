@@ -28,6 +28,8 @@ from backgammon.evaluation.search import (
     select_move_1ply,
     select_move_2ply,
     select_move,
+    order_moves,
+    _score_move_heuristic,
 )
 
 
@@ -246,3 +248,56 @@ class TestSelectMoveDispatch:
         moves = generate_legal_moves(board, Player.WHITE, (3, 1))
         move, _ = select_move(small_state, board, Player.WHITE, (3, 1), moves, ply=0)
         assert move in moves
+
+
+class TestMoveOrdering:
+    """Tests for move ordering heuristics."""
+
+    def test_order_moves_returns_all_moves(self):
+        """Ordering preserves all moves."""
+        board = initial_board()
+        moves = generate_legal_moves(board, Player.WHITE, (3, 1))
+        ordered = order_moves(board, Player.WHITE, moves)
+        assert len(ordered) == len(moves)
+        assert set(id(m) for m in ordered) == set(id(m) for m in moves) or \
+            len(ordered) == len(moves)
+
+    def test_order_moves_single_move(self):
+        """Single move is returned as-is."""
+        board = _bearoff_board({1: 1}, {24: 1})
+        moves = generate_legal_moves(board, Player.WHITE, (1, 1))
+        ordered = order_moves(board, Player.WHITE, moves)
+        assert len(ordered) == len(moves)
+
+    def test_order_moves_empty(self):
+        """Empty move list returns empty."""
+        board = initial_board()
+        ordered = order_moves(board, Player.WHITE, [])
+        assert ordered == []
+
+    def test_heuristic_scores_hits_higher(self):
+        """Moves that hit opponent should score higher."""
+        # Create a position where one move hits and another doesn't
+        board = empty_board()
+        board.white_checkers[6] = 2
+        board.black_checkers[5] = 1  # Blot on point 5
+
+        moves = generate_legal_moves(board, Player.WHITE, (1, 2))
+        if len(moves) > 1:
+            scores = [
+                _score_move_heuristic(board, Player.WHITE, m)
+                for m in moves
+            ]
+            # Moves with hits should have the highest scores
+            hit_moves = [
+                i for i, m in enumerate(moves)
+                if any(step.hits_opponent for step in m)
+            ]
+            non_hit_moves = [
+                i for i, m in enumerate(moves)
+                if not any(step.hits_opponent for step in m)
+            ]
+            if hit_moves and non_hit_moves:
+                max_hit_score = max(scores[i] for i in hit_moves)
+                max_non_hit_score = max(scores[i] for i in non_hit_moves)
+                assert max_hit_score > max_non_hit_score

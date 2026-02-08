@@ -23,6 +23,7 @@ from backgammon.core.board import (
     generate_legal_moves,
     is_game_over,
     winner,
+    pip_count,
 )
 from backgammon.core.types import Player, Move, Dice, LegalMoves, GameOutcome
 from backgammon.core.dice import ALL_DICE_ROLLS, DICE_PROBABILITIES
@@ -732,3 +733,141 @@ def select_move(
         )
     else:
         raise ValueError(f"Unsupported ply depth: {ply}. Use 0, 1, or 2.")
+
+
+# ==============================================================================
+# MOVE ORDERING HEURISTICS
+# ==============================================================================
+
+
+def _score_move_heuristic(board: Board, player: Player, move: Move) -> float:
+    """Score a move with a fast heuristic for move ordering.
+
+    Higher scores indicate more promising moves (evaluated first).
+    This is used to order moves before expensive evaluation so that
+    pruning (top-K) is more effective.
+
+    Heuristic factors:
+    - Pip count improvement (more = better)
+    - Hitting opponent blots (big bonus)
+    - Making new points (bonus)
+    - Leaving blots (penalty)
+
+    Args:
+        board: Current board state
+        player: Player making the move
+        move: Move to score
+
+    Returns:
+        Heuristic score (higher = more promising)
+    """
+    score = 0.0
+
+    # Pip count improvement
+    new_board = apply_move(board, player, move)
+    old_pips = pip_count(board, player)
+    new_pips = pip_count(new_board, player)
+    pip_improvement = old_pips - new_pips
+    score += pip_improvement
+
+    # Check each step for hits and blots
+    for step in move:
+        if step.hits_opponent:
+            score += 20.0  # Big bonus for hitting
+
+    # Check resulting position for blots and points made
+    opponent = player.opponent()
+    for point in range(1, 25):
+        our_count = new_board.get_checkers(player, point)
+        if our_count == 1:
+            score -= 5.0  # Penalty for leaving a blot
+        elif our_count >= 2:
+            # Check if this is a new point (wasn't made before)
+            old_count = board.get_checkers(player, point)
+            if old_count < 2:
+                score += 3.0  # Bonus for making a new point
+
+    return score
+
+
+def order_moves(
+    board: Board,
+    player: Player,
+    legal_moves: LegalMoves,
+) -> LegalMoves:
+    """Order moves from most to least promising using heuristics.
+
+    Args:
+        board: Current board state
+        player: Player making the move
+        legal_moves: List of legal moves to order
+
+    Returns:
+        Moves sorted by heuristic score (best first)
+    """
+    if len(legal_moves) <= 1:
+        return legal_moves
+
+    scored = [
+        (_score_move_heuristic(board, player, move), i, move)
+        for i, move in enumerate(legal_moves)
+    ]
+    scored.sort(reverse=True)  # Best first
+
+    return [move for _, _, move in scored]
+
+
+def select_move_2ply_pruned(
+    state: train_state.TrainState,
+    board: Board,
+    player: Player,
+    legal_moves: LegalMoves,
+    top_k: int = 10,
+    encoding_config: Optional[EncodingConfig] = None,
+) -> Tuple[Move, float]:
+    """Select best move using 2-ply evaluation with move ordering and pruning.
+
+    First orders moves by heuristic, then only evaluates the top-K most
+    promising moves at full 2-ply depth. This dramatically reduces computation
+    for positions with many legal moves.
+
+    Args:
+        state: Network training state.
+        board: Current board state.
+        player: Player to move.
+        legal_moves: List of legal moves.
+        top_k: Maximum number of moves to evaluate at 2-ply.
+        encoding_config: Encoding config (defaults to raw).
+
+    Returns:
+        Tuple of (best_move, best_value).
+    """
+    if encoding_config is None:
+        encoding_config = raw_encoding_config()
+
+    if not legal_moves:
+        return (), 0.0
+    if len(legal_moves) == 1:
+        val = evaluate_move_2ply(
+            state, board, player, legal_moves[0], encoding_config
+        )
+        return legal_moves[0], val
+
+    # Order moves by heuristic
+    ordered_moves = order_moves(board, player, legal_moves)
+
+    # Only evaluate top-K at 2-ply
+    candidates = ordered_moves[:top_k]
+
+    best_move = candidates[0]
+    best_value = -np.inf
+
+    for move in candidates:
+        val = evaluate_move_2ply(
+            state, board, player, move, encoding_config
+        )
+        if val > best_value:
+            best_value = val
+            best_move = move
+
+    return best_move, best_value
