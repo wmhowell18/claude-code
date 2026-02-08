@@ -17,6 +17,12 @@ from backgammon.evaluation.network_agent import (
     create_mcts_agent,
 )
 
+from backgammon.evaluation.evaluator import (
+    TrainingEvaluator,
+    EvalConfig,
+    evaluate_vs_opponent,
+)
+
 __all__ = [
     # Agents
     "Agent",
@@ -31,4 +37,8 @@ __all__ = [
     "NeuralNetworkAgent",
     "create_neural_agent",
     "create_mcts_agent",
+    # Evaluation
+    "TrainingEvaluator",
+    "EvalConfig",
+    "evaluate_vs_opponent",
 ]
