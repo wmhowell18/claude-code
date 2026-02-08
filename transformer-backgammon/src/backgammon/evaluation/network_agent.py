@@ -128,8 +128,8 @@ class NeuralNetworkAgent:
                 value: (batch_size,) - value estimate
         """
         # Apply model (no gradient needed for inference)
-        # Network returns (equity, policy, attention_weights)
-        equity, policy_logits, _ = self.state.apply_fn(
+        # Network returns (equity, policy, cube_decision, attention_weights)
+        equity, policy_logits, _, _ = self.state.apply_fn(
             {'params': self.state.params},
             encoded_board,
             training=False,
@@ -223,7 +223,7 @@ class NeuralNetworkAgent:
         encoded = encode_board(self.encoding_config, board)
         encoded_board = encoded.position_features
 
-        equity, _, _ = self.state.apply_fn(
+        equity, _, _, _ = self.state.apply_fn(
             {'params': self.state.params},
             encoded_board,
             training=False,

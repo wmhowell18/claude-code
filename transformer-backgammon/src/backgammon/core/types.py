@@ -1,7 +1,7 @@
 """Core type definitions for transformer backgammon.
 
 This module defines all the core data structures used throughout the project,
-following the specification in types.mli.
+following the specification in types.mli and cube.mli.
 """
 
 from dataclasses import dataclass, field
@@ -122,6 +122,102 @@ class Board:
 
 # Legal moves for a given board + dice
 LegalMoves = List[Move]
+
+
+# ==============================================================================
+# DOUBLING CUBE
+# ==============================================================================
+
+
+class CubeOwner(Enum):
+    """Who owns the doubling cube."""
+    CENTERED = "centered"  # Neither player owns the cube
+    WHITE = "white"
+    BLACK = "black"
+
+
+class CubeAction(Enum):
+    """Possible doubling cube actions."""
+    NO_DOUBLE = "no_double"
+    DOUBLE = "double"
+    TAKE = "take"
+    PASS = "pass"  # Decline the double (forfeit game)
+    BEAVER = "beaver"  # Accept and immediately redouble (optional rule)
+
+
+@dataclass
+class CubeState:
+    """Doubling cube state.
+
+    Attributes:
+        value: Current cube value (1, 2, 4, 8, 16, 32, 64)
+        owner: Who owns the cube (CENTERED, WHITE, or BLACK)
+    """
+    value: int = 1
+    owner: CubeOwner = CubeOwner.CENTERED
+
+    def __post_init__(self):
+        """Validate cube state."""
+        valid_values = {1, 2, 4, 8, 16, 32, 64}
+        assert self.value in valid_values, f"Invalid cube value: {self.value}"
+
+
+@dataclass
+class MatchState:
+    """Match state for playing to N points.
+
+    Attributes:
+        target_points: Match length (e.g. 5 for a 5-point match)
+        white_score: White's current score
+        black_score: Black's current score
+        crawford: Whether Crawford rule is active for the next game
+        post_crawford: Whether we are in post-Crawford games
+    """
+    target_points: int
+    white_score: int = 0
+    black_score: int = 0
+    crawford: bool = False
+    post_crawford: bool = False
+
+    def __post_init__(self):
+        """Validate match state."""
+        assert self.target_points > 0, "target_points must be positive"
+        assert self.white_score >= 0, "white_score must be non-negative"
+        assert self.black_score >= 0, "black_score must be non-negative"
+
+
+@dataclass
+class CubeEquity:
+    """Cube equity analysis for a position.
+
+    Attributes:
+        raw_equity: Equity without considering the cube
+        cubeful_equity: Equity accounting for optimal cube play
+        double_equity: Expected equity if we double now
+        no_double_equity: Expected equity if we don't double
+        take_equity: Expected equity for opponent if they take our double
+        pass_equity: Expected equity for opponent if they pass our double
+    """
+    raw_equity: "Equity"
+    cubeful_equity: float
+    double_equity: float
+    no_double_equity: float
+    take_equity: float
+    pass_equity: float
+
+
+@dataclass
+class CubeDecisionQuality:
+    """Quality metrics for a cube decision.
+
+    Attributes:
+        equity_error: How much equity was lost/gained by the decision
+        was_blunder: Whether the decision lost > 0.1 equity
+        was_correct: Whether the decision was within 0.02 equity of optimal
+    """
+    equity_error: float
+    was_blunder: bool
+    was_correct: bool
 
 
 # ==============================================================================
@@ -292,6 +388,7 @@ class TransformerConfig:
     input_feature_dim: int = 2
     use_learned_positional_encoding: bool = True
     use_policy_head: bool = False
+    use_cube_head: bool = False
     num_actions: int = 1024  # Default action space size
     return_attention_weights: bool = False
 

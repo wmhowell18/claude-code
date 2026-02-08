@@ -564,3 +564,56 @@ class TestExtractPositionFeatures:
             features = extract_position_features(config, board, point)
             assert features.shape == (2,)
             assert features.dtype == np.float32
+
+
+class TestGlobalBoardFeatures:
+    """Tests for global board-level features."""
+
+    def test_global_features_shape(self):
+        """Test that global features have correct shape."""
+        from backgammon.encoding.encoder import encode_global_board_features, GLOBAL_FEATURE_DIM
+        board = initial_board()
+        features = encode_global_board_features(board)
+        assert features.shape == (GLOBAL_FEATURE_DIM,)
+        assert features.dtype == np.float32
+
+    def test_global_features_initial_position(self):
+        """Test global features for the initial position."""
+        from backgammon.encoding.encoder import encode_global_board_features
+        board = initial_board()
+        features = encode_global_board_features(board)
+
+        # Pip counts should be equal for initial position
+        our_pip = features[0]
+        opp_pip = features[1]
+        assert abs(our_pip - opp_pip) < 0.01  # Equal pip counts
+
+        # Pip diff should be ~0
+        pip_diff = features[2]
+        assert abs(pip_diff) < 0.01
+
+        # Should be in contact
+        is_contact = features[3]
+        assert is_contact == 1.0
+
+        # No checkers borne off
+        our_off = features[5]
+        opp_off = features[6]
+        assert our_off == 0.0
+        assert opp_off == 0.0
+
+    def test_global_features_race_position(self):
+        """Test global features for a race position."""
+        from backgammon.encoding.encoder import encode_global_board_features
+        from backgammon.core.board import race_position
+        board = race_position()
+        features = encode_global_board_features(board)
+
+        # Should NOT be in contact
+        is_contact = features[3]
+        assert is_contact == 0.0
+
+    def test_global_feature_dim_constant(self):
+        """Test the GLOBAL_FEATURE_DIM constant."""
+        from backgammon.encoding.encoder import GLOBAL_FEATURE_DIM
+        assert GLOBAL_FEATURE_DIM == 8

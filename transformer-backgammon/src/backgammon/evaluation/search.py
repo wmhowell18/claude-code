@@ -288,7 +288,7 @@ def _batch_evaluate(
     encoded = _encode_boards_batch(boards, encoding_config)
     encoded_jax = jnp.array(encoded)
 
-    equity, _, _ = state.apply_fn(
+    equity, _, _, _ = state.apply_fn(
         {'params': state.params},
         encoded_jax,
         training=False,
@@ -1003,3 +1003,67 @@ def select_move(
         )
     else:
         raise ValueError(f"Unsupported ply depth: {ply}. Use 0, 1, or 2.")
+
+
+# ==============================================================================
+# MOVE ORDERING HEURISTICS (from main branch — kept select_move_2ply_pruned)
+# ==============================================================================
+
+# Alias for backward compatibility (tests import the private name)
+_score_move_heuristic = score_move_heuristic
+
+
+def select_move_2ply_pruned(
+    state: train_state.TrainState,
+    board: Board,
+    player: Player,
+    legal_moves: LegalMoves,
+    top_k: int = 10,
+    encoding_config: Optional[EncodingConfig] = None,
+) -> Tuple[Move, float]:
+    """Select best move using 2-ply evaluation with move ordering and pruning.
+
+    First orders moves by heuristic, then only evaluates the top-K most
+    promising moves at full 2-ply depth. This dramatically reduces computation
+    for positions with many legal moves.
+
+    Args:
+        state: Network training state.
+        board: Current board state.
+        player: Player to move.
+        legal_moves: List of legal moves.
+        top_k: Maximum number of moves to evaluate at 2-ply.
+        encoding_config: Encoding config (defaults to raw).
+
+    Returns:
+        Tuple of (best_move, best_value).
+    """
+    if encoding_config is None:
+        encoding_config = raw_encoding_config()
+
+    if not legal_moves:
+        return (), 0.0
+    if len(legal_moves) == 1:
+        val = evaluate_move_2ply(
+            state, board, player, legal_moves[0], encoding_config
+        )
+        return legal_moves[0], val
+
+    # Order moves by heuristic
+    ordered_moves = order_moves(board, player, legal_moves)
+
+    # Only evaluate top-K at 2-ply
+    candidates = ordered_moves[:top_k]
+
+    best_move = candidates[0]
+    best_value = -np.inf
+
+    for move in candidates:
+        val = evaluate_move_2ply(
+            state, board, player, move, encoding_config
+        )
+        if val > best_value:
+            best_value = val
+            best_move = move
+
+    return best_move, best_value

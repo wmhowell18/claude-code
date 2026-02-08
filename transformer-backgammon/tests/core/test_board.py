@@ -847,3 +847,49 @@ class TestTrainingPhaseVariants:
         concept_names = {'prime_building_position'}
         # Prime building should be in early for concept exposure
         # (Can't easily check this without adding metadata, but verified manually)
+
+
+class TestContactAndRaceFeatures:
+    """Tests for contact detection, home board, and race equity features."""
+
+    def test_initial_position_is_contact(self):
+        """Initial position is definitely a contact position."""
+        from backgammon.core.board import is_past_contact
+        board = initial_board()
+        assert not is_past_contact(board, Player.WHITE)
+        assert not is_past_contact(board, Player.BLACK)
+
+    def test_race_position_is_past_contact(self):
+        """Race position should be past contact."""
+        from backgammon.core.board import is_past_contact
+        board = race_position()
+        assert is_past_contact(board, Player.WHITE)
+        assert is_past_contact(board, Player.BLACK)
+
+    def test_home_board_points_made(self):
+        """Test home board point counting."""
+        from backgammon.core.board import home_board_points_made
+        board = initial_board()
+        # White has 5 checkers on point 6 -> 1 made point
+        white_home = home_board_points_made(board, Player.WHITE)
+        assert white_home == 1  # Only point 6
+
+        # Empty board has 0 home board points
+        board2 = empty_board()
+        assert home_board_points_made(board2, Player.WHITE) == 0
+
+    def test_race_equity_estimate(self):
+        """Test race equity estimation."""
+        from backgammon.core.board import race_equity_estimate
+
+        # Equal position should have equity near 0
+        board = initial_board()
+        equity = race_equity_estimate(board, Player.WHITE)
+        assert abs(equity) < 0.15  # Roughly equal
+
+        # Position with all checkers borne off should be maximal
+        board2 = empty_board()
+        board2.white_checkers[25] = 15  # White done
+        board2.black_checkers[1] = 15   # Black far away
+        equity2 = race_equity_estimate(board2, Player.WHITE)
+        assert equity2 > 0.5  # White is way ahead
