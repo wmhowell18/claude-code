@@ -1,8 +1,8 @@
 # Backgammon Transformer — Feature Roadmap & TODO
 
-> **Status**: Search and benchmarking complete. 0/1/2-ply search with batch evaluation implemented. Win rate tracking and benchmark positions integrated into training loop. Pipeline trains and evaluates correctly.
+> **Status**: Search, benchmarking, and doubling cube complete. 0/1/2-ply search with batch evaluation. Win rate tracking and benchmark positions in training loop. Full doubling cube with match play, match equity tables, cubeful equity, and cube decision network head.
 >
-> **Current Maturity**: ~5/10 for competitive play. Solid game engine + neural training + search + benchmarking. Missing cube, advanced training techniques (TD(lambda)), and GnuBG interface.
+> **Current Maturity**: ~6/10 for competitive play. Solid game engine + neural training + search + benchmarking + doubling cube + match play. Missing advanced training techniques (TD(lambda)), GnuBG interface, and MCTS.
 
 ---
 
@@ -30,10 +30,10 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 
 ### Doubling Cube (essential for real backgammon)
 
-- [ ] **7. Cube state tracking in Board** — Add cube value, cube owner, centered flag to Board dataclass. (Effort: S, Impact: foundational)
-- [ ] **8. Cube decision network** — Separate network head or model for double/no-double/take/pass decisions. (Effort: M, Impact: large)
-- [ ] **9. Match equity tables** — Implement Kazaross/Rockwell tables for score-dependent cube decisions. (Effort: S, Impact: large for match play)
-- [ ] **10. Cube-aware equity calculation** — Game value = points × cube value. Integrate into training targets. (Effort: S, Impact: large)
+- [x] **7. Cube state tracking in Board** — CubeState, CubeOwner, CubeAction types in `core/types.py`. Full cube module at `core/cube.py` with can_double, apply_cube_action, legal_cube_actions. (Effort: S, Impact: foundational) *(Feb 2026)*
+- [x] **8. Cube decision network** — CubeHead in `network/network.py` with 4-output (no_double, double, take, pass). Optional via `use_cube_head` config. Cube state encoding in `core/cube.py`. (Effort: M, Impact: large) *(Feb 2026)*
+- [x] **9. Match equity tables** — Kazaross/Rockwell 15x15 MET in `core/cube.py`. Match state tracking with Crawford rule. (Effort: S, Impact: large for match play) *(Feb 2026)*
+- [x] **10. Cube-aware equity calculation** — Cubeful equity for money and match play. should_double/should_take decisions. evaluate_cube_decision quality metrics. (Effort: S, Impact: large) *(Feb 2026)*
 
 ### Evaluation & Benchmarking (can't improve what you can't measure)
 
@@ -86,11 +86,11 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 
 ### Match Play
 
-- [ ] **36. Match score tracking** — Track scores across multiple games in a match. (Effort: S, Impact: foundational)
+- [x] **36. Match score tracking** — MatchState in `core/types.py` and `core/cube.py` with update_match_score, is_match_over, match_winner. (Effort: S, Impact: foundational) *(Feb 2026)*
 - [ ] **37. Score-dependent strategy** — Different play when leading vs trailing in match. (Effort: M, Impact: large for match play)
-- [ ] **38. Match equity table implementation** — Kazaross/Rockwell tables. (Effort: S, Impact: large for match play)
-- [ ] **39. Cube handling in match context** — Gammon-go, too-good-to-double, etc. (Effort: M, Impact: large)
-- [ ] **40. Crawford rule and post-Crawford** — Special cube rules near end of match. (Effort: S, Impact: moderate)
+- [x] **38. Match equity table implementation** — Kazaross/Rockwell 15×15 table in `core/cube.py`. See item 9. (Effort: S, Impact: large for match play) *(Feb 2026)*
+- [x] **39. Cube handling in match context** — can_double_in_match, cubeful equity for match play, encode_match_state. Gammon-go/too-good logic via should_double/should_take. (Effort: M, Impact: large) *(Feb 2026)*
+- [x] **40. Crawford rule and post-Crawford** — Crawford/post-Crawford state tracking, is_crawford_game check disables doubling. (Effort: S, Impact: moderate) *(Feb 2026)*
 
 ### Endgame
 
@@ -175,7 +175,7 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [ ] **86. Match format support** — 1-point, 3-point, 5-point, 7-point matches. (Effort: S, Impact: moderate)
 - [ ] **87. Chouette support** — Multi-player variant. (Effort: M, Impact: niche)
 - [ ] **88. Jacoby rule** — Gammons don't count if cube not turned (money game variant). (Effort: S, Impact: small)
-- [ ] **89. Beaver/raccoon support** — Advanced cube actions. (Effort: S, Impact: niche)
+- [x] **89. Beaver/raccoon support** — Beaver action implemented in `core/cube.py` apply_cube_action. (Effort: S, Impact: niche) *(Feb 2026)*
 - [ ] **90. Automatic doubling support** — House rule variant. (Effort: S, Impact: niche)
 
 ---
@@ -201,9 +201,9 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 
 1. ~~**Items 1-3, 6** (1-ply search + batch eval)~~ — DONE (search.py)
 2. ~~**Items 12, 13, 15** (benchmarking)~~ — DONE (benchmark.py + training loop integration)
-3. **Longer training run** with the fixed pipeline — see where the model plateaus
-4. **Items 16-18** (TD(lambda) + rollout targets) — dramatically better training signal
-5. **Items 7-10** (doubling cube) — needed for real backgammon
+3. ~~**Items 7-10** (doubling cube)~~ — DONE (core/cube.py + types + network cube head)
+4. **Longer training run** with the fixed pipeline — see where the model plateaus
+5. **Items 16-18** (TD(lambda) + rollout targets) — dramatically better training signal
 6. **Items 25-28** (better encoding) — more signal for the network to learn from
 7. **Items 45-46** (MCTS) — sophisticated search for strongest play
 
@@ -223,3 +223,9 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [x] **Win rate tracking over training** — `run_evaluation_checkpoint()` callback integrated into training loop. Evaluates vs random & pip count agents at configurable intervals. (Feb 2026)
 - [x] **Equity error metric** — MAE/RMSE/max-error on benchmark positions with per-position breakdown. (Feb 2026)
 - [x] **Fix value-only agent crash** — 0-ply `NeuralNetworkAgent` now falls back to value-based search when policy head is disabled. (Feb 2026)
+- [x] **Doubling cube types & state** — CubeState, CubeOwner, CubeAction in `core/types.py`. Full cube module at `core/cube.py`. (Feb 2026)
+- [x] **Cube decision network head** — CubeHead (4-output) in `network/network.py` with `use_cube_head` config. (Feb 2026)
+- [x] **Match equity tables** — Kazaross/Rockwell 15×15 MET in `core/cube.py`. (Feb 2026)
+- [x] **Cubeful equity calculation** — Money and match cubeful equity, should_double/should_take, evaluate_cube_decision. (Feb 2026)
+- [x] **Match play** — MatchState with score tracking, Crawford/post-Crawford rule, match equity lookups. (Feb 2026)
+- [x] **Cube encoding** — encode_cube_state (4-dim) and encode_match_state (5-dim) for network input. (Feb 2026)
