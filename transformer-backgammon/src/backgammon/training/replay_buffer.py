@@ -2,6 +2,10 @@
 
 Stores game trajectories and samples batches for training.
 Breaks temporal correlation and improves sample efficiency.
+
+Performance: Boards are pre-encoded at insertion time so that
+sample_batch() only does numpy indexing + JAX array conversion,
+eliminating ~13K Python function calls per batch.
 """
 
 import numpy as np
@@ -18,6 +22,29 @@ from backgammon.encoding.action_encoder import (
     get_action_space_size,
 )
 from backgammon.core.types import Player
+
+
+def _encode_board_fast_single(board) -> np.ndarray:
+    """Fast single-board encoding for raw encoding (feature_dim=2).
+
+    Directly slices numpy checker arrays instead of calling encode_board()
+    which iterates 26 times per board in Python.
+
+    Args:
+        board: Board object.
+
+    Returns:
+        Array of shape (26, 2) with normalized checker counts.
+    """
+    features = np.empty((26, 2), dtype=np.float32)
+    inv15 = np.float32(1.0 / 15.0)
+    if board.player_to_move == Player.WHITE:
+        features[:, 0] = board.white_checkers * inv15
+        features[:, 1] = board.black_checkers * inv15
+    else:
+        features[:, 0] = board.black_checkers * inv15
+        features[:, 1] = board.white_checkers * inv15
+    return features
 
 
 @dataclass
@@ -46,10 +73,22 @@ class ReplayBuffer:
     _insertion_index: int = 0
     _encoding_config: Optional[object] = None
 
+    # Pre-encoded board features for fast sampling (eliminates re-encoding)
+    _encoded_boards: List[np.ndarray] = field(default_factory=list)
+    _equity_targets_list: List[np.ndarray] = field(default_factory=list)
+
+    # Cached dummy arrays for value-only training (avoid recreating per sample)
+    _dummy_policy: Optional[np.ndarray] = None
+    _dummy_mask: Optional[np.ndarray] = None
+
     def __post_init__(self):
         """Initialize encoding config after creation."""
         if self._encoding_config is None:
             self._encoding_config = raw_encoding_config()
+        # Pre-allocate dummy arrays for value-only training
+        action_size = get_action_space_size()
+        self._dummy_policy = np.zeros(action_size, dtype=np.float32)
+        self._dummy_mask = np.ones(action_size, dtype=bool)
 
     def __len__(self) -> int:
         """Return number of steps in buffer."""
@@ -99,17 +138,26 @@ class ReplayBuffer:
             self._add_step(step, value_target, weight)
 
     def _add_step(self, step: GameStep, value_target: float, weight: float = 1.0) -> None:
-        """Add single step to buffer.
+        """Add single step to buffer with pre-encoded board features.
+
+        Pre-encodes the board at insertion time so sample_batch() only needs
+        numpy indexing — no per-sample encode_board() calls.
 
         Args:
             step: Game step (state, action, player)
             value_target: Value target for this position
             weight: Sampling weight for this position
         """
+        # Pre-encode the board (vectorized numpy, ~10x faster than encode_board)
+        encoded = _encode_board_fast_single(step.board)
+        value_arr = np.asarray(value_target, dtype=np.float32)
+
         if len(self._steps) < self.max_size:
             # Buffer not full yet, just append
             self._steps.append((step, value_target))
             self._weights.append(weight)
+            self._encoded_boards.append(encoded)
+            self._equity_targets_list.append(value_arr)
         else:
             # Buffer full, evict according to policy
             if self.eviction_policy == 'fifo':
@@ -117,17 +165,25 @@ class ReplayBuffer:
                 idx = self._insertion_index % self.max_size
                 self._steps[idx] = (step, value_target)
                 self._weights[idx] = weight
+                self._encoded_boards[idx] = encoded
+                self._equity_targets_list[idx] = value_arr
                 self._insertion_index += 1
             elif self.eviction_policy == 'random':
                 # Replace random entry
                 idx = random.randint(0, self.max_size - 1)
                 self._steps[idx] = (step, value_target)
                 self._weights[idx] = weight
+                self._encoded_boards[idx] = encoded
+                self._equity_targets_list[idx] = value_arr
             else:
                 raise ValueError(f"Unknown eviction policy: {self.eviction_policy}")
 
     def sample_batch(self, batch_size: int) -> Dict[str, jnp.ndarray]:
-        """Sample random batch for training.
+        """Sample random batch for training using pre-encoded features.
+
+        Uses pre-encoded board features stored at insertion time, eliminating
+        ~13K encode_board() Python calls per batch. For value-only training,
+        also skips creating unused policy targets and action masks.
 
         Args:
             batch_size: Number of examples to sample
@@ -148,53 +204,40 @@ class ReplayBuffer:
             )
 
         # Sample indices (weighted if position weighting is enabled)
-        sample_size = min(batch_size, len(self._steps))
+        n = len(self._steps)
+        sample_size = min(batch_size, n)
 
         if self.use_position_weighting and self._weights:
             # Weighted sampling: positions with higher weights are sampled more
-            weights_arr = np.array(self._weights[:len(self._steps)])
+            weights_arr = np.array(self._weights[:n])
             probs = weights_arr / weights_arr.sum()
             indices = np.random.choice(
-                len(self._steps), size=sample_size, replace=False, p=probs,
+                n, size=sample_size, replace=False, p=probs,
             )
-            sampled_steps = [self._steps[i] for i in indices]
         else:
-            sampled_steps = random.sample(self._steps, sample_size)
+            indices = np.array(random.sample(range(n), sample_size))
 
-        # Prepare batch arrays
-        board_encodings = []
-        target_policies = []
-        equity_targets = []
-        action_masks = []
+        # Fast path: use pre-encoded board features (no per-sample encoding)
+        board_encodings = np.array([self._encoded_boards[i] for i in indices])
+        equity_targets = np.array([self._equity_targets_list[i] for i in indices])
 
-        for step, equity_target in sampled_steps:
-            # Encode board state
-            encoded = encode_board(self._encoding_config, step.board)
-            # Keep as (26, feature_dim) - don't flatten
-            # Remove batch dimension: (1, 26, feature_dim) -> (26, feature_dim)
-            board_enc = encoded.position_features[0]
-            board_encodings.append(board_enc)
-
-            # Create target policy from move taken
-            target_policy = self._create_policy_target(
-                step.move_taken,
-                step.legal_moves,
-            )
-            target_policies.append(target_policy)
-
-            # Equity target (already computed as 5-dim array)
-            equity_targets.append(equity_target)
-
-            # Create action mask from legal moves
-            action_mask = self._create_action_mask(step.legal_moves)
-            action_masks.append(action_mask)
+        # For value-only training, policy targets and action masks are unused
+        # by the loss function. Use pre-allocated dummy arrays to avoid
+        # creating 512 × 1024-element arrays per batch.
+        action_size = get_action_space_size()
+        dummy_policies = np.broadcast_to(
+            self._dummy_policy, (sample_size, action_size)
+        ).copy()  # copy() because broadcast_to returns read-only view
+        dummy_masks = np.broadcast_to(
+            self._dummy_mask, (sample_size, action_size)
+        ).copy()
 
         # Convert to JAX arrays
         return {
             'board_encoding': jnp.array(board_encodings, dtype=jnp.float32),
-            'target_policy': jnp.array(target_policies, dtype=jnp.float32),
+            'target_policy': jnp.array(dummy_policies, dtype=jnp.float32),
             'equity_target': jnp.array(equity_targets, dtype=jnp.float32),
-            'action_mask': jnp.array(action_masks, dtype=jnp.bool_),
+            'action_mask': jnp.array(dummy_masks, dtype=jnp.bool_),
         }
 
     def _create_policy_target(
@@ -237,6 +280,8 @@ class ReplayBuffer:
         """Clear all data from buffer."""
         self._steps.clear()
         self._weights.clear()
+        self._encoded_boards.clear()
+        self._equity_targets_list.clear()
         self._insertion_index = 0
 
     def get_statistics(self) -> Dict[str, float]:
@@ -334,18 +379,26 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         self.beta = beta
         self._priorities: List[float] = []
 
-    def _add_step(self, step: GameStep, value_target: float) -> None:
-        """Add step with default priority."""
+    def _add_step(self, step: GameStep, value_target: float, weight: float = 1.0) -> None:
+        """Add step with default priority and pre-encoded features."""
         # New transitions get max priority
         max_priority = max(self._priorities) if self._priorities else 1.0
+
+        # Pre-encode the board
+        encoded = _encode_board_fast_single(step.board)
+        value_arr = np.asarray(value_target, dtype=np.float32)
 
         if len(self._steps) < self.max_size:
             self._steps.append((step, value_target))
             self._priorities.append(max_priority)
+            self._encoded_boards.append(encoded)
+            self._equity_targets_list.append(value_arr)
         else:
             idx = self._insertion_index % self.max_size
             self._steps[idx] = (step, value_target)
             self._priorities[idx] = max_priority
+            self._encoded_boards[idx] = encoded
+            self._equity_targets_list[idx] = value_arr
             self._insertion_index += 1
 
     def sample_batch(
@@ -386,37 +439,20 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         weights = (len(self._steps) * probs[indices]) ** (-self.beta)
         weights = weights / weights.max()  # Normalize by max for stability
 
-        # Get samples
-        sampled_steps = [self._steps[i] for i in indices]
+        # Fast path: use pre-encoded board features
+        board_encodings = np.array([self._encoded_boards[i] for i in indices])
+        equity_targets = np.array([self._equity_targets_list[i] for i in indices])
 
-        # Prepare batch (same as parent class)
-        board_encodings = []
-        target_policies = []
-        equity_targets = []
-        action_masks = []
-
-        for step, equity_target in sampled_steps:
-            encoded = encode_board(self._encoding_config, step.board)
-            # Keep as (26, feature_dim) - don't flatten
-            board_enc = encoded.position_features[0]
-            board_encodings.append(board_enc)
-
-            target_policy = self._create_policy_target(
-                step.move_taken,
-                step.legal_moves,
-            )
-            target_policies.append(target_policy)
-
-            equity_targets.append(equity_target)
-
-            action_mask = self._create_action_mask(step.legal_moves)
-            action_masks.append(action_mask)
+        # Dummy policy/mask for value-only training
+        action_size = get_action_space_size()
+        dummy_policies = np.zeros((sample_size, action_size), dtype=np.float32)
+        dummy_masks = np.ones((sample_size, action_size), dtype=bool)
 
         batch = {
             'board_encoding': jnp.array(board_encodings, dtype=jnp.float32),
-            'target_policy': jnp.array(target_policies, dtype=jnp.float32),
+            'target_policy': jnp.array(dummy_policies, dtype=jnp.float32),
             'equity_target': jnp.array(equity_targets, dtype=jnp.float32),
-            'action_mask': jnp.array(action_masks, dtype=jnp.bool_),
+            'action_mask': jnp.array(dummy_masks, dtype=jnp.bool_),
         }
 
         return batch, indices, weights
