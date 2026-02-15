@@ -22,7 +22,7 @@ pip install -e ".[all]"
 ### 2. Verify Installation
 
 ```bash
-# Run tests (will fail initially - we haven't implemented yet)
+## Run tests
 pytest
 
 # Check imports work
@@ -74,9 +74,6 @@ transformer-backgammon/
 │   ├── training/            # Training tests
 │   └── evaluation/          # Evaluation tests
 │
-├── configs/                 # Configuration files
-├── benchmarks/              # Benchmark position suites
-├── notebooks/               # Jupyter notebooks
 ├── scripts/                 # Utility scripts
 │
 ├── pyproject.toml           # Package configuration
@@ -86,10 +83,10 @@ transformer-backgammon/
 
 ## Next Steps
 
-1. **Implement core types** (`src/backgammon/core/types.py`)
-2. **Implement board logic** (`src/backgammon/core/board.py`)
-3. **Write tests** (`tests/core/test_board.py`)
-4. **Verify everything works** (`pytest`)
+1. **Run the smoke test** (`python scripts/smoke_test.py`) to validate training + search quickly
+2. **Try the example trainer** (`python scripts/train_example.py`) for a short end-to-end run
+3. **Run focused tests first** (`pytest tests/core -q`) before full-suite execution
+4. **Scale up** to longer training runs once local checks pass
 
 ## Dependencies
 
@@ -131,7 +128,7 @@ pip install -e .
 
 ### Test Failures
 
-Initially, tests will fail because we haven't implemented the modules yet. This is expected!
+If tests fail, ensure dependencies are installed and run a focused subset first (e.g. `pytest tests/core -q`).
 
 ## Development Tips
 
