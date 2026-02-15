@@ -32,7 +32,7 @@ from backgammon.evaluation.agents import pip_count_agent
 from backgammon.evaluation.network_agent import create_neural_agent
 from backgammon.training.self_play import generate_training_batch, compute_game_statistics
 from backgammon.training.replay_buffer import ReplayBuffer
-from backgammon.training.losses import train_step
+from backgammon.training.losses import train_step, compute_metrics
 from backgammon.training.metrics import MetricsLogger
 from backgammon.network.network import BackgammonTransformer
 from backgammon.evaluation.benchmark import (
@@ -80,6 +80,21 @@ class TrainingConfig:
 
     # Agent settings
     neural_agent_temperature: float = 0.3  # Exploration during self-play
+    temperature_start: float = 1.0  # Starting temperature for exploration schedule
+    temperature_end: float = 0.1  # Final temperature for exploration schedule
+    use_temperature_schedule: bool = True  # Enable temperature decay over training
+
+    # TD(lambda) settings
+    td_lambda: float = 0.7  # TD(lambda) parameter (0=TD(0), 1=MC, 0.7=recommended)
+    use_td_lambda: bool = True  # Enable TD(lambda) targets (requires neural self-play)
+
+    # Position weighting
+    use_position_weighting: bool = True  # Weight positions by importance for sampling
+
+    # Validation and early stopping
+    validation_fraction: float = 0.1  # Fraction of games used for validation
+    early_stopping_patience: int = 5  # Stop after N eval checkpoints without improvement
+    use_early_stopping: bool = True  # Enable early stopping
 
     # Evaluation settings
     eval_every_n_batches: int = 50  # Run evaluation checkpoint every N batches
@@ -146,6 +161,31 @@ class TrainingPhase:
         """Check if we should use pip count agents (warmstart phase)."""
         return self.total_games_played < self.config.warmstart_games
 
+    def get_current_temperature(self) -> float:
+        """Get current exploration temperature based on training progress.
+
+        Linearly decays from temperature_start to temperature_end over
+        the course of training. During warmstart, returns temperature_start.
+
+        Returns:
+            Current temperature value.
+        """
+        if not self.config.use_temperature_schedule:
+            return self.config.neural_agent_temperature
+
+        total_target = (self.config.warmstart_games + self.config.early_phase_games +
+                        self.config.mid_phase_games + self.config.late_phase_games)
+        # Progress through non-warmstart training
+        neural_games = max(0, self.total_games_played - self.config.warmstart_games)
+        neural_total = total_target - self.config.warmstart_games
+        if neural_total <= 0:
+            return self.config.temperature_start
+
+        progress = min(1.0, neural_games / neural_total)
+        return self.config.temperature_start + progress * (
+            self.config.temperature_end - self.config.temperature_start
+        )
+
 
 def create_train_state(config: TrainingConfig, rng: jax.random.PRNGKey) -> train_state.TrainState:
     """Create initial training state with model and optimizer.
@@ -198,13 +238,19 @@ def create_train_state(config: TrainingConfig, rng: jax.random.PRNGKey) -> train
     )
 
 
-def save_checkpoint(state: train_state.TrainState, config: TrainingConfig, step: int):
+def save_checkpoint(
+    state: train_state.TrainState,
+    config: TrainingConfig,
+    step: int,
+    is_best: bool = False,
+):
     """Save training checkpoint.
 
     Args:
         state: Current training state
         config: Training configuration
         step: Current step number
+        is_best: If True, also save as best model checkpoint
     """
     checkpoint_dir = Path(config.checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -216,6 +262,17 @@ def save_checkpoint(state: train_state.TrainState, config: TrainingConfig, step:
         keep=5,  # Keep last 5 checkpoints
         overwrite=True,  # Allow overwriting existing checkpoints
     )
+
+    if is_best:
+        best_dir = checkpoint_dir / "best"
+        best_dir.mkdir(parents=True, exist_ok=True)
+        checkpoints.save_checkpoint(
+            ckpt_dir=str(best_dir),
+            target=state,
+            step=step,
+            keep=1,  # Only keep the single best
+            overwrite=True,
+        )
 
 
 def save_metrics(metrics: TrainingMetrics, config: TrainingConfig):
@@ -251,13 +308,21 @@ def train(config: Optional[TrainingConfig] = None):
     print("🔧 Initializing model and optimizer...")
     state = create_train_state(config, jax_rng)
 
-    # Create replay buffer
+    # Create replay buffer (training)
     print("💾 Creating replay buffer...")
     replay_buffer = ReplayBuffer(
         max_size=config.replay_buffer_size,
         min_size=config.replay_buffer_min_size,
         eviction_policy='fifo',
+        use_position_weighting=config.use_position_weighting,
     )
+
+    # Create validation buffer (for early stopping)
+    val_buffer = ReplayBuffer(
+        max_size=max(1000, config.replay_buffer_size // 10),
+        min_size=100,
+        eviction_policy='fifo',
+    ) if config.validation_fraction > 0 else None
 
     # Create metrics logger
     print("📊 Setting up metrics logging...")
@@ -278,6 +343,16 @@ def train(config: Optional[TrainingConfig] = None):
     # Evaluation history
     eval_history = EvalHistory()
     eval_rng = np.random.default_rng(config.seed + 1000)
+
+    # Early stopping state
+    best_val_loss = float('inf')
+    patience_counter = 0
+    best_state_step = 0
+
+    # LR plateau detection state
+    lr_plateau_best = float('inf')
+    lr_plateau_counter = 0
+    lr_plateau_patience = 3  # Warn after 3 eval checkpoints without improvement
 
     # Create agents
     pip_agent = pip_count_agent()
@@ -308,26 +383,36 @@ def train(config: Optional[TrainingConfig] = None):
                 black_agent = pip_agent
             else:
                 # Self-play: neural network vs itself (with exploration)
+                current_temp = phase_manager.get_current_temperature()
                 neural_agent = create_neural_agent(
                     state=state,
-                    temperature=config.neural_agent_temperature,
+                    temperature=current_temp,
                     name="NeuralNet",
                 )
                 white_agent = neural_agent
                 black_agent = neural_agent
 
             # Generate training batch through self-play
+            # Record value estimates for TD(lambda) during neural self-play
+            record_values = config.use_td_lambda and not use_warmstart
             games = generate_training_batch(
                 num_games=config.games_per_batch,
                 get_variant_fn=get_variants_fn,
                 white_agent=white_agent,
                 black_agent=black_agent,
                 rng=rng,
+                record_value_estimates=record_values,
             )
 
-            # Add games to replay buffer
+            # Add games to replay buffer (with TD(lambda) targets if enabled)
+            # Split between training and validation buffers
+            td_lambda_param = config.td_lambda if record_values else None
             for game in games:
-                replay_buffer.add_game(game)
+                if (val_buffer is not None and
+                        rng.random() < config.validation_fraction):
+                    val_buffer.add_game(game, td_lambda=td_lambda_param)
+                else:
+                    replay_buffer.add_game(game, td_lambda=td_lambda_param)
 
             # Compute game statistics
             stats = compute_game_statistics(games)
@@ -339,6 +424,8 @@ def train(config: Optional[TrainingConfig] = None):
             # Train neural network (if buffer is ready)
             train_loss = 0.0
             train_acc = 0.0
+            max_grad_norm_seen = 0.0
+            grad_clips = 0
 
             if replay_buffer.is_ready():
                 # Run multiple training steps per game batch
@@ -354,8 +441,12 @@ def train(config: Optional[TrainingConfig] = None):
 
                     # Accumulate metrics
                     train_loss += float(step_metrics['total_loss'])
-                    # Note: We don't have accuracy easily available from train_step
-                    # Could add it if needed
+
+                    # Track gradient clipping diagnostics
+                    gn = float(step_metrics.get('grad_norm', 0.0))
+                    max_grad_norm_seen = max(max_grad_norm_seen, gn)
+                    if gn > config.max_grad_norm:
+                        grad_clips += 1
 
                     total_train_steps += 1
 
@@ -394,18 +485,25 @@ def train(config: Optional[TrainingConfig] = None):
                 'games_per_second': metrics.games_per_second,
                 'replay_buffer_size': len(replay_buffer),
                 'total_train_steps': total_train_steps,
+                'max_grad_norm': max_grad_norm_seen,
+                'grad_clips': grad_clips,
             }, step=batch_num, prefix=f"{phase_name}/")
 
             # Console logging
             if batch_num % config.log_every_n_batches == 0:
                 buffer_status = f"{len(replay_buffer)}/{replay_buffer.max_size}"
+                temp_str = f"Temp: {phase_manager.get_current_temperature():.2f} | " if not use_warmstart else ""
+                grad_str = f" | GradNorm: {max_grad_norm_seen:.2f}" if max_grad_norm_seen > 0 else ""
+                clip_str = f" (clipped {grad_clips}x)" if grad_clips > 0 else ""
                 print(f"[{phase_name:8s}] Batch {batch_num:4d} | "
                       f"Games: {phase_manager.total_games_played:5d} | "
                       f"Loss: {train_loss:.4f} | "
                       f"WR: {stats['white_win_rate']:.3f} | "
                       f"Moves: {stats['avg_moves']:.1f} | "
+                      f"{temp_str}"
                       f"Buffer: {buffer_status} | "
-                      f"Speed: {metrics.games_per_second:.1f} g/s")
+                      f"Speed: {metrics.games_per_second:.1f} g/s"
+                      f"{grad_str}{clip_str}")
 
                 # Save metrics to file
                 save_metrics(metrics, config)
@@ -422,6 +520,51 @@ def train(config: Optional[TrainingConfig] = None):
                     rng=eval_rng,
                     verbose=True,
                 )
+
+                # Validation loss for early stopping
+                if val_buffer is not None and val_buffer.is_ready():
+                    val_batch = val_buffer.sample_batch(
+                        min(config.training_batch_size, len(val_buffer))
+                    )
+                    val_metrics = compute_metrics(state, val_batch)
+                    val_loss = val_metrics['loss']
+
+                    if batch_num % config.log_every_n_batches == 0:
+                        print(f"  Val loss: {val_loss:.4f} "
+                              f"(best: {best_val_loss:.4f}, "
+                              f"patience: {patience_counter}/{config.early_stopping_patience})")
+
+                    if val_loss < best_val_loss:
+                        best_val_loss = val_loss
+                        patience_counter = 0
+                        best_state_step = batch_num
+                        # Save best model checkpoint
+                        save_checkpoint(state, config, batch_num, is_best=True)
+                    else:
+                        patience_counter += 1
+
+                    # LR plateau detection (diagnostic)
+                    if val_loss < lr_plateau_best:
+                        lr_plateau_best = val_loss
+                        lr_plateau_counter = 0
+                    else:
+                        lr_plateau_counter += 1
+                        if lr_plateau_counter >= lr_plateau_patience:
+                            print(f"  ⚠ Val loss plateaued for {lr_plateau_counter} "
+                                  f"evals (consider reducing LR)")
+
+                    metrics_logger.log_metrics({
+                        'val_loss': val_loss,
+                        'best_val_loss': best_val_loss,
+                        'lr_plateau_counter': lr_plateau_counter,
+                    }, step=batch_num, prefix="validation/")
+
+                    if (config.use_early_stopping and
+                            patience_counter >= config.early_stopping_patience):
+                        print(f"\n⏹ Early stopping triggered at batch {batch_num}")
+                        print(f"  Best val loss: {best_val_loss:.4f} at step {best_state_step}")
+                        print(f"  No improvement for {patience_counter} eval checkpoints")
+                        break
 
             # Checkpointing
             if batch_num % config.checkpoint_every_n_batches == 0:

@@ -21,6 +21,7 @@ from backgammon.core.types import (
     EncodingConfig,
 )
 from backgammon.core.dice import ALL_DICE_ROLLS
+from backgammon.core.board import pip_count
 
 
 # ==============================================================================
@@ -94,7 +95,47 @@ def rich_encoding_config() -> EncodingConfig:
         include_geometric_features=True,
         include_strategic_features=True,
         include_dice_encoding=False,
+        include_global_features=False,
         feature_dim=45,
+    )
+
+
+def enhanced_encoding_config() -> EncodingConfig:
+    """Enhanced encoding with global features for stronger play.
+
+    Adds contact detection, pip counts, home board control, prime detection,
+    and bearoff progress as global features broadcast to every position.
+    These help the network distinguish game phases and strategic situations.
+
+    Returns:
+        EncodingConfig with feature_dim=10 (2 raw + 8 global)
+    """
+    return EncodingConfig(
+        use_one_hot_counts=False,
+        include_geometric_features=False,
+        include_strategic_features=False,
+        include_dice_encoding=False,
+        include_global_features=True,
+        feature_dim=10,
+    )
+
+
+def full_encoding_config() -> EncodingConfig:
+    """Full encoding with all available features.
+
+    Combines one-hot counts, geometric, strategic, and global features
+    for maximum information. Most sample-efficient but highest dimensionality.
+
+    Returns:
+        EncodingConfig with feature_dim=53 (32 + 3 + 10 + 8)
+    """
+    return EncodingConfig(
+        use_one_hot_counts=True,
+        include_geometric_features=True,
+        include_strategic_features=True,
+        include_dice_encoding=False,
+        include_global_features=True,
+        feature_dim=53,
     )
 
 
@@ -127,6 +168,10 @@ def feature_dimension(config: EncodingConfig) -> int:
     # Strategic features
     if config.include_strategic_features:
         dim += 10  # Various strategic indicators
+
+    # Global features (broadcast to every position)
+    if config.include_global_features:
+        dim += 8  # contact, pip counts, home board, primes, bearoff
 
     return dim
 
@@ -325,6 +370,149 @@ def encode_strategic(board: Board, point: Point) -> NDArray[np.float32]:
 
 
 # ==============================================================================
+# GLOBAL FEATURES
+# ==============================================================================
+
+
+def compute_global_features(board: Board) -> NDArray[np.float32]:
+    """Compute global board features that apply to the entire position.
+
+    These features capture high-level strategic information that is the same
+    regardless of which position (point) is being encoded. They are broadcast
+    (appended) to every position's feature vector.
+
+    Features computed (8 total):
+    1. is_contact: Whether pieces are still in contact (not a pure race)
+    2. our_pip_norm: Normalized pip count for current player (0-1)
+    3. opp_pip_norm: Normalized pip count for opponent (0-1)
+    4. our_home_points: Fraction of home board points made (0-1)
+    5. opp_home_points: Fraction of opponent's home board points made (0-1)
+    6. our_prime_len: Length of our longest prime / 6 (0-1)
+    7. opp_prime_len: Length of opponent's longest prime / 6 (0-1)
+    8. our_bearoff_progress: Fraction of our checkers borne off (0-1)
+
+    Args:
+        board: Current board state.
+
+    Returns:
+        Array of shape (8,) with global features.
+    """
+    player = board.player_to_move
+    opponent = player.opponent()
+
+    # 1. Contact detection
+    is_contact = _detect_contact(board, player)
+
+    # 2-3. Normalized pip counts (167 is max possible pip count)
+    our_pips = pip_count(board, player) / 167.0
+    opp_pips = pip_count(board, opponent) / 167.0
+
+    # 4-5. Home board control (how many of the 6 home board points are "made")
+    our_home = _count_home_board_points(board, player) / 6.0
+    opp_home = _count_home_board_points(board, opponent) / 6.0
+
+    # 6-7. Longest prime length
+    our_prime = _longest_prime(board, player) / 6.0
+    opp_prime = _longest_prime(board, opponent) / 6.0
+
+    # 8. Bearoff progress (checkers borne off / 15)
+    our_bearoff = board.get_checkers(player, 25) / 15.0
+
+    return np.array([
+        is_contact, our_pips, opp_pips,
+        our_home, opp_home,
+        our_prime, opp_prime,
+        our_bearoff,
+    ], dtype=np.float32)
+
+
+def _detect_contact(board: Board, player: Player) -> float:
+    """Detect whether pieces are still in contact.
+
+    Returns 1.0 if any of our checkers are behind any opponent checkers,
+    0.0 if it's a pure race (no contact possible).
+
+    Args:
+        board: Board state.
+        player: Current player.
+
+    Returns:
+        1.0 if in contact, 0.0 if pure race.
+    """
+    opponent = player.opponent()
+
+    # Check bar first - if anyone's on the bar, definitely in contact
+    if board.get_checkers(player, 0) > 0 or board.get_checkers(opponent, 0) > 0:
+        return 1.0
+
+    if player == Player.WHITE:
+        # White moves 24→1 (high to low)
+        our_furthest = 0
+        their_closest = 25
+        for point in range(1, 25):
+            if board.get_checkers(player, point) > 0:
+                our_furthest = max(our_furthest, point)
+            if board.get_checkers(opponent, point) > 0:
+                their_closest = min(their_closest, point)
+        return 0.0 if our_furthest < their_closest else 1.0
+    else:
+        # Black moves 1→24 (low to high)
+        our_furthest = 25
+        their_closest = 0
+        for point in range(1, 25):
+            if board.get_checkers(player, point) > 0:
+                our_furthest = min(our_furthest, point)
+            if board.get_checkers(opponent, point) > 0:
+                their_closest = max(their_closest, point)
+        return 0.0 if our_furthest > their_closest else 1.0
+
+
+def _count_home_board_points(board: Board, player: Player) -> int:
+    """Count number of made points in the player's home board.
+
+    A made point has 2 or more checkers.
+
+    Args:
+        board: Board state.
+        player: Player to check.
+
+    Returns:
+        Number of made points (0-6).
+    """
+    if player == Player.WHITE:
+        home_range = range(1, 7)  # Points 1-6
+    else:
+        home_range = range(19, 25)  # Points 19-24
+
+    count = 0
+    for point in home_range:
+        if board.get_checkers(player, point) >= 2:
+            count += 1
+    return count
+
+
+def _longest_prime(board: Board, player: Player) -> int:
+    """Find the length of the longest prime (consecutive made points).
+
+    Args:
+        board: Board state.
+        player: Player to check.
+
+    Returns:
+        Length of longest prime (0-6, capped at 6).
+    """
+    max_prime = 0
+    current_prime = 0
+    for point in range(1, 25):
+        if board.get_checkers(player, point) >= 2:
+            current_prime += 1
+            max_prime = max(max_prime, current_prime)
+        else:
+            current_prime = 0
+    return min(max_prime, 6)
+
+
+# ==============================================================================
 # FULL ENCODING (CONFIGURABLE)
 # ==============================================================================
 
@@ -401,11 +589,26 @@ def encode_board(config: EncodingConfig, board: Board) -> EncodedBoard:
     Returns:
         EncodedBoard with batch_size=1
     """
+    # Compute per-position feature dim (without global features)
+    per_position_dim = config.feature_dim
+    if config.include_global_features:
+        per_position_dim -= 8  # Global features added separately
+
     # Extract features for all 26 positions
     position_features = np.zeros((1, 26, config.feature_dim), dtype=np.float32)
 
+    # Compute global features once if needed
+    global_feats = compute_global_features(board) if config.include_global_features else None
+
     for point in range(26):
-        position_features[0, point] = extract_position_features(config, board, point)
+        per_pos = extract_position_features(config, board, point)
+
+        if global_feats is not None:
+            # Per-position features exclude global features in encode_full,
+            # so we append global features here
+            position_features[0, point] = np.concatenate([per_pos, global_feats])
+        else:
+            position_features[0, point] = per_pos
 
     return EncodedBoard(
         position_features=position_features,
@@ -430,8 +633,16 @@ def encode_boards(config: EncodingConfig, boards: List[Board]) -> EncodedBoard:
     position_features = np.zeros((batch_size, 26, config.feature_dim), dtype=np.float32)
 
     for i, board in enumerate(boards):
+        # Compute global features once per board
+        global_feats = compute_global_features(board) if config.include_global_features else None
+
         for point in range(26):
-            position_features[i, point] = extract_position_features(config, board, point)
+            per_pos = extract_position_features(config, board, point)
+
+            if global_feats is not None:
+                position_features[i, point] = np.concatenate([per_pos, global_feats])
+            else:
+                position_features[i, point] = per_pos
 
     return EncodedBoard(
         position_features=position_features,

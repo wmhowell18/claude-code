@@ -1,8 +1,8 @@
 # Backgammon Transformer — Feature Roadmap & TODO
 
-> **Status**: Search, benchmarking, and doubling cube complete. 0/1/2-ply search with batch evaluation. Win rate tracking and benchmark positions in training loop. Full doubling cube with match play, match equity tables, cubeful equity, and cube decision network head.
+> **Status**: Search, benchmarking, training improvements, and doubling cube complete. 0/1/2-ply search with batch evaluation, move ordering with progressive deepening, transposition table, and TD(lambda) training implemented. Win rate tracking, benchmark positions, position weighting, validation splits, and early stopping integrated into training loop. Race equity formula for pure race positions. Full doubling cube with match play, match equity tables, cubeful equity, and cube decision network head.
 >
-> **Current Maturity**: ~6/10 for competitive play. Solid game engine + neural training + search + benchmarking + doubling cube + match play. Missing advanced training techniques (TD(lambda)), GnuBG interface, and MCTS.
+> **Current Maturity**: ~7/10 for competitive play. Solid game engine + neural training + search + benchmarking + TD(lambda) + exploration schedule + global encoding features + race evaluation + training infrastructure (position weighting, validation, early stopping) + doubling cube + match play. Missing GnuBG interface, MCTS, and rollout-based training.
 
 ---
 
@@ -24,8 +24,8 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [x] **1. 1-ply lookahead with dice averaging** — Evaluate all legal moves, for each apply the move, then average the equity over all 21 dice rolls. This is the single biggest strength multiplier (~10x). See Jacob Hilton's approach. (Effort: M, Impact: massive) *(Feb 2025)*
 - [x] **2. 2-ply search** — After your move, consider opponent's best response across all their dice rolls. (Effort: M, Impact: large) *(Feb 2026)*
 - [x] **3. Batch evaluation of multiple positions** — Feed all candidate resulting positions into the network in one GPU forward pass instead of one-by-one. Critical for search speed. (Effort: S, Impact: large for speed) *(Feb 2025)*
-- [x] **4. Move ordering heuristics** — `order_moves()` and `select_move_2ply_pruned()` in `evaluation/search.py`. Scores by pip improvement, hits, points made, blot penalties. (Effort: S, Impact: moderate) *(Feb 2026)*
-- [ ] **5. Transposition table / position cache** — Avoid re-evaluating identical positions across search. Hash board state → equity. (Effort: M, Impact: moderate)
+- [x] **4. Move ordering heuristics + progressive deepening** — Heuristic-based move scoring (hits, bearoffs, made points, blots) for ordering. 2-ply search uses progressive deepening: evaluate all moves at 0-ply, then only top-k candidates at 2-ply. `order_moves()` and `select_move_2ply_pruned()` in `evaluation/search.py`. (Effort: S, Impact: moderate) *(Feb 2026)*
+- [x] **5. Transposition table / position cache** — MD5-based board hashing with configurable cache size. Stores position evaluations keyed by board state + ply depth. LRU-style eviction. (Effort: M, Impact: moderate) *(Feb 2026)*
 - [x] **6. Parallel move evaluation** — Batch all candidate resulting positions into one network call. Complementary to item 3. (Effort: S, Impact: large for speed) *(Feb 2025)*
 
 ### Doubling Cube (essential for real backgammon)
@@ -51,25 +51,25 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 
 ### Training Methodology
 
-- [ ] **16. TD(lambda) returns** — Intermediate positions get discounted credit from future outcomes, not just final result. Much better training signal. (Effort: M, Impact: large)
+- [x] **16. TD(lambda) returns** — Full TD(lambda) implementation following TD-Gammon (Tesauro 1995). Records network equity estimates during self-play, computes targets using backward eligibility traces in fixed-perspective (White) 6-dim equity space. Configurable lambda (default 0.7). Integrated into replay buffer and training loop. (Effort: M, Impact: large) *(Feb 2026)*
 - [ ] **17. N-step bootstrapping** — Use V(s') from the network for truncated episodes instead of waiting for game end. (Effort: M, Impact: large)
 - [ ] **18. Rollout-based training targets** — 1-ply rollout equity gives much better targets than raw game outcome. Key technique from gnubg. (Effort: L, Impact: large)
-- [ ] **19. Exploration schedule** — Decay self-play temperature over training (e.g., 1.0 → 0.1). Currently fixed at 0.3. (Effort: S, Impact: moderate)
+- [x] **19. Exploration schedule** — Linear temperature decay from 1.0 → 0.1 over training. Configurable start/end temperatures. Logged per-batch. Warmstart phase uses fixed temperature. (Effort: S, Impact: moderate) *(Feb 2026)*
 - [ ] **20. Opponent diversity** — Periodically play against older snapshots and baseline agents, not just self. Prevents forgetting. (Effort: M, Impact: moderate)
-- [ ] **21. Position weighting** — Weight endgame and critical (high-equity-error) positions more heavily in training. (Effort: S, Impact: moderate)
+- [x] **21. Position weighting** — Weight positions by game progress (late game = higher weight) and equity uncertainty (50/50 positions = higher weight). Integrated into replay buffer with weighted sampling. (Effort: S, Impact: moderate) *(Feb 2026)*
 - [ ] **22. More warmstart games** — Current 500 games is thin. Consider 2000-5000 pip count warmstart games. (Effort: S, Impact: small)
-- [ ] **23. Performance-tied LR scheduling** — Reduce LR when validation equity error plateaus, not just cosine decay. (Effort: S, Impact: moderate)
-- [ ] **24. Gradient clipping diagnostics** — Log when gradient clipping activates, how often, and magnitude. (Effort: S, Impact: small)
+- [x] **23. Performance-tied LR scheduling** — Validation loss plateau detection with warnings. Logs plateau counter to metrics. Used alongside cosine schedule and early stopping. (Effort: S, Impact: moderate) *(Feb 2026)*
+- [x] **24. Gradient clipping diagnostics** — Log max gradient norm and clip frequency per batch. Console output shows when clipping activates. Tracked in metrics. (Effort: S, Impact: small) *(Feb 2026)*
 
 ### Encoding Improvements
 
-- [x] **25. Contact vs race detection** — `is_past_contact()` in `core/board.py` and encoded in `encode_global_board_features()`. (Effort: S, Impact: large) *(Feb 2026)*
-- [x] **26. Pip count as input feature** — Normalized pip counts (our/opp/diff) in `encode_global_board_features()`. (Effort: S, Impact: moderate) *(Feb 2026)*
+- [x] **25. Contact vs race detection** — Binary feature indicating whether checkers are still in contact. `is_past_contact()` in `core/board.py` and encoded in `encode_global_board_features()`. (Effort: S, Impact: large) *(Feb 2026)*
+- [x] **26. Pip count as input feature** — Normalized pip counts (our/opp/diff) in `encode_global_board_features()`. Part of global features broadcast to all positions. (Effort: S, Impact: moderate) *(Feb 2026)*
 - [x] **27. Home board control features** — `home_board_points_made()` in `core/board.py`, encoded as fraction (0-1) in global features. (Effort: S, Impact: moderate) *(Feb 2026)*
-- [ ] **28. Prime detection** — Length and location of longest prime for each player. (Effort: S, Impact: moderate)
+- [x] **28. Prime detection** — Length of longest prime for each player, capped at 6, normalized. Part of global features. (Effort: S, Impact: moderate) *(Feb 2026)*
 - [ ] **29. Blot vulnerability encoding** — Which checkers are within direct/indirect hitting range. (Effort: M, Impact: moderate)
 - [ ] **30. Escape features** — How many dice rolls let a trapped/back checker escape. (Effort: M, Impact: moderate)
-- [x] **31. Race equity estimate** — `race_equity_estimate()` using adjusted pip count / Keith count formula in `core/board.py`. Encoded in global features. (Effort: S, Impact: small) *(Feb 2026)*
+- [x] **31. Race equity estimate** — `race_equity_estimate()` using adjusted pip count / Keith count formula in `core/board.py`. Also available standalone in `evaluation/race.py`. Encoded in global features. (Effort: S, Impact: small) *(Feb 2026)*
 - [x] **32. Bearoff progress features** — Fraction of checkers borne off for each player in `encode_global_board_features()`. (Effort: S, Impact: small) *(Feb 2026)*
 
 ### Architecture
@@ -95,7 +95,7 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 ### Endgame
 
 - [ ] **41. Bearoff database (<=6 checkers)** — Precomputed perfect play for simplified endgame positions. (Effort: L, Impact: large for endgame)
-- [x] **42. Race equity formula** — `race_equity_estimate()` in `core/board.py` using adjusted pip count. See also item 31. (Effort: S, Impact: moderate) *(Feb 2026)*
+- [x] **42. Race equity formula** — Effective Pip Count / Keith count for pure race evaluation. Implemented in `evaluation/race.py` and `core/board.py` with EPC corrections and sigmoid equity mapping. (Effort: S, Impact: moderate) *(Feb 2026)*
 - [ ] **43. One-sided bearoff database** — No contact, just bear off optimally. (Effort: M, Impact: moderate)
 - [ ] **44. Contact endgame tablebases** — Perfect play for simple contact positions. (Effort: L, Impact: moderate)
 
@@ -112,9 +112,9 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [ ] **50. Distributed training** — Scale across multiple GPUs/TPUs with data parallelism. (Effort: L, Impact: large for speed)
 - [ ] **51. Async game generation** — Generate self-play games in parallel with gradient updates. (Effort: M, Impact: large for speed)
 - [ ] **52. Hyperparameter search** — Grid or Bayesian optimization over architecture, LR, batch size, etc. (Effort: M, Impact: moderate)
-- [ ] **53. Train/validation/test splits** — Proper held-out evaluation to detect overfitting. (Effort: S, Impact: moderate)
-- [ ] **54. Early stopping** — Stop training when validation equity error stops improving. (Effort: S, Impact: moderate)
-- [ ] **55. Best-model tracking** — Keep the checkpoint with best validation metric, not just latest. (Effort: S, Impact: small)
+- [x] **53. Train/validation/test splits** — Games randomly split between training and validation buffers (configurable fraction, default 10%). Validation loss computed at eval checkpoints. (Effort: S, Impact: moderate) *(Feb 2026)*
+- [x] **54. Early stopping** — Training stops when validation loss hasn't improved for N consecutive eval checkpoints (configurable patience, default 5). Saves best model automatically. (Effort: S, Impact: moderate) *(Feb 2026)*
+- [x] **55. Best-model tracking** — Saves best model checkpoint (by validation loss) to a dedicated `checkpoints/best/` directory, separate from rolling checkpoints. (Effort: S, Impact: small) *(Feb 2026)*
 
 ---
 
@@ -201,11 +201,13 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 
 1. ~~**Items 1-3, 6** (1-ply search + batch eval)~~ — DONE (search.py)
 2. ~~**Items 12, 13, 15** (benchmarking)~~ — DONE (benchmark.py + training loop integration)
-3. ~~**Items 7-10** (doubling cube)~~ — DONE (core/cube.py + types + network cube head)
-4. **Longer training run** with the fixed pipeline — see where the model plateaus
-5. **Items 16-18** (TD(lambda) + rollout targets) — dramatically better training signal
-6. **Items 25-28** (better encoding) — more signal for the network to learn from
-7. **Items 45-46** (MCTS) — sophisticated search for strongest play
+3. ~~**Items 4-5** (move ordering + transposition table)~~ — DONE (search.py: progressive deepening, TranspositionTable)
+4. ~~**Item 16** (TD(lambda))~~ — DONE (td_lambda.py + self_play.py + replay_buffer.py)
+5. ~~**Items 19, 25-28** (exploration schedule + encoding improvements)~~ — DONE (encoder.py + train.py)
+6. ~~**Items 7-10** (doubling cube)~~ — DONE (core/cube.py + types + network cube head)
+7. **Longer training run** with the improved pipeline — see where the model plateaus
+8. **Items 17-18** (N-step bootstrapping + rollout targets) — even better training signal
+9. **Items 45-46** (MCTS) — sophisticated search for strongest play
 
 ---
 
@@ -222,6 +224,20 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [x] **Benchmark position suite** — 10 curated positions in `evaluation/benchmark.py` covering opening, race, bearoff, contact, prime, gammon. (Feb 2026)
 - [x] **Win rate tracking over training** — `run_evaluation_checkpoint()` callback integrated into training loop. Evaluates vs random & pip count agents at configurable intervals. (Feb 2026)
 - [x] **Equity error metric** — MAE/RMSE/max-error on benchmark positions with per-position breakdown. (Feb 2026)
+- [x] **Move ordering + progressive deepening** — Heuristic-based move scoring for ordering. 2-ply uses 0-ply pre-screening to select top-k candidates. (Feb 2026)
+- [x] **Transposition table** — MD5-based position caching with configurable size and LRU eviction. (Feb 2026)
+- [x] **TD(lambda) returns** — Full implementation with 6-dim equity, fixed-perspective TD computation, backward eligibility traces. Integrated into self-play, replay buffer, and training loop. (Feb 2026)
+- [x] **Exploration schedule** — Linear temperature decay (1.0→0.1) over training for self-play exploration. (Feb 2026)
+- [x] **Global encoding features** — Contact detection, pip counts, home board control, prime detection, and bearoff progress. 8 global features broadcast to all 26 positions. New `enhanced_encoding_config()` and `full_encoding_config()` presets. (Feb 2026)
+- [x] **Bearoff progress features** — Checkers borne off as a normalized feature. Part of global features (feature index 7). (Feb 2026)
+- [x] **Race equity formula** — Effective Pip Count with positional corrections (gap, crossover, bar, wastage) and sigmoid mapping to equity. Standalone evaluation for pure race positions in `evaluation/race.py`. (Feb 2026)
+- [x] **Position weighting** — Replay buffer weighted sampling based on game progress and equity uncertainty. Late-game and uncertain positions sampled more frequently. (Feb 2026)
+- [x] **Train/validation splits** — Random game-level split between training and validation buffers. Validation loss tracked at evaluation checkpoints. (Feb 2026)
+- [x] **Early stopping** — Patience-based early stopping on validation loss. Best model checkpoint saved automatically. (Feb 2026)
+- [x] **Fix circular import** — Lazy import of `play_game` in `evaluator.py` to break `evaluation <-> training` circular dependency. (Feb 2026)
+- [x] **Best-model tracking** — Dedicated `checkpoints/best/` directory for best validation loss model. (Feb 2026)
+- [x] **LR plateau detection** — Warns when validation loss plateaus for consecutive eval checkpoints. (Feb 2026)
+- [x] **Gradient clipping diagnostics** — Per-batch max grad norm and clip frequency tracking in console and metrics. (Feb 2026)
 - [x] **Fix value-only agent crash** — 0-ply `NeuralNetworkAgent` now falls back to value-based search when policy head is disabled. (Feb 2026)
 - [x] **Doubling cube types & state** — CubeState, CubeOwner, CubeAction in `core/types.py`. Full cube module at `core/cube.py`. (Feb 2026)
 - [x] **Cube decision network head** — CubeHead (4-output) in `network/network.py` with `use_cube_head` config. (Feb 2026)

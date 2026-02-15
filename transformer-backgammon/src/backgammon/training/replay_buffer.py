@@ -37,8 +37,12 @@ class ReplayBuffer:
     min_size: int = 1_000
     eviction_policy: str = 'fifo'
 
+    # Position weighting
+    use_position_weighting: bool = False
+
     # Internal storage
     _steps: List[Tuple[GameStep, float]] = field(default_factory=list)
+    _weights: List[float] = field(default_factory=list)
     _insertion_index: int = 0
     _encoding_config: Optional[object] = None
 
@@ -55,44 +59,70 @@ class ReplayBuffer:
         """Check if buffer has enough data for sampling."""
         return len(self._steps) >= self.min_size
 
-    def add_game(self, game_result: GameResult) -> None:
+    def add_game(
+        self,
+        game_result: GameResult,
+        td_lambda: Optional[float] = None,
+    ) -> None:
         """Add a complete game to the buffer.
 
         Args:
             game_result: Completed game with trajectory and outcome
+            td_lambda: If set, use TD(lambda) targets instead of pure
+                Monte Carlo targets. Requires value_estimates in game_result.
+                Typical value: 0.7. If None, uses pure MC targets (lambda=1.0).
         """
         if game_result.outcome is None:
             return  # Skip draws (max moves reached)
 
-        # Add each step with its equity target from the perspective of the
-        # player to move at that step.
-        for step in game_result.steps:
-            equity = outcome_to_equity(game_result.outcome, step.player)
-            value_target = equity.to_array()  # shape (5,)
+        # Compute targets using TD(lambda) if available, else Monte Carlo
+        if td_lambda is not None and game_result.value_estimates is not None:
+            from backgammon.training.td_lambda import compute_td_lambda_targets
+            targets = compute_td_lambda_targets(game_result, lambda_param=td_lambda)
+        else:
+            targets = None
 
-            self._add_step(step, value_target)
+        # Add each step with its equity target and weight
+        num_steps = len(game_result.steps)
+        for i, step in enumerate(game_result.steps):
+            if targets is not None and i < len(targets):
+                value_target = targets[i]
+            else:
+                # Fallback: pure Monte Carlo target
+                equity = outcome_to_equity(game_result.outcome, step.player)
+                value_target = equity.to_array()  # shape (5,)
 
-    def _add_step(self, step: GameStep, value_target: float) -> None:
+            weight = _compute_position_weight(
+                value_target, i, num_steps,
+            ) if self.use_position_weighting else 1.0
+
+            self._add_step(step, value_target, weight)
+
+    def _add_step(self, step: GameStep, value_target: float, weight: float = 1.0) -> None:
         """Add single step to buffer.
 
         Args:
             step: Game step (state, action, player)
             value_target: Value target for this position
+            weight: Sampling weight for this position
         """
         if len(self._steps) < self.max_size:
             # Buffer not full yet, just append
             self._steps.append((step, value_target))
+            self._weights.append(weight)
         else:
             # Buffer full, evict according to policy
             if self.eviction_policy == 'fifo':
                 # Overwrite oldest entry (circular buffer)
                 idx = self._insertion_index % self.max_size
                 self._steps[idx] = (step, value_target)
+                self._weights[idx] = weight
                 self._insertion_index += 1
             elif self.eviction_policy == 'random':
                 # Replace random entry
                 idx = random.randint(0, self.max_size - 1)
                 self._steps[idx] = (step, value_target)
+                self._weights[idx] = weight
             else:
                 raise ValueError(f"Unknown eviction policy: {self.eviction_policy}")
 
@@ -117,9 +147,19 @@ class ReplayBuffer:
                 f"Buffer not ready: {len(self._steps)} < {self.min_size}"
             )
 
-        # Sample random indices
+        # Sample indices (weighted if position weighting is enabled)
         sample_size = min(batch_size, len(self._steps))
-        sampled_steps = random.sample(self._steps, sample_size)
+
+        if self.use_position_weighting and self._weights:
+            # Weighted sampling: positions with higher weights are sampled more
+            weights_arr = np.array(self._weights[:len(self._steps)])
+            probs = weights_arr / weights_arr.sum()
+            indices = np.random.choice(
+                len(self._steps), size=sample_size, replace=False, p=probs,
+            )
+            sampled_steps = [self._steps[i] for i in indices]
+        else:
+            sampled_steps = random.sample(self._steps, sample_size)
 
         # Prepare batch arrays
         board_encodings = []
@@ -196,6 +236,7 @@ class ReplayBuffer:
     def clear(self) -> None:
         """Clear all data from buffer."""
         self._steps.clear()
+        self._weights.clear()
         self._insertion_index = 0
 
     def get_statistics(self) -> Dict[str, float]:
@@ -222,6 +263,50 @@ class ReplayBuffer:
             'avg_win_prob': float(np.mean(win_probs)),
             'std_win_prob': float(np.std(win_probs)),
         }
+
+
+def _compute_position_weight(
+    equity_target: np.ndarray,
+    step_index: int,
+    total_steps: int,
+) -> float:
+    """Compute sampling weight for a position.
+
+    Positions that are more informative for training get higher weight:
+    1. Endgame positions (later in the game) get upweighted because they
+       have clearer targets and are critical for bearing off accuracy.
+    2. Uncertain positions (equity near 50/50) get upweighted because
+       they're harder to evaluate and more informative for learning.
+    3. Extreme positions (clear win/loss) get downweighted because
+       the network can learn them quickly.
+
+    Args:
+        equity_target: 5-dim equity target [wn, wg, wb, lg, lb].
+        step_index: Position in the game (0 = first move).
+        total_steps: Total number of steps in the game.
+
+    Returns:
+        Sampling weight >= 1.0.
+    """
+    weight = 1.0
+
+    # Game progress weighting: later positions are more valuable
+    # (clearer signal, closer to outcome)
+    if total_steps > 1:
+        progress = step_index / (total_steps - 1)
+        # Late game gets up to 1.5x weight
+        weight += 0.5 * progress
+
+    # Equity uncertainty weighting: positions near 50/50 are harder
+    # Win probability = sum of win components
+    win_prob = float(np.sum(equity_target[:3]))
+    # Uncertainty is highest at win_prob=0.5, lowest at 0 or 1
+    # entropy-like: 4 * p * (1-p) peaks at 1.0 when p=0.5
+    uncertainty = 4.0 * win_prob * (1.0 - win_prob)
+    # Uncertain positions get up to 1.5x weight
+    weight += 0.5 * uncertainty
+
+    return weight
 
 
 class PrioritizedReplayBuffer(ReplayBuffer):

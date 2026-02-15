@@ -206,6 +206,31 @@ class NeuralNetworkAgent:
 
         return float(value[0])
 
+    def get_equity_estimate(self, board: Board) -> np.ndarray:
+        """Get network's equity distribution estimate for a position.
+
+        Returns the raw 5-dimensional equity distribution from the network's
+        perspective (player_to_move's perspective). Used for TD(lambda)
+        target computation during self-play.
+
+        Args:
+            board: Board state to evaluate.
+
+        Returns:
+            Array of shape (5,) with [win_normal, win_gammon, win_bg,
+            lose_gammon, lose_bg] from board.player_to_move's perspective.
+        """
+        encoded = encode_board(self.encoding_config, board)
+        encoded_board = encoded.position_features
+
+        equity, _, _, _ = self.state.apply_fn(
+            {'params': self.state.params},
+            encoded_board,
+            training=False,
+        )
+
+        return np.array(equity[0], dtype=np.float32)
+
 
 def create_neural_agent(
     state: train_state.TrainState,

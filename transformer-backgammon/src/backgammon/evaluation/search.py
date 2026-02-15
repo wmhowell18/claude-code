@@ -10,11 +10,18 @@ Terminology:
 - 1-ply: For each candidate move, apply it, then average over all 21
   opponent dice rolls (opponent plays best response via 0-ply).
 - 2-ply: Like 1-ply, but opponent uses 1-ply for their evaluation.
+
+Features:
+- Move ordering heuristics: Sort moves by promising heuristic score
+  before evaluation, enabling future pruning optimizations.
+- Transposition table: Cache evaluated positions to avoid redundant
+  network forward passes across search.
 """
 
+import hashlib
 import numpy as np
 import jax.numpy as jnp
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 from flax.training import train_state
 
 from backgammon.core.board import (
@@ -25,9 +32,183 @@ from backgammon.core.board import (
     winner,
     pip_count,
 )
-from backgammon.core.types import Player, Move, Dice, LegalMoves, GameOutcome
+from backgammon.core.types import Player, Move, MoveStep, Dice, LegalMoves, GameOutcome
 from backgammon.core.dice import ALL_DICE_ROLLS, DICE_PROBABILITIES
 from backgammon.encoding.encoder import raw_encoding_config, EncodingConfig
+
+
+# ==============================================================================
+# MOVE ORDERING HEURISTICS
+# ==============================================================================
+
+
+def score_move_heuristic(board: Board, player: Player, move: Move) -> float:
+    """Score a move using fast heuristics for move ordering.
+
+    Higher scores indicate moves more likely to be good, enabling
+    more effective pruning when evaluating moves in order.
+
+    Heuristics used:
+    - Hitting opponent blots (+4 per hit)
+    - Making points (landing 2+ checkers) (+3 per new made point)
+    - Bearing off checkers (+5 per bearoff)
+    - Pip count improvement (+0.1 per pip gained)
+    - Penalize leaving blots (-2 per new blot created)
+
+    Args:
+        board: Current board state before the move.
+        player: Player making the move.
+        move: Move to score.
+
+    Returns:
+        Heuristic score (higher = more promising).
+    """
+    score = 0.0
+
+    if not move:
+        return score
+
+    # Count hits
+    for step in move:
+        if step.hits_opponent:
+            score += 4.0
+
+    # Apply the move to check resulting position
+    new_board = apply_move(board, player, move)
+
+    # Bearing off: count checkers borne off by this move
+    old_off = board.get_checkers(player, 25)
+    new_off = new_board.get_checkers(player, 25)
+    bearoffs = new_off - old_off
+    score += bearoffs * 5.0
+
+    # Pip count improvement (normalized)
+    old_pips = pip_count(board, player)
+    new_pips = pip_count(new_board, player)
+    pip_improvement = old_pips - new_pips
+    score += pip_improvement * 0.1
+
+    # Check for new made points and new blots
+    for point in range(1, 25):
+        old_count = board.get_checkers(player, point)
+        new_count = new_board.get_checkers(player, point)
+
+        # New made point (went from <2 to >=2)
+        if old_count < 2 and new_count >= 2:
+            score += 3.0
+
+        # New blot (went from 0 or >=2 to exactly 1)
+        if old_count != 1 and new_count == 1:
+            score -= 2.0
+
+    return score
+
+
+def order_moves(
+    board: Board,
+    player: Player,
+    legal_moves: LegalMoves,
+) -> LegalMoves:
+    """Sort legal moves by heuristic score (best first).
+
+    Args:
+        board: Current board state.
+        player: Player to move.
+        legal_moves: Unordered list of legal moves.
+
+    Returns:
+        Moves sorted by descending heuristic score.
+    """
+    if len(legal_moves) <= 1:
+        return legal_moves
+
+    scored = [
+        (score_move_heuristic(board, player, move), i, move)
+        for i, move in enumerate(legal_moves)
+    ]
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    return [move for _, _, move in scored]
+
+
+# ==============================================================================
+# TRANSPOSITION TABLE
+# ==============================================================================
+
+
+def _board_hash(board: Board) -> bytes:
+    """Compute a deterministic hash of a board state.
+
+    Uses the raw checker arrays and player to move for a fast,
+    collision-resistant hash.
+
+    Args:
+        board: Board state to hash.
+
+    Returns:
+        Hash bytes suitable as a dictionary key.
+    """
+    # Use tobytes() for speed; include player_to_move
+    data = board.white_checkers.tobytes() + board.black_checkers.tobytes()
+    data += b'\x00' if board.player_to_move == Player.WHITE else b'\x01'
+    return hashlib.md5(data).digest()
+
+
+class TranspositionTable:
+    """Cache for evaluated positions to avoid redundant network calls.
+
+    Stores position evaluations keyed by board state hash and search depth.
+    Uses LRU-style eviction when the table exceeds max_size.
+
+    Args:
+        max_size: Maximum number of entries to store.
+    """
+
+    def __init__(self, max_size: int = 100_000):
+        self.max_size = max_size
+        self._table: Dict[bytes, float] = {}
+
+    def lookup(self, board: Board, ply: int) -> Optional[float]:
+        """Look up a cached position evaluation.
+
+        Args:
+            board: Board state to look up.
+            ply: Search depth the evaluation was performed at.
+
+        Returns:
+            Cached value if found, None otherwise.
+        """
+        key = _board_hash(board) + ply.to_bytes(1, 'big')
+        return self._table.get(key)
+
+    def store(self, board: Board, ply: int, value: float) -> None:
+        """Store a position evaluation in the table.
+
+        Args:
+            board: Board state that was evaluated.
+            ply: Search depth of the evaluation.
+            value: Evaluation result.
+        """
+        if len(self._table) >= self.max_size:
+            # Simple eviction: clear half the table
+            # (faster than maintaining LRU order)
+            keys = list(self._table.keys())
+            for k in keys[: len(keys) // 2]:
+                del self._table[k]
+
+        key = _board_hash(board) + ply.to_bytes(1, 'big')
+        self._table[key] = value
+
+    def clear(self) -> None:
+        """Clear all cached entries."""
+        self._table.clear()
+
+    def __len__(self) -> int:
+        return len(self._table)
+
+    @property
+    def hit_rate_info(self) -> str:
+        """Return info string about table size."""
+        return f"TranspositionTable: {len(self._table)} entries"
 
 
 def _encode_boards_batch(
@@ -176,10 +357,12 @@ def select_move_0ply(
     player: Player,
     legal_moves: LegalMoves,
     encoding_config: Optional[EncodingConfig] = None,
+    tt: Optional[TranspositionTable] = None,
 ) -> Tuple[Move, float]:
     """Select best move using 0-ply evaluation (batch).
 
     Evaluates all legal moves in a single network forward pass.
+    Moves are ordered by heuristic score for future pruning support.
 
     Args:
         state: Network training state.
@@ -187,6 +370,7 @@ def select_move_0ply(
         player: Player to move.
         legal_moves: List of legal moves.
         encoding_config: Encoding config (defaults to raw).
+        tt: Optional transposition table for caching evaluations.
 
     Returns:
         Tuple of (best_move, best_value).
@@ -202,36 +386,58 @@ def select_move_0ply(
         )
         return legal_moves[0], val
 
+    # Order moves by heuristic score (best first)
+    ordered_moves = order_moves(board, player, legal_moves)
+
     # Apply all moves and collect resulting boards
     result_boards = []
     terminal_indices = []
     terminal_values = []
     network_indices = []
+    cached_indices = []
+    cached_values = []
 
-    for i, move in enumerate(legal_moves):
+    for i, move in enumerate(ordered_moves):
         new_board = apply_move(board, player, move)
         if is_game_over(new_board):
             terminal_indices.append(i)
             terminal_values.append(_terminal_value(new_board, player))
+        elif tt is not None:
+            cached_val = tt.lookup(new_board, 0)
+            if cached_val is not None:
+                cached_indices.append(i)
+                cached_values.append(-cached_val)  # Negate: stored from board's POV
+            else:
+                result_boards.append(new_board)
+                network_indices.append(i)
         else:
             result_boards.append(new_board)
             network_indices.append(i)
 
-    # Batch evaluate all non-terminal positions
+    # Batch evaluate all non-terminal, non-cached positions
     if result_boards:
         network_values = _batch_evaluate(state, result_boards, encoding_config)
     else:
         network_values = np.array([])
 
+    # Store evaluated positions in transposition table
+    if tt is not None:
+        for board_idx, net_idx in enumerate(network_indices):
+            move = ordered_moves[net_idx]
+            new_board = apply_move(board, player, move)
+            tt.store(new_board, 0, float(network_values[board_idx]))
+
     # Combine values (negate network values since they're from opponent's POV)
-    move_values = np.full(len(legal_moves), -np.inf, dtype=np.float32)
+    move_values = np.full(len(ordered_moves), -np.inf, dtype=np.float32)
     for idx, val in zip(terminal_indices, terminal_values):
+        move_values[idx] = val
+    for idx, val in zip(cached_indices, cached_values):
         move_values[idx] = val
     for i, idx in enumerate(network_indices):
         move_values[idx] = -network_values[i]
 
     best_idx = int(np.argmax(move_values))
-    return legal_moves[best_idx], float(move_values[best_idx])
+    return ordered_moves[best_idx], float(move_values[best_idx])
 
 
 def evaluate_move_1ply(
@@ -652,12 +858,18 @@ def select_move_2ply(
     player: Player,
     legal_moves: LegalMoves,
     encoding_config: Optional[EncodingConfig] = None,
+    top_k: Optional[int] = None,
+    tt: Optional[TranspositionTable] = None,
 ) -> Tuple[Move, float]:
-    """Select best move using 2-ply evaluation.
+    """Select best move using 2-ply evaluation with progressive deepening.
 
-    For each legal move, computes 2-ply value (opponent uses 1-ply
-    responses) and picks the best. This is significantly more expensive
-    than 1-ply but provides stronger play.
+    Uses a two-stage approach for efficiency:
+    1. Evaluate ALL moves at 0-ply (single batch forward pass, fast).
+    2. Run full 2-ply evaluation only on the top-k candidates.
+
+    This dramatically reduces computation compared to running 2-ply on
+    every legal move, with minimal strength loss since the best move
+    almost always appears in the top candidates at 0-ply.
 
     Args:
         state: Network training state.
@@ -665,6 +877,10 @@ def select_move_2ply(
         player: Player to move.
         legal_moves: List of legal moves.
         encoding_config: Encoding config (defaults to raw).
+        top_k: Number of candidate moves to evaluate at 2-ply.
+            If None, defaults to min(8, len(legal_moves)).
+            Set to a large number to evaluate all moves (no pruning).
+        tt: Optional transposition table for caching evaluations.
 
     Returns:
         Tuple of (best_move, best_value).
@@ -680,10 +896,58 @@ def select_move_2ply(
         )
         return legal_moves[0], val
 
-    best_move = legal_moves[0]
+    # Default top_k: evaluate at most 8 candidates at 2-ply
+    if top_k is None:
+        top_k = min(8, len(legal_moves))
+
+    # If we have few enough moves, just evaluate all at 2-ply
+    if len(legal_moves) <= top_k:
+        best_move = legal_moves[0]
+        best_value = -np.inf
+
+        for move in legal_moves:
+            val = evaluate_move_2ply(
+                state, board, player, move, encoding_config
+            )
+            if val > best_value:
+                best_value = val
+                best_move = move
+
+        return best_move, best_value
+
+    # Stage 1: Fast 0-ply evaluation of all moves to find candidates
+    _, _ = select_move_0ply(
+        state, board, player, legal_moves, encoding_config, tt=tt,
+    )
+    # Re-evaluate to get all values (select_move_0ply only returns best)
+    move_scores_0ply = []
+    result_boards = []
+    terminal_info = {}
+
+    for i, move in enumerate(legal_moves):
+        new_board = apply_move(board, player, move)
+        if is_game_over(new_board):
+            terminal_info[i] = _terminal_value(new_board, player)
+            move_scores_0ply.append((terminal_info[i], i, move))
+        else:
+            result_boards.append((new_board, i, move))
+
+    # Batch evaluate non-terminal positions
+    if result_boards:
+        boards_only = [b for b, _, _ in result_boards]
+        values = _batch_evaluate(state, boards_only, encoding_config)
+        for j, (_, i, move) in enumerate(result_boards):
+            move_scores_0ply.append((-float(values[j]), i, move))
+
+    # Sort by 0-ply value (descending) and take top-k
+    move_scores_0ply.sort(key=lambda x: -x[0])
+    candidates = [(move, score) for score, _, move in move_scores_0ply[:top_k]]
+
+    # Stage 2: Full 2-ply evaluation of top-k candidates
+    best_move = candidates[0][0]
     best_value = -np.inf
 
-    for move in legal_moves:
+    for move, _ in candidates:
         val = evaluate_move_2ply(
             state, board, player, move, encoding_config
         )
@@ -702,6 +966,8 @@ def select_move(
     legal_moves: LegalMoves,
     ply: int = 0,
     encoding_config: Optional[EncodingConfig] = None,
+    top_k: Optional[int] = None,
+    tt: Optional[TranspositionTable] = None,
 ) -> Tuple[Move, float]:
     """Select best move at a given search depth.
 
@@ -715,13 +981,16 @@ def select_move(
         legal_moves: List of legal moves.
         ply: Search depth (0, 1, or 2).
         encoding_config: Encoding config (defaults to raw).
+        top_k: For 2-ply, number of candidates to evaluate deeply.
+            Moves are pre-screened at 0-ply and only top_k proceed to 2-ply.
+        tt: Optional transposition table for caching evaluations.
 
     Returns:
         Tuple of (best_move, best_value).
     """
     if ply == 0:
         return select_move_0ply(
-            state, board, player, legal_moves, encoding_config
+            state, board, player, legal_moves, encoding_config, tt=tt
         )
     elif ply == 1:
         return select_move_1ply(
@@ -729,92 +998,19 @@ def select_move(
         )
     elif ply == 2:
         return select_move_2ply(
-            state, board, player, legal_moves, encoding_config
+            state, board, player, legal_moves, encoding_config,
+            top_k=top_k, tt=tt,
         )
     else:
         raise ValueError(f"Unsupported ply depth: {ply}. Use 0, 1, or 2.")
 
 
 # ==============================================================================
-# MOVE ORDERING HEURISTICS
+# MOVE ORDERING HEURISTICS (from main branch — kept select_move_2ply_pruned)
 # ==============================================================================
 
-
-def _score_move_heuristic(board: Board, player: Player, move: Move) -> float:
-    """Score a move with a fast heuristic for move ordering.
-
-    Higher scores indicate more promising moves (evaluated first).
-    This is used to order moves before expensive evaluation so that
-    pruning (top-K) is more effective.
-
-    Heuristic factors:
-    - Pip count improvement (more = better)
-    - Hitting opponent blots (big bonus)
-    - Making new points (bonus)
-    - Leaving blots (penalty)
-
-    Args:
-        board: Current board state
-        player: Player making the move
-        move: Move to score
-
-    Returns:
-        Heuristic score (higher = more promising)
-    """
-    score = 0.0
-
-    # Pip count improvement
-    new_board = apply_move(board, player, move)
-    old_pips = pip_count(board, player)
-    new_pips = pip_count(new_board, player)
-    pip_improvement = old_pips - new_pips
-    score += pip_improvement
-
-    # Check each step for hits and blots
-    for step in move:
-        if step.hits_opponent:
-            score += 20.0  # Big bonus for hitting
-
-    # Check resulting position for blots and points made
-    opponent = player.opponent()
-    for point in range(1, 25):
-        our_count = new_board.get_checkers(player, point)
-        if our_count == 1:
-            score -= 5.0  # Penalty for leaving a blot
-        elif our_count >= 2:
-            # Check if this is a new point (wasn't made before)
-            old_count = board.get_checkers(player, point)
-            if old_count < 2:
-                score += 3.0  # Bonus for making a new point
-
-    return score
-
-
-def order_moves(
-    board: Board,
-    player: Player,
-    legal_moves: LegalMoves,
-) -> LegalMoves:
-    """Order moves from most to least promising using heuristics.
-
-    Args:
-        board: Current board state
-        player: Player making the move
-        legal_moves: List of legal moves to order
-
-    Returns:
-        Moves sorted by heuristic score (best first)
-    """
-    if len(legal_moves) <= 1:
-        return legal_moves
-
-    scored = [
-        (_score_move_heuristic(board, player, move), i, move)
-        for i, move in enumerate(legal_moves)
-    ]
-    scored.sort(reverse=True)  # Best first
-
-    return [move for _, _, move in scored]
+# Alias for backward compatibility (tests import the private name)
+_score_move_heuristic = score_move_heuristic
 
 
 def select_move_2ply_pruned(
