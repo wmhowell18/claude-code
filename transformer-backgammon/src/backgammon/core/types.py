@@ -97,12 +97,18 @@ class Board:
         assert all(0 <= c <= 15 for c in self.black_checkers), "Invalid black checker count"
 
     def copy(self) -> "Board":
-        """Create a deep copy of the board."""
-        return Board(
-            white_checkers=self.white_checkers.copy(),
-            black_checkers=self.black_checkers.copy(),
-            player_to_move=self.player_to_move,
-        )
+        """Create a deep copy of the board.
+
+        Bypasses __post_init__ validation for speed — the source board
+        was already validated at creation, so the copy is guaranteed valid.
+        This matters because copy() is called ~47K times per training batch
+        (move evaluation, step recording, apply_move).
+        """
+        new = object.__new__(Board)
+        new.white_checkers = self.white_checkers.copy()
+        new.black_checkers = self.black_checkers.copy()
+        new.player_to_move = self.player_to_move
+        return new
 
     def get_checkers(self, player: Player, point: Point) -> CheckerCount:
         """Get number of checkers at a point for a player."""

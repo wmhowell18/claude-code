@@ -1,7 +1,10 @@
 """Loss functions and training step for backgammon network.
 
 Implements policy and value loss computation with JAX for GPU acceleration.
+The train_step function is JIT-compiled for efficient TPU/GPU execution.
 """
+
+import functools
 
 import jax
 import jax.numpy as jnp
@@ -111,6 +114,7 @@ def compute_combined_loss(
     return total_loss, metrics
 
 
+@functools.partial(jax.jit, static_argnums=(3, 4))
 def train_step(
     state: train_state.TrainState,
     batch: Dict[str, jnp.ndarray],
@@ -118,7 +122,12 @@ def train_step(
     policy_weight: float = 1.0,
     value_weight: float = 0.5,
 ) -> Tuple[train_state.TrainState, Dict[str, jnp.ndarray]]:
-    """Single training step with gradient computation and parameter update.
+    """JIT-compiled training step with gradient computation and parameter update.
+
+    JIT compilation is critical for TPU/GPU performance — without it, every
+    JAX operation dispatches individually, adding massive per-op overhead.
+    With JIT, the entire forward + backward + update fuses into a single
+    optimized XLA computation.
 
     Args:
         state: Current training state
@@ -128,8 +137,8 @@ def train_step(
             - 'value_target': (batch_size,)
             - 'action_mask': (batch_size, num_actions)
         rng: RNG key for dropout
-        policy_weight: Weight for policy loss
-        value_weight: Weight for value loss
+        policy_weight: Weight for policy loss (static, triggers recompile if changed)
+        value_weight: Weight for value loss (static, triggers recompile if changed)
 
     Returns:
         Tuple of (updated_state, metrics)
