@@ -21,6 +21,7 @@ from backgammon.core.board import (
     apply_move,
     checkers_on_bar,
     checkers_borne_off,
+    can_bear_off,
 )
 
 
@@ -97,6 +98,9 @@ class PipCountConfig:
         prime_bonus: Bonus for consecutive made points
         escape_bonus: Bonus for escaping back checkers
         race_bonus: Bonus for being past contact (pure race)
+        key_point_penalty: Penalty for breaking 6-point or 5-point (pre-bearoff)
+        home_board_bonus: Bonus per made point in home board
+        bearoff_bonus: Bonus per checker borne off
     """
     blot_penalty: float = 10.0
     hit_bonus: float = 15.0
@@ -104,6 +108,9 @@ class PipCountConfig:
     prime_bonus: float = 3.0
     escape_bonus: float = 8.0
     race_bonus: float = 20.0
+    key_point_penalty: float = 25.0
+    home_board_bonus: float = 4.0
+    bearoff_bonus: float = 8.0
 
 
 def pip_count_agent(config: Optional[PipCountConfig] = None) -> Agent:
@@ -231,6 +238,33 @@ def pip_count_agent(config: Optional[PipCountConfig] = None) -> Agent:
             if our_furthest > their_furthest:
                 # We're past contact
                 score -= config.race_bonus
+
+        # Penalty for breaking key home board points (6-point, 5-point)
+        # These are the most valuable points — don't give them up before bearoff
+        bearing_off = can_bear_off(board, player)
+        if not bearing_off:
+            if player == Player.WHITE:
+                key_points = [6, 5]  # White's 6-point and 5-point
+            else:
+                key_points = [19, 20]  # Black's 6-point and 5-point
+
+            for kp in key_points:
+                if board.get_checkers(player, kp) < 2:
+                    # Key point is broken — penalize
+                    score += config.key_point_penalty
+
+        # Bonus for home board strength (made points in home board)
+        if player == Player.WHITE:
+            home_range = range(1, 7)
+        else:
+            home_range = range(19, 25)
+
+        made_points = sum(1 for p in home_range if board.get_checkers(player, p) >= 2)
+        score -= made_points * config.home_board_bonus
+
+        # Bonus for checkers already borne off (encourages finishing)
+        off = checkers_borne_off(board, player)
+        score -= off * config.bearoff_bonus
 
         return score
 

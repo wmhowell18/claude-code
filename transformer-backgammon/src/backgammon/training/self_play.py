@@ -59,7 +59,7 @@ def play_game(
     white_agent: Agent,
     black_agent: Agent,
     starting_position: Board,
-    max_moves: int = 1000,
+    max_moves: int = 200,
     rng: Optional[np.random.Generator] = None,
     record_value_estimates: bool = False,
 ) -> GameResult:
@@ -165,6 +165,7 @@ def generate_training_batch(
     black_agent: Agent,
     rng: Optional[np.random.Generator] = None,
     record_value_estimates: bool = False,
+    max_moves: int = 200,
 ) -> List[GameResult]:
     """Generate a batch of training games.
 
@@ -175,6 +176,7 @@ def generate_training_batch(
         black_agent: Agent for black
         rng: Random number generator
         record_value_estimates: If True, record equity estimates for TD(lambda).
+        max_moves: Maximum moves per game before declaring draw.
 
     Returns:
         List of completed game results
@@ -193,6 +195,7 @@ def generate_training_batch(
         result = play_game(
             white_agent, black_agent, variant, rng=rng,
             record_value_estimates=record_value_estimates,
+            max_moves=max_moves,
         )
         games.append(result)
 
