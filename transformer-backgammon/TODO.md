@@ -129,8 +129,8 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - [ ] **58. Legal move caching within a turn** — Don't regenerate legal moves for same board+dice. (Effort: S, Impact: small)
 - [ ] **59. Precomputed action-to-move lookup** — Replace hash-based encoding with direct lookup table. (Effort: S, Impact: small)
 - [ ] **60. Batch self-play** — Play N games simultaneously, step all games forward in parallel. (Effort: L, Impact: large for speed)
-- [ ] **61. TPU-specific optimizations** — pmap, sharding, proper batch sizing for TPU topology. (Effort: M, Impact: moderate on TPU)
-- [ ] **62. Mixed precision training** — bfloat16 on TPU for ~2x speedup. (Effort: S, Impact: moderate)
+- [x] **61. TPU-specific optimizations** — bfloat16 mixed precision, v6e-1 training config preset, batch sizing for single-chip TPU. Multi-chip pmap/sharding deferred until needed. (Effort: M, Impact: moderate on TPU) *(Feb 2026)*
+- [x] **62. Mixed precision training** — bfloat16 compute with float32 params via Flax dtype/param_dtype. LayerNorm and softmax kept in float32 for stability. (Effort: S, Impact: moderate) *(Feb 2026)*
 
 ### Data & Knowledge
 

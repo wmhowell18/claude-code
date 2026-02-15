@@ -67,6 +67,9 @@ class TrainingConfig:
     # Training mode
     train_policy: bool = False  # If False, value-only training (simpler)
 
+    # Compute dtype for forward pass (None=float32, 'bfloat16' for TPU)
+    compute_dtype: Optional[str] = None
+
     # Optimizer settings
     learning_rate: float = 3e-4
     warmup_steps: int = 1000
@@ -107,6 +110,65 @@ class TrainingConfig:
 
     # Random seed
     seed: int = 42
+
+
+def v6e_quick_training_config() -> TrainingConfig:
+    """Quick training config optimized for TPU v6e-1 (single chip).
+
+    Uses small model (~500K params) with bfloat16 for efficient TPU usage.
+    Designed for initial validation runs that cost minimal TPU credits.
+    Total: ~2,500 games.
+    """
+    return TrainingConfig(
+        # Small curriculum for quick validation
+        warmstart_games=200,
+        early_phase_games=500,
+        mid_phase_games=800,
+        late_phase_games=1000,
+
+        # Small model (~500K params) — fits easily in 16GB HBM
+        embed_dim=64,
+        num_heads=4,
+        num_layers=2,
+        ff_dim=256,
+        dropout_rate=0.1,
+
+        # Larger batch for TPU efficiency (model is tiny, memory is not a constraint)
+        training_batch_size=512,
+        games_per_batch=32,
+        train_steps_per_game_batch=4,
+
+        # Value-only training (simpler, faster for validation)
+        train_policy=False,
+
+        # bfloat16 for ~2x speedup on v6e
+        compute_dtype='bfloat16',
+
+        # Optimizer
+        learning_rate=3e-4,
+        warmup_steps=200,
+        max_grad_norm=1.0,
+
+        # Replay buffer (smaller for quick run)
+        replay_buffer_size=50_000,
+        replay_buffer_min_size=500,
+
+        # More frequent checkpoints for short run
+        checkpoint_every_n_batches=50,
+        log_every_n_batches=5,
+        eval_every_n_batches=25,
+        eval_num_games=30,
+
+        # TD(lambda) for better targets
+        use_td_lambda=True,
+        td_lambda=0.7,
+
+        # Paths
+        checkpoint_dir="checkpoints_v6e",
+        log_dir="logs_v6e",
+
+        seed=42,
+    )
 
 
 @dataclass
@@ -197,6 +259,11 @@ def create_train_state(config: TrainingConfig, rng: jax.random.PRNGKey) -> train
     Returns:
         Initialized training state
     """
+    # Resolve compute dtype
+    dtype = None
+    if config.compute_dtype == 'bfloat16':
+        dtype = jnp.bfloat16
+
     # Create transformer config
     transformer_config = TransformerConfig(
         embed_dim=config.embed_dim,
@@ -207,6 +274,7 @@ def create_train_state(config: TrainingConfig, rng: jax.random.PRNGKey) -> train
         input_feature_dim=2,  # Raw encoding has 2 features per position
         use_policy_head=config.train_policy,  # Enable policy prediction based on config
         num_actions=get_action_space_size() if config.train_policy else 0,
+        dtype=dtype,
     )
 
     # Initialize model

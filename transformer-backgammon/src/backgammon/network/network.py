@@ -92,11 +92,13 @@ class MultiHeadAttention(nn.Module):
         embed_dim: Embedding dimension
         dropout_rate: Dropout probability
         return_attention_weights: Whether to return attention weights
+        dtype: Compute dtype (None for float32, jnp.bfloat16 for TPU)
     """
     num_heads: int
     embed_dim: int
     dropout_rate: float = 0.1
     return_attention_weights: bool = False
+    dtype: Any = None
 
     @nn.compact
     def __call__(
@@ -119,7 +121,9 @@ class MultiHeadAttention(nn.Module):
         head_dim = self.embed_dim // self.num_heads
 
         # Linear projections for Q, K, V
-        qkv = nn.Dense(3 * self.embed_dim, name='qkv')(x)
+        qkv = nn.Dense(
+            3 * self.embed_dim, dtype=self.dtype, param_dtype=jnp.float32, name='qkv',
+        )(x)
         qkv = jnp.reshape(
             qkv,
             (batch_size, seq_len, 3, self.num_heads, head_dim)
@@ -147,7 +151,9 @@ class MultiHeadAttention(nn.Module):
         # Reshape and project
         attn_output = jnp.transpose(attn_output, (0, 2, 1, 3))  # [batch, seq_len, heads, head_dim]
         attn_output = jnp.reshape(attn_output, (batch_size, seq_len, self.embed_dim))
-        output = nn.Dense(self.embed_dim, name='out')(attn_output)
+        output = nn.Dense(
+            self.embed_dim, dtype=self.dtype, param_dtype=jnp.float32, name='out',
+        )(attn_output)
 
         if self.return_attention_weights:
             return output, attn_weights
@@ -162,10 +168,12 @@ class FeedForward(nn.Module):
         embed_dim: Embedding dimension
         ff_dim: Hidden dimension
         dropout_rate: Dropout probability
+        dtype: Compute dtype (None for float32, jnp.bfloat16 for TPU)
     """
     embed_dim: int
     ff_dim: int
     dropout_rate: float = 0.1
+    dtype: Any = None
 
     @nn.compact
     def __call__(self, x: jnp.ndarray, training: bool = False) -> jnp.ndarray:
@@ -178,10 +186,10 @@ class FeedForward(nn.Module):
         Returns:
             Output tensor of shape [batch, seq_len, embed_dim]
         """
-        x = nn.Dense(self.ff_dim, name='fc1')(x)
+        x = nn.Dense(self.ff_dim, dtype=self.dtype, param_dtype=jnp.float32, name='fc1')(x)
         x = nn.gelu(x)
         x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=not training)
-        x = nn.Dense(self.embed_dim, name='fc2')(x)
+        x = nn.Dense(self.embed_dim, dtype=self.dtype, param_dtype=jnp.float32, name='fc2')(x)
         x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=not training)
         return x
 
@@ -211,28 +219,41 @@ class TransformerBlock(nn.Module):
         Returns:
             Tuple of (output, attention_weights)
         """
+        dtype = self.config.dtype
+
         # Multi-head self-attention with residual connection
         attn_output, attn_weights = MultiHeadAttention(
             num_heads=self.config.num_heads,
             embed_dim=self.config.embed_dim,
             dropout_rate=self.config.dropout_rate,
             return_attention_weights=self.return_attention_weights,
+            dtype=dtype,
             name='attention'
         )(x, training=training)
 
         x = x + attn_output
-        x = nn.LayerNorm(epsilon=self.config.layer_norm_epsilon, name='ln1')(x)
+        # LayerNorm in float32 for numerical stability (bfloat16 variance can underflow)
+        x = nn.LayerNorm(
+            epsilon=self.config.layer_norm_epsilon, dtype=jnp.float32, name='ln1',
+        )(x)
+        if dtype is not None:
+            x = x.astype(dtype)
 
         # Feed-forward with residual connection
         ff_output = FeedForward(
             embed_dim=self.config.embed_dim,
             ff_dim=self.config.ff_dim,
             dropout_rate=self.config.dropout_rate,
+            dtype=dtype,
             name='ff'
         )(x, training=training)
 
         x = x + ff_output
-        x = nn.LayerNorm(epsilon=self.config.layer_norm_epsilon, name='ln2')(x)
+        x = nn.LayerNorm(
+            epsilon=self.config.layer_norm_epsilon, dtype=jnp.float32, name='ln2',
+        )(x)
+        if dtype is not None:
+            x = x.astype(dtype)
 
         return x, attn_weights
 
@@ -263,9 +284,10 @@ class ValueHead(nn.Module):
             x: Transformer output of shape [batch, seq_len, embed_dim]
 
         Returns:
-            Equity logits of shape [batch, 5]
+            Equity probabilities of shape [batch, 5] (always float32)
             (win_normal, win_gammon, win_backgammon, lose_gammon, lose_backgammon)
         """
+        dtype = self.config.dtype
         batch_size, seq_len, embed_dim = x.shape
 
         # Global pooling
@@ -279,12 +301,14 @@ class ValueHead(nn.Module):
             raise ValueError(f"Unknown pool_type: {self.pool_type}")
 
         # MLP head
-        x = nn.Dense(self.config.ff_dim // 2, name='fc1')(pooled)
+        x = nn.Dense(
+            self.config.ff_dim // 2, dtype=dtype, param_dtype=jnp.float32, name='fc1',
+        )(pooled)
         x = nn.gelu(x)
-        x = nn.Dense(5, name='equity')(x)  # 5 equity components
+        x = nn.Dense(5, dtype=dtype, param_dtype=jnp.float32, name='equity')(x)
 
-        # Apply softmax to ensure probabilities sum to ~1
-        # Note: lose_normal is implicit (1 - sum of others)
+        # Cast to float32 before softmax for numerical stability
+        x = x.astype(jnp.float32)
         x = nn.softmax(x, axis=-1)
 
         return x
@@ -310,17 +334,23 @@ class PolicyHead(nn.Module):
             x: Transformer output of shape [batch, seq_len, embed_dim]
 
         Returns:
-            Policy logits of shape [batch, num_actions]
+            Policy logits of shape [batch, num_actions] (always float32)
         """
+        dtype = self.config.dtype
         # Global mean pooling
         pooled = jnp.mean(x, axis=1)  # [batch, embed_dim]
 
         # MLP head
-        x = nn.Dense(self.config.ff_dim // 2, name='fc1')(pooled)
+        x = nn.Dense(
+            self.config.ff_dim // 2, dtype=dtype, param_dtype=jnp.float32, name='fc1',
+        )(pooled)
         x = nn.gelu(x)
-        x = nn.Dense(self.num_actions, name='policy')(x)
+        x = nn.Dense(
+            self.num_actions, dtype=dtype, param_dtype=jnp.float32, name='policy',
+        )(x)
 
-        return x
+        # Cast logits to float32 for stable cross-entropy
+        return x.astype(jnp.float32)
 
 
 class CubeHead(nn.Module):
@@ -342,18 +372,22 @@ class CubeHead(nn.Module):
             x: Transformer output of shape [batch, seq_len, embed_dim]
 
         Returns:
-            Cube decision logits of shape [batch, 4]
+            Cube decision logits of shape [batch, 4] (always float32)
             (no_double, double, take, pass)
         """
+        dtype = self.config.dtype
         # Global mean pooling
         pooled = jnp.mean(x, axis=1)  # [batch, embed_dim]
 
         # MLP head
-        x = nn.Dense(self.config.ff_dim // 4, name='fc1')(pooled)
+        x = nn.Dense(
+            self.config.ff_dim // 4, dtype=dtype, param_dtype=jnp.float32, name='fc1',
+        )(pooled)
         x = nn.gelu(x)
-        x = nn.Dense(4, name='cube_decision')(x)
+        x = nn.Dense(4, dtype=dtype, param_dtype=jnp.float32, name='cube_decision')(x)
 
-        return x
+        # Cast logits to float32 for stable downstream computation
+        return x.astype(jnp.float32)
 
 
 # ==============================================================================
@@ -397,9 +431,16 @@ class BackgammonTransformer(nn.Module):
         """
         batch_size, seq_len, feature_dim = x.shape
         assert seq_len == 26, f"Expected seq_len=26, got {seq_len}"
+        dtype = self.config.dtype
+
+        # Cast input to compute dtype
+        if dtype is not None:
+            x = x.astype(dtype)
 
         # Input projection
-        x = nn.Dense(self.config.embed_dim, name='input_proj')(x)
+        x = nn.Dense(
+            self.config.embed_dim, dtype=dtype, param_dtype=jnp.float32, name='input_proj',
+        )(x)
 
         # Add positional embeddings
         if self.config.use_learned_positional_encoding:
@@ -408,10 +449,14 @@ class BackgammonTransformer(nn.Module):
                 nn.initializers.normal(stddev=0.02),
                 (1, seq_len, self.config.embed_dim)
             )
+            if dtype is not None:
+                pos_embed = pos_embed.astype(dtype)
             x = x + pos_embed
         else:
             # Fixed sinusoidal positional encoding
             pos_embed = self._get_sinusoidal_encoding(seq_len, self.config.embed_dim)
+            if dtype is not None:
+                pos_embed = pos_embed.astype(dtype)
             x = x + pos_embed
 
         # Apply transformer blocks

@@ -152,12 +152,57 @@ def main():
     print(f"       1-ply win rate: {wr_1ply:.1%} "
           f"({'better' if search_helps else 'not better'} than 0-ply)")
 
+    # --- Check 5: bfloat16 pipeline ---
+    print("[6/6] Testing bfloat16 pipeline...")
+    bf16_config = TrainingConfig(
+        embed_dim=64, num_heads=4, num_layers=2, ff_dim=256,
+        dropout_rate=0.1, train_policy=False,
+        learning_rate=3e-4, warmup_steps=10,
+        replay_buffer_size=1000, replay_buffer_min_size=100,
+        training_batch_size=32, compute_dtype='bfloat16',
+        seed=99,
+    )
+    bf16_rng = jax.random.PRNGKey(99)
+    bf16_state = create_train_state(bf16_config, bf16_rng)
+
+    # Quick training: generate a few games and do gradient steps
+    bf16_buffer = ReplayBuffer(max_size=1000, min_size=100)
+    bf16_games = generate_training_batch(
+        num_games=8,
+        get_variant_fn=get_early_training_variants,
+        white_agent=pip_agent,
+        black_agent=pip_agent,
+        rng=np.random.default_rng(99),
+    )
+    for game in bf16_games:
+        bf16_buffer.add_game(game)
+
+    bf16_ok = True
+    if bf16_buffer.is_ready():
+        batch = bf16_buffer.sample_batch(32)
+        bf16_rng, step_rng = jax.random.split(bf16_rng)
+        bf16_state, bf16_metrics = train_step(bf16_state, batch, step_rng)
+        bf16_loss = float(bf16_metrics['total_loss'])
+        bf16_ok = np.isfinite(bf16_loss)
+        print(f"       bfloat16 loss: {bf16_loss:.4f} {'OK' if bf16_ok else 'FAIL (NaN/Inf)'}")
+    else:
+        print("       bfloat16 buffer not ready (OK, skipping grad step)")
+
+    # Verify params stayed float32
+    for leaf in jax.tree_util.tree_leaves(bf16_state.params):
+        if leaf.dtype != jnp.float32:
+            bf16_ok = False
+            print(f"       FAIL: param dtype is {leaf.dtype}, expected float32")
+            break
+    if bf16_ok:
+        print("       bfloat16 param dtypes: OK (all float32)")
+
     # --- Results ---
     print()
     print("=" * 60)
-    all_pass = loss_decreased and wr_1ply > 0.50
+    all_pass = loss_decreased and wr_1ply > 0.50 and bf16_ok
     if all_pass:
-        print("  PASS: Training pipeline and search are working.")
+        print("  PASS: Training pipeline, search, and bfloat16 are working.")
         print("  Safe to start a longer training run.")
     else:
         print("  RESULT: Partial pass")
@@ -165,6 +210,7 @@ def main():
     print(f"    0-ply vs random:    {wr_0ply:.1%}")
     print(f"    1-ply vs random:    {wr_1ply:.1%}")
     print(f"    1-ply > 0-ply:      {'YES' if search_helps else 'NO'}")
+    print(f"    bfloat16 pipeline:  {'YES' if bf16_ok else 'NO'}")
     if loss_decreased and not all_pass:
         print()
         print("  NOTE: Loss is decreasing, which confirms training works.")
