@@ -165,9 +165,10 @@ def _get_agent_equity(agent: Agent, board: Board) -> Optional[np.ndarray]:
 
 def generate_training_batch(
     num_games: int,
-    get_variant_fn,
     white_agent: Agent,
     black_agent: Agent,
+    get_variant_fn=None,
+    variants: Optional[List[Board]] = None,
     rng: Optional[np.random.Generator] = None,
     record_value_estimates: bool = False,
     max_moves: int = 200,
@@ -176,7 +177,10 @@ def generate_training_batch(
 
     Args:
         num_games: Number of games to play
-        get_variant_fn: Function returning position variants (e.g., get_early_training_variants)
+        get_variant_fn: Function returning position variants (e.g., get_early_training_variants).
+            Optional if variants is provided.
+        variants: Precomputed starting variants. If provided, avoids rebuilding
+            variant boards for every batch and is preferred for TPU throughput.
         white_agent: Agent for white
         black_agent: Agent for black
         rng: Random number generator
@@ -190,7 +194,12 @@ def generate_training_batch(
         rng = np.random.default_rng()
 
     games = []
-    variants = get_variant_fn()
+    if variants is None:
+        if get_variant_fn is None:
+            raise ValueError("Either get_variant_fn or variants must be provided")
+        variants = get_variant_fn()
+    if len(variants) == 0:
+        raise ValueError("variants must contain at least one starting position")
 
     for _ in range(num_games):
         # Select random variant
@@ -460,6 +469,8 @@ def play_games_batched(
     """
     if rng is None:
         rng = np.random.default_rng()
+    if len(variants) == 0:
+        raise ValueError("variants must contain at least one starting position")
 
     # Get JIT-compiled inference function (cached across calls)
     jit_fn = _get_jit_inference(state.apply_fn)
