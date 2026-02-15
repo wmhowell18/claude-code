@@ -31,9 +31,10 @@ def main():
         log_every_n_batches=5,    # Log every 5 batches
 
         # Model architecture
-        d_model=256,              # Transformer hidden dimension
+        embed_dim=256,            # Transformer hidden dimension
         num_heads=8,              # Attention heads
         num_layers=6,             # Transformer layers
+        ff_dim=1024,              # Feed-forward hidden dimension (4x embed_dim)
         dropout_rate=0.1,
 
         # Optimizer
@@ -60,7 +61,7 @@ def main():
     print(f"  • Late:       {config.late_phase_games} games (full complexity)")
     print(f"  • Total:      {config.warmstart_games + config.early_phase_games + config.mid_phase_games + config.late_phase_games} games")
     print()
-    print(f"  • Model:      {config.num_layers} layers, {config.d_model} dim, {config.num_heads} heads")
+    print(f"  • Model:      {config.num_layers} layers, {config.embed_dim} dim, {config.num_heads} heads")
     print(f"  • Batch size: {config.games_per_batch} games")
     print(f"  • LR:         {config.learning_rate} (warmup: {config.warmup_steps} steps)")
     print()

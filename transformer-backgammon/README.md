@@ -163,16 +163,16 @@ pip install wandb  # optional: for experiment tracking
 ### Usage (once implemented)
 ```bash
 # Train from scratch
-python main.py train --config configs/baseline.json
+backgammon --help  # CLI entrypoint
 
 # Evaluate against GNU BG
-python main.py evaluate --model checkpoints/best.pkl --opponent gnubg
+python scripts/smoke_test.py  # quick validation run
 
 # Play interactively
-python main.py play --model checkpoints/best.pkl
+python scripts/train_example.py  # example training run
 
 # Run benchmarks
-python main.py benchmark --model checkpoints/best.pkl --suite xg_positions
+pytest tests/evaluation/ -q  # evaluation test suite
 ```
 
 ## Configuration
