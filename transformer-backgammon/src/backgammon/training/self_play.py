@@ -353,13 +353,17 @@ def _batched_inference(
     if n == 0:
         return np.zeros((0, 5), dtype=np.float32)
 
-    encoded = _encode_boards_fast(boards)
-
-    # Pad batch to minimize JIT recompilations
+    # Pre-allocate padded array directly (avoids separate encode + concat)
     padded_n = _pad_batch_size(n)
-    if padded_n > n:
-        padding = np.zeros((padded_n - n, 26, 2), dtype=np.float32)
-        encoded = np.concatenate([encoded, padding], axis=0)
+    encoded = np.zeros((padded_n, 26, 2), dtype=np.float32)
+    inv15 = np.float32(1.0 / 15.0)
+    for i, board in enumerate(boards):
+        if board.player_to_move == Player.WHITE:
+            encoded[i, :, 0] = board.white_checkers * inv15
+            encoded[i, :, 1] = board.black_checkers * inv15
+        else:
+            encoded[i, :, 0] = board.black_checkers * inv15
+            encoded[i, :, 1] = board.white_checkers * inv15
 
     encoded_jax = jnp.array(encoded)
     equity, _, _, _ = jit_fn(params, encoded_jax)
@@ -495,7 +499,8 @@ def play_games_batched(
         still_active = []
         for i in active_indices:
             g = games[i]
-            if is_game_over(g.board):
+            # Inline is_game_over: direct array access (avoids 3 function calls)
+            if g.board.white_checkers[25] == 15 or g.board.black_checkers[25] == 15:
                 g.done = True
                 g.outcome = winner(g.board)
                 continue
@@ -536,7 +541,10 @@ def play_games_batched(
             move_info = []  # ('terminal', value) or ('network', idx)
             for move in g.current_moves:
                 new_board = apply_move(g.board, player, move)
-                if is_game_over(new_board):
+                # Inline is_game_over: only the current player can have
+                # just borne off all checkers after their move
+                our_off = new_board.white_checkers[25] if player == Player.WHITE else new_board.black_checkers[25]
+                if our_off == 15:
                     move_info.append(('terminal',
                                       _terminal_value_for_player(new_board, player)))
                 else:
@@ -607,21 +615,24 @@ def play_games_batched(
             if g.done:
                 continue
 
-            # Record step (preserve board state before move application)
+            # Record step. apply_move() returns a NEW board (copies internally),
+            # so g.board is never mutated — safe to store the reference directly
+            # instead of an expensive board.copy(). legal_moves is skipped
+            # (value-only training doesn't use it; saves large list allocations).
             g.steps.append(GameStep(
-                board=g.board.copy(),
+                board=g.board,
                 player=g.board.player_to_move,
-                legal_moves=g.current_moves,
+                legal_moves=(),
                 move_taken=g.selected_move,
                 dice=g.current_dice,
             ))
 
-            # Apply the selected move
+            # Apply the selected move (returns new board, doesn't mutate g.board)
             g.board = apply_move(g.board, g.board.player_to_move, g.selected_move)
             g.num_moves += 1
 
-            # Check if game ended after this move
-            if is_game_over(g.board):
+            # Inline is_game_over check after move
+            if g.board.white_checkers[25] == 15 or g.board.black_checkers[25] == 15:
                 g.done = True
                 g.outcome = winner(g.board)
 

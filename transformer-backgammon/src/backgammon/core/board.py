@@ -584,11 +584,17 @@ def _generate_moves_recursive(
 ) -> None:
     """Recursively generate all possible move sequences.
 
+    Uses apply/undo pattern instead of board.copy() at each branch.
+    The board is temporarily mutated during recursion and restored via
+    _fast_undo_step before returning. This eliminates thousands of
+    numpy array copies per move generation call (critical for doubles
+    which have 4 recursion levels with exponential branching).
+
     Args:
-        board: Current board state
+        board: Current board state (temporarily mutated, restored on return)
         player: Player to move
         dice_remaining: Dice values still available
-        current_move: Move steps accumulated so far
+        current_move: Mutable list of steps accumulated so far
         all_moves: List to append complete moves to
     """
     # Base case: no more dice
@@ -601,25 +607,35 @@ def _generate_moves_recursive(
     die = dice_remaining[0]
     rest_dice = dice_remaining[1:]
 
-    # Check if we must enter from bar first
-    if checkers_on_bar(board, player) > 0:
+    # Get checker arrays once for fast apply/undo
+    if player == Player.WHITE:
+        our_checkers = board.white_checkers
+        opp_checkers = board.black_checkers
+    else:
+        our_checkers = board.black_checkers
+        opp_checkers = board.white_checkers
+
+    # Check if we must enter from bar first (inlined check)
+    if our_checkers[0] > 0:
         # Must enter from bar before any other move
         entry_moves = _generate_entry_moves(board, player, die)
 
         if entry_moves:
             for move_step in entry_moves:
-                # Apply move temporarily
-                new_board = board.copy()
-                _apply_move_step(new_board, player, move_step)
+                # Apply move, recurse, undo (no board.copy())
+                _fast_apply_step(our_checkers, opp_checkers, move_step)
+                current_move.append(move_step)
 
-                # Recurse with this move added
                 _generate_moves_recursive(
-                    board=new_board,
+                    board=board,
                     player=player,
                     dice_remaining=rest_dice,
-                    current_move=current_move + [move_step],
+                    current_move=current_move,
                     all_moves=all_moves,
                 )
+
+                current_move.pop()
+                _fast_undo_step(our_checkers, opp_checkers, move_step)
         else:
             # Can't enter - try skipping this die
             _generate_moves_recursive(
@@ -636,18 +652,20 @@ def _generate_moves_recursive(
 
     if possible_steps:
         for move_step in possible_steps:
-            # Apply move temporarily
-            new_board = board.copy()
-            _apply_move_step(new_board, player, move_step)
+            # Apply move, recurse, undo (no board.copy())
+            _fast_apply_step(our_checkers, opp_checkers, move_step)
+            current_move.append(move_step)
 
-            # Recurse with this move added
             _generate_moves_recursive(
-                board=new_board,
+                board=board,
                 player=player,
                 dice_remaining=rest_dice,
-                current_move=current_move + [move_step],
+                current_move=current_move,
                 all_moves=all_moves,
             )
+
+            current_move.pop()
+            _fast_undo_step(our_checkers, opp_checkers, move_step)
     else:
         # Can't use this die - try skipping it
         _generate_moves_recursive(
@@ -704,6 +722,10 @@ def _generate_single_die_moves(board: Board, player: Player, die: int) -> List[M
     moves = []
     checkers = board.white_checkers if player == Player.WHITE else board.black_checkers
 
+    # Cache can_bear_off once per call (not per-point).
+    # Within a single die evaluation the board state is fixed.
+    bearoff_ok = can_bear_off(board, player)
+
     # Check each point where player has checkers
     for from_point in range(1, 25):
         if checkers[from_point] == 0:
@@ -716,7 +738,7 @@ def _generate_single_die_moves(board: Board, player: Player, die: int) -> List[M
             to_point = from_point + die  # Black moves toward 25
 
         # Check if this is a bearing off move
-        if can_bear_off(board, player):
+        if bearoff_ok:
             if player == Player.WHITE:
                 if to_point <= 0:
                     # Bearing off for white
@@ -840,6 +862,9 @@ def _filter_best_moves(moves: List[Move]) -> List[Move]:
 def apply_move(board: Board, player: Player, move: Move) -> Board:
     """Apply a move to a board, returning a new board.
 
+    Uses direct array operations to avoid per-step function call overhead
+    (get_checkers/set_checkers enum dispatch + assertions).
+
     Args:
         board: Current board
         player: Player making the move
@@ -850,8 +875,20 @@ def apply_move(board: Board, player: Player, move: Move) -> Board:
     """
     new_board = board.copy()
 
+    # Resolve checker arrays once (avoids per-step enum comparison)
+    if player == Player.WHITE:
+        our_checkers = new_board.white_checkers
+        opp_checkers = new_board.black_checkers
+    else:
+        our_checkers = new_board.black_checkers
+        opp_checkers = new_board.white_checkers
+
     for step in move:
-        _apply_move_step(new_board, player, step)
+        our_checkers[step.from_point] -= 1
+        if step.hits_opponent:
+            opp_checkers[step.to_point] = 0
+            opp_checkers[0] += 1
+        our_checkers[step.to_point] += 1
 
     # Switch player
     new_board.player_to_move = player.opponent()
@@ -884,6 +921,31 @@ def _apply_move_step(board: Board, player: Player, step: MoveStep) -> None:
     # Add checker to destination
     dest_count = board.get_checkers(player, step.to_point)
     board.set_checkers(player, step.to_point, dest_count + 1)
+
+
+# ==============================================================================
+# FAST APPLY/UNDO (hot-path helpers for move generation)
+# ==============================================================================
+# These operate directly on numpy checker arrays, bypassing get_checkers/
+# set_checkers enum dispatch and assertions. Used by the undo-based move
+# generator to avoid board.copy() at each recursion level.
+
+def _fast_apply_step(our_checkers, opp_checkers, step: MoveStep) -> None:
+    """Apply move step directly on checker arrays (no validation)."""
+    our_checkers[step.from_point] -= 1
+    if step.hits_opponent:
+        opp_checkers[step.to_point] = 0
+        opp_checkers[0] += 1
+    our_checkers[step.to_point] += 1
+
+
+def _fast_undo_step(our_checkers, opp_checkers, step: MoveStep) -> None:
+    """Undo move step directly on checker arrays (reverse of _fast_apply_step)."""
+    our_checkers[step.to_point] -= 1
+    if step.hits_opponent:
+        opp_checkers[0] -= 1
+        opp_checkers[step.to_point] = 1
+    our_checkers[step.from_point] += 1
 
 
 def undo_move(board: Board, player: Player, move: Move) -> Board:
