@@ -28,7 +28,7 @@ from backgammon.core.board import (
 )
 from backgammon.core.types import TransformerConfig
 from backgammon.encoding.action_encoder import get_action_space_size
-from backgammon.evaluation.agents import pip_count_agent
+from backgammon.evaluation.agents import pip_count_agent, greedy_pip_count_agent
 from backgammon.evaluation.network_agent import create_neural_agent
 from backgammon.training.self_play import generate_training_batch, compute_game_statistics
 from backgammon.training.replay_buffer import ReplayBuffer
@@ -426,7 +426,10 @@ def train(config: Optional[TrainingConfig] = None):
     lr_plateau_patience = 3  # Warn after 3 eval checkpoints without improvement
 
     # Create agents
-    pip_agent = pip_count_agent()
+    # Use greedy pip count for warmstart (fast: pip count only, no heuristic scans)
+    # Full pip count agent is too slow for bulk game generation
+    warmstart_agent = greedy_pip_count_agent()
+    pip_agent = pip_count_agent()  # Used for evaluation
 
     batch_num = 0
     total_train_steps = 0
@@ -449,9 +452,9 @@ def train(config: Optional[TrainingConfig] = None):
 
             # Select agents for self-play
             if use_warmstart:
-                # Warmstart: pip count vs pip count
-                white_agent = pip_agent
-                black_agent = pip_agent
+                # Warmstart: greedy pip count vs greedy pip count (fast)
+                white_agent = warmstart_agent
+                black_agent = warmstart_agent
             else:
                 # Self-play: neural network vs itself (with exploration)
                 current_temp = phase_manager.get_current_temperature()
