@@ -430,3 +430,127 @@ class TestModelComponents:
         assert policy is not None
         assert policy.shape == (1, config.num_actions)
         assert cube_dec is None  # Not using cube head
+
+
+class TestBFloat16:
+    """Tests for bfloat16 mixed precision."""
+
+    def test_bfloat16_forward_pass(self):
+        """Test forward pass with bfloat16 compute dtype."""
+        config = small_transformer_config()
+        config.input_feature_dim = 2
+        config.dtype = jnp.bfloat16
+        rng_key = jax.random.PRNGKey(42)
+
+        model, params = init_network(config, rng_key)
+
+        # Input in float32 (model casts internally)
+        dummy_input = jnp.ones((4, 26, 2), dtype=jnp.float32)
+        equity, policy, cube_dec, attn = model.apply(params, dummy_input, training=False)
+
+        # Output should be float32 (cast at softmax/output heads)
+        assert equity.dtype == jnp.float32
+        assert equity.shape == (4, 5)
+        assert jnp.all(jnp.isfinite(equity))
+
+        # Equity should be valid probabilities
+        assert jnp.all(equity >= 0.0)
+        assert jnp.all(equity <= 1.0)
+
+    def test_bfloat16_with_policy_head(self):
+        """Test bfloat16 forward pass with policy head enabled."""
+        config = small_transformer_config()
+        config.input_feature_dim = 2
+        config.dtype = jnp.bfloat16
+        config.use_policy_head = True
+        rng_key = jax.random.PRNGKey(42)
+
+        model, params = init_network(config, rng_key)
+
+        dummy_input = jnp.ones((2, 26, 2), dtype=jnp.float32)
+        equity, policy, cube_dec, attn = model.apply(params, dummy_input, training=False)
+
+        # Both outputs should be float32
+        assert equity.dtype == jnp.float32
+        assert policy.dtype == jnp.float32
+        assert equity.shape == (2, 5)
+        assert policy.shape == (2, config.num_actions)
+
+    def test_bfloat16_params_are_float32(self):
+        """Verify parameters are stored in float32 even with bfloat16 compute."""
+        config = small_transformer_config()
+        config.dtype = jnp.bfloat16
+        rng_key = jax.random.PRNGKey(0)
+
+        model, params = init_network(config, rng_key)
+
+        # All parameters should be float32
+        for leaf in jax.tree_util.tree_leaves(params):
+            assert leaf.dtype == jnp.float32, f"Parameter dtype {leaf.dtype} should be float32"
+
+    def test_bfloat16_training_step(self):
+        """Test that training works end-to-end with bfloat16."""
+        config = small_transformer_config()
+        config.input_feature_dim = 2
+        config.dtype = jnp.bfloat16
+        rng_key = jax.random.PRNGKey(42)
+
+        model, params = init_network(config, rng_key)
+        state = create_train_state(model, params, learning_rate=1e-4)
+
+        features = jnp.ones((8, 26, 2), dtype=jnp.float32)
+        targets = jnp.ones((8, 5), dtype=jnp.float32) / 5.0
+
+        new_state, loss = train_step(state, features, targets, rng_key)
+        assert jnp.isfinite(loss)
+        assert new_state.step == state.step + 1
+
+    def test_float32_backward_compat(self):
+        """Test that dtype=None (default) still works as float32."""
+        config = small_transformer_config()
+        config.input_feature_dim = 2
+        # dtype defaults to None
+        assert config.dtype is None
+
+        rng_key = jax.random.PRNGKey(42)
+        model, params = init_network(config, rng_key)
+
+        dummy_input = jnp.ones((2, 26, 2), dtype=jnp.float32)
+        equity, _, _, _ = model.apply(params, dummy_input, training=False)
+        assert equity.dtype == jnp.float32
+        assert jnp.all(jnp.isfinite(equity))
+
+
+class TestV6eConfig:
+    """Tests for v6e TPU configuration."""
+
+    def test_v6e_quick_config(self):
+        """Test v6e quick training config is valid."""
+        from backgammon.training.train import v6e_quick_training_config
+
+        config = v6e_quick_training_config()
+
+        # Verify it's a small model
+        assert config.embed_dim == 64
+        assert config.num_layers == 2
+        assert config.compute_dtype == 'bfloat16'
+
+        # Verify total games is reasonable for a quick run
+        total = (config.warmstart_games + config.early_phase_games +
+                 config.mid_phase_games + config.late_phase_games)
+        assert total <= 5000  # Should be a quick run
+
+    def test_v6e_config_creates_valid_state(self):
+        """Test that v6e config produces a working training state."""
+        from backgammon.training.train import v6e_quick_training_config, create_train_state
+
+        config = v6e_quick_training_config()
+        rng = jax.random.PRNGKey(42)
+        state = create_train_state(config, rng)
+
+        assert state is not None
+        assert state.params is not None
+
+        # Verify all params are float32 (even though compute dtype is bfloat16)
+        for leaf in jax.tree_util.tree_leaves(state.params):
+            assert leaf.dtype == jnp.float32

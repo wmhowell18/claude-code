@@ -6,7 +6,7 @@ following the specification in types.mli and cube.mli.
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Tuple, Optional, Union
+from typing import Any, List, Tuple, Optional, Union
 import numpy as np
 from numpy.typing import NDArray
 
@@ -391,6 +391,10 @@ class TransformerConfig:
     use_cube_head: bool = False
     num_actions: int = 1024  # Default action space size
     return_attention_weights: bool = False
+    # Compute dtype for forward pass. None means float32 (default).
+    # Set to jnp.bfloat16 on TPU for ~2x speedup. Parameters are always
+    # stored in float32 regardless of this setting.
+    dtype: Any = None
 
     def __post_init__(self):
         """Validate configuration."""
