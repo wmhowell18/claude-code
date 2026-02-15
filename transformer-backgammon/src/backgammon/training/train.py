@@ -104,6 +104,9 @@ class TrainingConfig:
     eval_num_games: int = 50  # Games per opponent during evaluation
     eval_ply: int = 0  # Search depth for evaluation (0 is fast, 1 is slow)
 
+    # Game length limits
+    max_moves: int = 200  # Max moves per game before declaring draw
+
     # Paths
     checkpoint_dir: str = "checkpoints"
     log_dir: str = "logs"
@@ -470,6 +473,7 @@ def train(config: Optional[TrainingConfig] = None):
                 black_agent=black_agent,
                 rng=rng,
                 record_value_estimates=record_values,
+                max_moves=config.max_moves,
             )
 
             # Add games to replay buffer (with TD(lambda) targets if enabled)
