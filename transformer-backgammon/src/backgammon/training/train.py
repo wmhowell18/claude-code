@@ -140,9 +140,10 @@ def v6e_quick_training_config() -> TrainingConfig:
         ff_dim=256,
         dropout_rate=0.1,
 
-        # Larger batch for TPU efficiency (model is tiny, memory is not a constraint)
+        # Larger game batch to better amortize TPU dispatch overhead
+        # during batched inference and increase games/sec on v6e.
         training_batch_size=512,
-        games_per_batch=32,
+        games_per_batch=128,
         train_steps_per_game_batch=4,
 
         # Value-only training (simpler, faster for validation)
@@ -438,6 +439,10 @@ def train(config: Optional[TrainingConfig] = None):
     batch_num = 0
     total_train_steps = 0
 
+    # Cache generated starting variants per phase to avoid rebuilding
+    # identical Board objects every batch (helps TPU game throughput).
+    phase_variants_cache = {}
+
     print(f"\n🎲 Starting training:")
     print(f"   Warmstart: {config.warmstart_games} games (pip count vs pip count)")
     print(f"   Early:     {config.early_phase_games} games (simplified variants)")
@@ -457,13 +462,17 @@ def train(config: Optional[TrainingConfig] = None):
             # Generate training batch through self-play
             record_values = config.use_td_lambda and not use_warmstart
 
+            if phase_name not in phase_variants_cache:
+                phase_variants_cache[phase_name] = get_variants_fn()
+            variants = phase_variants_cache[phase_name]
+
             if use_warmstart:
                 # Warmstart: greedy pip count vs greedy pip count (fast, sequential)
                 games = generate_training_batch(
                     num_games=config.games_per_batch,
-                    get_variant_fn=get_variants_fn,
                     white_agent=warmstart_agent,
                     black_agent=warmstart_agent,
+                    variants=variants,
                     rng=rng,
                     record_value_estimates=False,
                     max_moves=config.max_moves,
@@ -473,7 +482,6 @@ def train(config: Optional[TrainingConfig] = None):
                 # Plays all games simultaneously with JIT-compiled batched
                 # inference, reducing ~7800 TPU dispatches to ~120 per batch.
                 current_temp = phase_manager.get_current_temperature()
-                variants = get_variants_fn()
                 games = play_games_batched(
                     num_games=config.games_per_batch,
                     state=state,

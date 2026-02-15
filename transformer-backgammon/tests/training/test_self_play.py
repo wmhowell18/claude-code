@@ -208,6 +208,20 @@ class TestGenerateTrainingBatch:
         # We just check we got games
         assert len(games) == 10
 
+
+    def test_generate_batch_rejects_empty_variants(self):
+        """Test empty variants list raises a clear error."""
+        rng = np.random.default_rng(42)
+
+        with pytest.raises(ValueError, match="at least one starting position"):
+            generate_training_batch(
+                num_games=1,
+                variants=[],
+                white_agent=random_agent(),
+                black_agent=random_agent(),
+                rng=rng,
+            )
+
     def test_generate_batch_pip_count_agents(self):
         """Test generating batch with pip count agents."""
         rng = np.random.default_rng(42)
