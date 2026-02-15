@@ -30,7 +30,11 @@ from backgammon.core.types import TransformerConfig
 from backgammon.encoding.action_encoder import get_action_space_size
 from backgammon.evaluation.agents import pip_count_agent, greedy_pip_count_agent
 from backgammon.evaluation.network_agent import create_neural_agent
-from backgammon.training.self_play import generate_training_batch, compute_game_statistics
+from backgammon.training.self_play import (
+    generate_training_batch,
+    compute_game_statistics,
+    play_games_batched,
+)
 from backgammon.training.replay_buffer import ReplayBuffer
 from backgammon.training.losses import train_step, compute_metrics
 from backgammon.training.metrics import MetricsLogger
@@ -450,34 +454,35 @@ def train(config: Optional[TrainingConfig] = None):
             phase_name, get_variants_fn = phase_manager.get_current_phase()
             use_warmstart = phase_manager.should_use_pip_count_warmstart()
 
-            # Select agents for self-play
-            if use_warmstart:
-                # Warmstart: greedy pip count vs greedy pip count (fast)
-                white_agent = warmstart_agent
-                black_agent = warmstart_agent
-            else:
-                # Self-play: neural network vs itself (with exploration)
-                current_temp = phase_manager.get_current_temperature()
-                neural_agent = create_neural_agent(
-                    state=state,
-                    temperature=current_temp,
-                    name="NeuralNet",
-                )
-                white_agent = neural_agent
-                black_agent = neural_agent
-
             # Generate training batch through self-play
-            # Record value estimates for TD(lambda) during neural self-play
             record_values = config.use_td_lambda and not use_warmstart
-            games = generate_training_batch(
-                num_games=config.games_per_batch,
-                get_variant_fn=get_variants_fn,
-                white_agent=white_agent,
-                black_agent=black_agent,
-                rng=rng,
-                record_value_estimates=record_values,
-                max_moves=config.max_moves,
-            )
+
+            if use_warmstart:
+                # Warmstart: greedy pip count vs greedy pip count (fast, sequential)
+                games = generate_training_batch(
+                    num_games=config.games_per_batch,
+                    get_variant_fn=get_variants_fn,
+                    white_agent=warmstart_agent,
+                    black_agent=warmstart_agent,
+                    rng=rng,
+                    record_value_estimates=False,
+                    max_moves=config.max_moves,
+                )
+            else:
+                # Neural self-play: batched simulation (dramatically faster)
+                # Plays all games simultaneously with JIT-compiled batched
+                # inference, reducing ~7800 TPU dispatches to ~120 per batch.
+                current_temp = phase_manager.get_current_temperature()
+                variants = get_variants_fn()
+                games = play_games_batched(
+                    num_games=config.games_per_batch,
+                    state=state,
+                    variants=variants,
+                    temperature=current_temp,
+                    max_moves=config.max_moves,
+                    rng=rng,
+                    record_value_estimates=record_values,
+                )
 
             # Add games to replay buffer (with TD(lambda) targets if enabled)
             # Split between training and validation buffers
