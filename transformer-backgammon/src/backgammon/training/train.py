@@ -120,14 +120,16 @@ def v6e_quick_training_config() -> TrainingConfig:
 
     Uses small model (~500K params) with bfloat16 for efficient TPU usage.
     Designed for initial validation runs that cost minimal TPU credits.
-    Total: ~2,500 games.
+    Total: ~2,496 games.
     """
     return TrainingConfig(
         # Small curriculum for quick validation
-        warmstart_games=200,
-        early_phase_games=500,
-        mid_phase_games=800,
-        late_phase_games=1000,
+        # All counts are multiples of games_per_batch (32) to align phase
+        # transitions with log output steps
+        warmstart_games=192,       # 6 batches
+        early_phase_games=512,     # 16 batches
+        mid_phase_games=800,       # 25 batches (already aligned)
+        late_phase_games=992,      # 31 batches
 
         # Small model (~500K params) — fits easily in 16GB HBM
         embed_dim=64,
@@ -433,6 +435,7 @@ def train(config: Optional[TrainingConfig] = None):
 
     batch_num = 0
     total_train_steps = 0
+    phase_name = None  # Track for phase transition logging
 
     print(f"\n🎲 Starting training:")
     print(f"   Warmstart: {config.warmstart_games} games (pip count vs pip count)")
@@ -446,9 +449,16 @@ def train(config: Optional[TrainingConfig] = None):
         while True:
             batch_start = time.time()
 
-            # Get current phase
+            # Get current phase (detect transitions)
+            prev_phase = phase_name
             phase_name, get_variants_fn = phase_manager.get_current_phase()
             use_warmstart = phase_manager.should_use_pip_count_warmstart()
+
+            if prev_phase is not None and phase_name != prev_phase:
+                print(f"\n>>> Phase transition: {prev_phase} -> {phase_name} "
+                      f"(at {phase_manager.total_games_played} games)")
+                if phase_name == "early":
+                    print("    Switching to neural self-play (first batch will be slower due to compilation)\n")
 
             # Select agents for self-play
             if use_warmstart:
