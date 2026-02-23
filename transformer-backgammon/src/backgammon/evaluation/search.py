@@ -217,24 +217,26 @@ def _encode_boards_batch(
 ) -> np.ndarray:
     """Encode multiple boards into a batch array for network evaluation.
 
+    Uses vectorized numpy slicing (matching the fast path in replay_buffer.py)
+    instead of per-point extract_position_features calls.
+
     Args:
         boards: List of board states to encode.
         encoding_config: Encoding configuration.
 
     Returns:
-        Array of shape (len(boards), 26, feature_dim).
+        Array of shape (len(boards), 26, 2).
     """
-    from backgammon.encoding.encoder import extract_position_features
-
     batch_size = len(boards)
-    features = np.zeros(
-        (batch_size, 26, encoding_config.feature_dim), dtype=np.float32
-    )
+    features = np.empty((batch_size, 26, 2), dtype=np.float32)
+    inv15 = np.float32(1.0 / 15.0)
     for i, board in enumerate(boards):
-        for point in range(26):
-            features[i, point] = extract_position_features(
-                encoding_config, board, point
-            )
+        if board.player_to_move == Player.WHITE:
+            features[i, :, 0] = board.white_checkers * inv15
+            features[i, :, 1] = board.black_checkers * inv15
+        else:
+            features[i, :, 0] = board.black_checkers * inv15
+            features[i, :, 1] = board.white_checkers * inv15
     return features
 
 
@@ -701,6 +703,9 @@ def evaluate_move_2ply(
     from their perspective). This gives a much more accurate assessment
     than 1-ply at the cost of significantly more computation.
 
+    All network evaluations are collected into a single batch call,
+    rather than one call per inner 1-ply evaluation.
+
     Args:
         state: Network training state.
         board: Current board state.
@@ -721,41 +726,118 @@ def evaluate_move_2ply(
 
     opponent = player.opponent()
 
-    weighted_value = 0.0
+    # === Phase 1: Enumerate all outer-level opponent responses ===
+    outer_no_moves_boards = []  # boards for 0-ply eval when opponent can't move
+    outer_dice_info = []  # per dice: 'no_moves' or list of ('terminal', val) / ('eval', idx)
+    positions_for_1ply = []  # after_opp boards needing 1-ply eval
 
     for dice_roll in ALL_DICE_ROLLS:
-        prob = DICE_PROBABILITIES[dice_roll]
         opp_moves = generate_legal_moves(new_board, opponent, dice_roll)
 
         if not opp_moves:
-            # Opponent has no legal moves — position stays the same.
-            # Evaluate from our perspective with 0-ply (no further search).
-            values = _batch_evaluate(state, [new_board], encoding_config)
-            our_val = float(values[0])
-            weighted_value += prob * our_val
+            outer_no_moves_boards.append(new_board)
+            outer_dice_info.append('no_moves')
             continue
 
-        # Opponent picks the move that maximizes THEIR value.
-        # Each opponent move is evaluated at 1-ply from the opponent's
-        # perspective (they average over OUR dice responses).
-        opp_best = -np.inf
-
+        move_info = []
         for opp_move in opp_moves:
             after_opp = apply_move(new_board, opponent, opp_move)
-
             if is_game_over(after_opp):
-                opp_val = _terminal_value(after_opp, opponent)
+                move_info.append(('terminal', _terminal_value(after_opp, opponent)))
             else:
-                # Evaluate at 1-ply from opponent's perspective.
-                # This means: for each of OUR dice rolls, we pick our best
-                # response (at 0-ply), and opponent averages the results.
-                opp_val = _evaluate_position_1ply(
-                    state, after_opp, opponent, encoding_config
-                )
+                pos_idx = len(positions_for_1ply)
+                positions_for_1ply.append(after_opp)
+                move_info.append(('eval', pos_idx))
+        outer_dice_info.append(move_info)
 
-            opp_best = max(opp_best, opp_val)
+    # === Phase 2: Expand all 1-ply evaluations into board collection ===
+    all_inner_boards = []
+    # Per position: list of (n_network, has_terminal, terminal_val) per dice roll
+    inner_structure = []
 
-        # Convert back to our perspective
+    for after_opp in positions_for_1ply:
+        dice_info = []
+        for dice_roll in ALL_DICE_ROLLS:
+            moves = generate_legal_moves(after_opp, opponent, dice_roll)
+
+            if not moves:
+                all_inner_boards.append(after_opp)
+                dice_info.append((1, False, 0.0))
+                continue
+
+            terminal_found = False
+            terminal_val = -np.inf
+            n_network = 0
+
+            for m in moves:
+                after = apply_move(after_opp, opponent, m)
+                if is_game_over(after):
+                    v = _terminal_value(after, opponent)
+                    if v > terminal_val:
+                        terminal_val = v
+                        terminal_found = True
+                else:
+                    all_inner_boards.append(after)
+                    n_network += 1
+
+            dice_info.append((n_network, terminal_found, terminal_val))
+        inner_structure.append(dice_info)
+
+    # === Phase 3: Single batch evaluation of ALL boards ===
+    all_boards = outer_no_moves_boards + all_inner_boards
+    if all_boards:
+        all_values = _batch_evaluate(state, all_boards, encoding_config)
+    else:
+        all_values = np.array([], dtype=np.float32)
+
+    outer_values = all_values[:len(outer_no_moves_boards)]
+    inner_values = all_values[len(outer_no_moves_boards):]
+
+    # === Phase 4: Compute 1-ply values from inner results ===
+    inner_cursor = 0
+    position_1ply_values = []
+
+    for dice_info in inner_structure:
+        weighted_value = 0.0
+        for dice_idx, (n_network, has_terminal, terminal_val) in enumerate(dice_info):
+            prob = DICE_PROBABILITIES[ALL_DICE_ROLLS[dice_idx]]
+            best_val = -np.inf
+
+            if has_terminal:
+                best_val = max(best_val, terminal_val)
+
+            for _ in range(n_network):
+                other_val = float(inner_values[inner_cursor])
+                our_val = -other_val
+                best_val = max(best_val, our_val)
+                inner_cursor += 1
+
+            if best_val == -np.inf:
+                best_val = 0.0
+            weighted_value += prob * best_val
+
+        position_1ply_values.append(weighted_value)
+
+    # === Phase 5: Compute final 2-ply value ===
+    weighted_value = 0.0
+    outer_cursor = 0
+
+    for dice_idx, info in enumerate(outer_dice_info):
+        prob = DICE_PROBABILITIES[ALL_DICE_ROLLS[dice_idx]]
+
+        if info == 'no_moves':
+            our_val = float(outer_values[outer_cursor])
+            weighted_value += prob * our_val
+            outer_cursor += 1
+            continue
+
+        opp_best = -np.inf
+        for entry in info:
+            if entry[0] == 'terminal':
+                opp_best = max(opp_best, entry[1])
+            else:  # 'eval'
+                opp_best = max(opp_best, position_1ply_values[entry[1]])
+
         weighted_value += prob * (-opp_best)
 
     return weighted_value
@@ -769,11 +851,15 @@ def _evaluate_position_1ply(
 ) -> float:
     """Evaluate a position at 1-ply from a given player's perspective.
 
-    For each of 21 dice rolls for the OTHER player, that player picks
-    their best 0-ply move, and we average the resulting values.
+    For each of 21 dice rolls, perspective picks their best 0-ply move,
+    and we average the resulting values weighted by dice probability.
 
     This is the "inner loop" of 2-ply search: it tells the opponent
     how good a position is for them after they've moved.
+
+    Note: evaluate_move_2ply uses a batched implementation that avoids
+    calling this function repeatedly. This function is kept for standalone
+    use (e.g., by select_move_2ply_pruned).
 
     Args:
         state: Network training state.
@@ -784,8 +870,6 @@ def _evaluate_position_1ply(
     Returns:
         Value from perspective's point of view.
     """
-    other = perspective.opponent()
-
     # Collect all boards we need to evaluate in one batch
     all_boards = []
     dice_info = []  # (n_network, has_terminal, terminal_val)

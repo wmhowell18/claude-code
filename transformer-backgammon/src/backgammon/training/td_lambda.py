@@ -149,6 +149,10 @@ def compute_td_lambda_targets(
         target = V_white[t] + eligibility
         # Clamp to valid probability range
         target = np.clip(target, 0.0, 1.0)
+        # Renormalize to a valid distribution (must sum to 1)
+        target_sum = target.sum()
+        if target_sum > 1e-8:
+            target = target / target_sum
         targets_white[t] = target
 
     # Convert targets from White's perspective back to each step's player

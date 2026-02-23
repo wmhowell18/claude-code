@@ -257,6 +257,23 @@ class TrainingPhase:
         )
 
 
+def create_lr_schedule(config: TrainingConfig) -> optax.Schedule:
+    """Create learning rate schedule from config.
+
+    Args:
+        config: Training configuration.
+
+    Returns:
+        Optax schedule callable (step -> learning_rate).
+    """
+    return optax.warmup_cosine_decay_schedule(
+        init_value=0.0,
+        peak_value=config.learning_rate,
+        warmup_steps=config.warmup_steps,
+        decay_steps=100000,  # Total training steps
+    )
+
+
 def create_train_state(config: TrainingConfig, rng: jax.random.PRNGKey) -> train_state.TrainState:
     """Create initial training state with model and optimizer.
 
@@ -294,12 +311,7 @@ def create_train_state(config: TrainingConfig, rng: jax.random.PRNGKey) -> train
     variables = model.init(rng, dummy_input, training=False)
 
     # Learning rate schedule with warmup
-    schedule = optax.warmup_cosine_decay_schedule(
-        init_value=0.0,
-        peak_value=config.learning_rate,
-        warmup_steps=config.warmup_steps,
-        decay_steps=100000,  # Total training steps
-    )
+    schedule = create_lr_schedule(config)
 
     # Optimizer with gradient clipping
     optimizer = optax.chain(
@@ -379,6 +391,9 @@ def train(config: Optional[TrainingConfig] = None):
     # Initialize random state
     rng = np.random.default_rng(config.seed)
     jax_rng = jax.random.PRNGKey(config.seed)
+
+    # Create LR schedule (for logging actual learning rate)
+    lr_schedule = create_lr_schedule(config)
 
     # Create training state
     print("🔧 Initializing model and optimizer...")
@@ -543,10 +558,8 @@ def train(config: Optional[TrainingConfig] = None):
 
             batch_time = time.time() - batch_start
 
-            # Get current learning rate
-            # For simplicity, just use the peak learning rate from config
-            # (actual LR varies with warmup/cosine schedule)
-            current_lr = config.learning_rate
+            # Get current learning rate from schedule
+            current_lr = float(lr_schedule(total_train_steps))
 
             # Create metrics
             metrics = TrainingMetrics(
