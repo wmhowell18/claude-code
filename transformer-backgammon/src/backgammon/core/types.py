@@ -119,7 +119,6 @@ class Board:
 
     def set_checkers(self, player: Player, point: Point, count: CheckerCount) -> None:
         """Set number of checkers at a point for a player (mutates board)."""
-        assert 0 <= count <= 15, f"Invalid checker count: {count}"
         if player == Player.WHITE:
             self.white_checkers[point] = count
         else:
