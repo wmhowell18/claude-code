@@ -3,6 +3,8 @@
 > **Status**: Search, benchmarking, training improvements, and doubling cube complete. 0/1/2-ply search with batch evaluation, move ordering with progressive deepening, transposition table, and TD(lambda) training implemented. Win rate tracking, benchmark positions, position weighting, validation splits, and early stopping integrated into training loop. Race equity formula for pure race positions. Full doubling cube with match play, match equity tables, cubeful equity, and cube decision network head.
 >
 > **Current Maturity**: ~7/10 for competitive play. Solid game engine + neural training + search + benchmarking + TD(lambda) + exploration schedule + global encoding features + race evaluation + training infrastructure (position weighting, validation, early stopping) + doubling cube + match play. Missing GnuBG interface, MCTS, and rollout-based training.
+>
+> **Known Issues (Feb 2026)**: Code review identified several correctness bugs requiring attention before long training runs: policy head is non-functional (hash collisions + dummy targets), global features are implemented but not wired into training (input_feature_dim hardcoded to 2), TD targets are not renormalized before cross-entropy loss, and training telemetry is misleading (train_acc always 0.0, LR logged as constant peak). See "KNOWN ISSUES" section below.
 
 ---
 
@@ -12,6 +14,62 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 - **Status**: `[ ]` todo, `[x]` done, `[~]` in progress, `[-]` skipped/deferred
 - **Effort**: S (hours), M (days), L (weeks)
 - **Impact**: How much this improves the bot's playing strength
+
+---
+
+## KNOWN ISSUES: Fix Before Long Runs
+
+*Correctness bugs and silent failures identified in code review (Feb 2026). These directly affect
+training quality and telemetry — address before committing to multi-hour TPU runs.*
+
+- [ ] **101. `train_acc` always 0.0** — `train.py` initializes `train_acc = 0.0` and never
+  updates it during the training loop. `compute_metrics()` computes accuracy but is only called for
+  validation. Training logs always show 0.0 accuracy, making this metric useless for monitoring
+  convergence. Fix: call `compute_metrics()` on a training minibatch at eval checkpoints, or remove
+  the metric. (Effort: S, Impact: diagnostic)
+
+- [ ] **102. LR logged as constant peak LR** — `train.py:547-549` hardcodes
+  `current_lr = config.learning_rate` instead of reading the actual scheduled value from optax
+  state. The warmup and cosine decay schedule is running correctly, but logs always show the peak
+  LR — making LR curves completely uninformative for debugging schedule issues. Fix: extract actual
+  LR from the optax state via `state.opt_state`. (Effort: S, Impact: diagnostic)
+
+- [ ] **103. TD targets not renormalized before cross-entropy** — `td_lambda.py` clips each
+  component of the 6-dim target to [0, 1] elementwise, then converts to 5-dim and passes to
+  `compute_equity_loss`. The result may not sum to 1 (or may sum near 0 for large eligibility
+  traces), which collapses gradient signal for those samples and can cause cross-entropy instability.
+  Fix: after clipping, renormalize the 5-dim target to sum to 1 (or to skip samples where sum < ε).
+  (Effort: S, Impact: training quality)
+
+- [ ] **104. Policy head non-functional — disable until fixed** — Two compounding issues: (1)
+  `action_encoder.py` maps moves to 1024 slots via a hash with frequent collisions for the 20-100+
+  legal moves in typical positions, making one-hot targets ambiguous; (2) `replay_buffer.py:
+  sample_batch` returns pre-allocated dummy zero arrays for policy targets and all-true masks
+  regardless of actual position. The policy head receives zero meaningful gradient. Training with
+  `train_policy=True` wastes compute and may destabilize the value head. Fix: disable policy head
+  for value-only training, then address item 59 (precomputed action lookup) to fix the root cause.
+  (Effort: M, Impact: large — fixes training stability and removes wasted compute)
+
+- [ ] **105. Global features not wired into training** — Items 25-28, 31-32 are marked complete,
+  but `train.py:282` hardcodes `input_feature_dim=2` (raw 2-feature encoding only). The 8-dim
+  global features implemented in `encode_global_board_features()` — pip counts, contact detection,
+  prime length, bearoff progress, race equity — are never seen by the network during training. The
+  `enhanced_encoding_config()` and `full_encoding_config()` presets exist but are unused. Fix:
+  switch training to use `full_encoding_config()` and update `input_feature_dim` accordingly. This
+  is the single highest-impact improvement available without new code. (Effort: S, Impact: large)
+
+- [ ] **106. Dead `train_step` in `network.py`** — `network.py:769` defines a second
+  `@jax.jit train_step` with a different loss formulation: no gradient clipping, raw cross-entropy
+  without the combined loss wrapper. The main training loop imports `train_step` from `losses.py`.
+  The `network.py` version is dead code, but risks being imported by mistake and producing silently
+  wrong behavior (different gradients, no clipping). Fix: delete the dead function and the
+  associated dead helpers (`equity_loss`, `mse_equity_loss`, `policy_loss`, `total_loss`,
+  `create_train_state`, `eval_step`). (Effort: S, Impact: safety/clarity)
+
+- [ ] **107. Stale `TrainingConfig` in `types.py`** — `types.py` contains a `TrainingConfig`
+  dataclass that conflicts with the real `TrainingConfig` in `train.py`. The one in `types.py` is
+  an older, simpler version that is not used anywhere in the training loop. Risks confusion and
+  wrong-import bugs. Fix: delete it. (Effort: S, Impact: clarity)
 
 ---
 
@@ -125,10 +183,30 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 ### Speed & Efficiency
 
 - [ ] **56. JIT compile evaluation pipeline** — Not just train_step, also inference and search. (Effort: S, Impact: moderate)
+- [ ] **108. Search encoding path not vectorized** — `search.py:_encode_boards_batch` uses a
+  double Python loop: 26 `extract_position_features` calls per board. The fast vectorized path
+  used in `self_play.py` directly slices numpy arrays without Python-level iteration. Every 1-ply
+  or 2-ply evaluation checkpoint call is ~26× slower than necessary for encoding alone. Fix:
+  replace `_encode_boards_batch` with vectorized numpy slicing matching the `_encode_boards_fast()`
+  pattern in `self_play.py`. (Effort: S, Impact: moderate — significant if eval_ply >= 1)
+- [ ] **109. 2-ply search makes k×21 separate network calls** — `select_move_2ply` evaluates each
+  legal move sequentially via `evaluate_move_2ply()`, which internally calls
+  `_evaluate_position_1ply` for each of 21 opponent dice outcomes individually. For k=20 legal
+  moves that is 420 separate network calls. By contrast, `select_move_1ply` correctly batches all
+  boards from all moves and all dice into a single call. 2-ply evaluation during training
+  checkpoints is therefore 20-50× slower than it should be. Fix: restructure 2-ply outer loop to
+  collect all (move, dice_roll) result boards first, run one batched call, then assign values. More
+  fundamental than item 56. (Effort: M, Impact: large)
+- [ ] **110. Replay buffer sampling via Python list comprehension** — `replay_buffer.py:
+  sample_batch` gathers encoded boards with `[self._encoded_boards[i] for i in indices]`.
+  `_encoded_boards` is a Python list, not a numpy array, so vectorized indexing is unavailable.
+  For batch_size=512, this is 512 individual Python list lookups. Fix: convert `_encoded_boards`
+  to a pre-allocated numpy array at init, enabling `self._encoded_boards_arr[indices]` with a
+  single vectorized op. (Effort: S, Impact: small-moderate at buffer sizes >50K)
 - [ ] **57. Optimize move generation** — Currently pure Python loops. Could use numpy vectorization or Cython. (Effort: M, Impact: moderate)
 - [ ] **58. Legal move caching within a turn** — Don't regenerate legal moves for same board+dice. (Effort: S, Impact: small)
 - [ ] **59. Precomputed action-to-move lookup** — Replace hash-based encoding with direct lookup table. (Effort: S, Impact: small)
-- [ ] **60. Batch self-play** — Play N games simultaneously, step all games forward in parallel. (Effort: L, Impact: large for speed)
+- [x] **60. Batch self-play** — `play_games_batched()` in `self_play.py` plays N games simultaneously, collecting all boards from all active games into a single batched network call per step. JIT-cached inference with padding for variable game counts. (Effort: L, Impact: large for speed) *(Feb 2026)*
 - [x] **61. TPU-specific optimizations** — bfloat16 mixed precision, v6e-1 training config preset, batch sizing for single-chip TPU. Multi-chip pmap/sharding deferred until needed. (Effort: M, Impact: moderate on TPU) *(Feb 2026)*
 - [x] **62. Mixed precision training** — bfloat16 compute with float32 params via Flax dtype/param_dtype. LayerNorm and softmax kept in float32 for stability. (Effort: S, Impact: moderate) *(Feb 2026)*
 
@@ -205,7 +283,8 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 4. ~~**Item 16** (TD(lambda))~~ — DONE (td_lambda.py + self_play.py + replay_buffer.py)
 5. ~~**Items 19, 25-28** (exploration schedule + encoding improvements)~~ — DONE (encoder.py + train.py)
 6. ~~**Items 7-10** (doubling cube)~~ — DONE (core/cube.py + types + network cube head)
-7. **Longer training run** with the improved pipeline — see where the model plateaus
+7. **Fix items 103-105** (TD target normalization, disable policy head, wire global features) — fix these before any long training run, as they directly affect gradient signal and convergence
+8. **Longer training run** with the improved pipeline — see where the model plateaus
 8. **Items 17-18** (N-step bootstrapping + rollout targets) — even better training signal
 9. **Items 45-46** (MCTS) — sophisticated search for strongest play
 
