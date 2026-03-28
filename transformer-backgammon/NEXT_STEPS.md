@@ -116,9 +116,34 @@ Compare win rates and equity errors. The larger model should be better -- if not
 
 ## Step 6: Scale to 15K Games (Medium Model)
 
-This is the real proof-of-concept. Use the medium model:
+This is the real proof-of-concept. Use the training launcher with the `poc-15k` preset:
+
+```bash
+# Easiest way — uses the preset config
+python scripts/train_run.py --preset poc-15k
+
+# Or interactively select a preset
+python scripts/train_run.py
+
+# List all available presets
+python scripts/train_run.py --list
+```
+
+Available presets in `scripts/train_run.py`:
+| Preset | Games | Model | Params | Time |
+|--------|-------|-------|--------|------|
+| smoke | 500 | 2L/64d | ~500K | ~5 min |
+| quick-2.5k | 2,500 | 2L/64d | ~500K | ~15-30 min |
+| dev-5k | 5,000 | 2L/64d | ~500K | ~30-60 min |
+| **poc-15k** | **15,000** | **4L/128d** | **~2M** | **~1-2 hr** |
+| full-50k | 50,000 | 4L/128d | ~2M | ~4-6 hr |
+| long-200k | 200,000 | 8L/256d | ~10M | ~24+ hr |
+
+Or use the Python API directly:
 
 ```python
+from backgammon.training.train import train, TrainingConfig
+
 config = TrainingConfig(
     warmstart_games=1000,
     early_phase_games=3000,

@@ -63,11 +63,10 @@ transformer-backgammon/
 │   └── expert_games.json      # Human expert games
 │
 ├── scripts/
-│   ├── train.py               # Training script
-│   ├── evaluate.py            # Evaluation script
-│   ├── play.py                # Interactive play
-│   ├── analyze.py             # Game analysis
-│   └── benchmark.py           # Run benchmarks
+│   ├── train_run.py           # Training launcher with preset configs (smoke/quick/dev/poc/full/long)
+│   ├── train_v6e.py           # TPU v6e-1 training script
+│   ├── train_example.py       # Basic training example
+│   └── smoke_test.py          # Pipeline validation (~5 min)
 │
 ├── notebooks/
 │   ├── 01_game_engine.ipynb   # Game engine exploration
