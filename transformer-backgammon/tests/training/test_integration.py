@@ -93,7 +93,7 @@ class TestCreateTrainState:
         state = create_train_state(config, rng)
 
         # Create dummy input (26 positions x 2 features)
-        dummy_input = jnp.zeros((1, 26, 2))
+        dummy_input = jnp.zeros((1, 26, 10))
 
         # Run forward pass
         output = state.apply_fn(
@@ -394,7 +394,7 @@ class TestConfigurationVariations:
         assert state is not None
 
         # Test forward pass
-        dummy_input = jnp.zeros((1, 26, 2))
+        dummy_input = jnp.zeros((1, 26, 10))
         output = state.apply_fn(
             {'params': state.params},
             dummy_input,
@@ -433,7 +433,7 @@ class TestConfigurationVariations:
             assert state is not None
 
             # Test forward pass
-            dummy_input = jnp.zeros((1, 26, 2))
+            dummy_input = jnp.zeros((1, 26, 10))
             output = state.apply_fn(
                 {'params': state.params},
                 dummy_input,

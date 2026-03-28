@@ -411,65 +411,6 @@ class TransformerConfig:
 
 
 @dataclass
-class TrainingConfig:
-    """Configuration for training loop.
-
-    Attributes:
-        learning_rate: Initial learning rate
-        optimizer: Optimizer name ("adam", "sgd", etc.)
-        batch_size: Training batch size
-        num_epochs: Number of training epochs
-        minibatches_per_epoch: Number of minibatches per epoch
-        replay_buffer_size: Experience replay buffer capacity
-        min_replay_size: Minimum buffer size before training starts
-        games_per_iteration: Number of self-play games per iteration
-        eval_every_n_games: Evaluate after this many games
-        eval_num_games: Number of games for evaluation
-        checkpoint_every_n_games: Save checkpoint after this many games
-        checkpoint_dir: Directory for saving checkpoints
-    """
-    learning_rate: float = 1e-4
-    optimizer: str = "adam"
-    batch_size: int = 256
-    num_epochs: int = 100
-    minibatches_per_epoch: int = 100
-    replay_buffer_size: int = 100000
-    min_replay_size: int = 10000
-    games_per_iteration: int = 100
-    eval_every_n_games: int = 1000
-    eval_num_games: int = 100
-    checkpoint_every_n_games: int = 5000
-    checkpoint_dir: str = "./checkpoints"
-
-
-@dataclass
-class Config:
-    """Complete configuration for the backgammon AI.
-
-    Attributes:
-        transformer: Transformer architecture config
-        encoding: Board encoding config
-        training: Training loop config
-        seed: Random seed
-        device: Device to use ("cpu", "gpu", "tpu")
-        use_jit: Whether to use JAX JIT compilation
-        log_level: Logging level
-        log_dir: Directory for logs
-        use_wandb: Whether to use Weights & Biases
-        wandb_project: W&B project name
-    """
-    transformer: TransformerConfig
-    encoding: EncodingConfig
-    training: TrainingConfig
-    seed: int = 42
-    device: str = "cpu"
-    use_jit: bool = True
-    log_level: str = "info"
-    log_dir: str = "./logs"
-    use_wandb: bool = False
-    wandb_project: str = "transformer-backgammon"
-
-
 # ==============================================================================
 # GAME SIMULATION
 # ==============================================================================

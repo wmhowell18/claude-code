@@ -19,6 +19,7 @@ from flax.training import train_state
 from backgammon.core.board import Board, apply_move, generate_legal_moves, is_game_over, winner
 from backgammon.core.types import Player, Move, GameOutcome
 from backgammon.core.dice import roll_dice
+from backgammon.encoding.encoder import compute_global_features
 from backgammon.evaluation.agents import Agent, pip_count_agent, random_agent
 
 
@@ -307,19 +308,21 @@ def _pad_batch_size(n: int) -> int:
 
 
 def _encode_boards_fast(boards: List[Board]) -> np.ndarray:
-    """Fast vectorized board encoding for raw encoding (feature_dim=2).
+    """Fast vectorized board encoding with global features (feature_dim=10).
 
     Directly slices numpy arrays instead of calling per-point Python
     functions 26 times per board. ~10x faster than the generic path.
+    Appends 8 global features (pip counts, contact, primes, bearoff)
+    broadcast to every position.
 
     Args:
         boards: List of Board objects.
 
     Returns:
-        Array of shape (len(boards), 26, 2) with normalized checker counts.
+        Array of shape (len(boards), 26, 10) with raw + global features.
     """
     n = len(boards)
-    features = np.zeros((n, 26, 2), dtype=np.float32)
+    features = np.zeros((n, 26, 10), dtype=np.float32)
     inv15 = np.float32(1.0 / 15.0)
     for i, board in enumerate(boards):
         if board.player_to_move == Player.WHITE:
@@ -328,6 +331,9 @@ def _encode_boards_fast(boards: List[Board]) -> np.ndarray:
         else:
             features[i, :, 0] = board.black_checkers * inv15
             features[i, :, 1] = board.white_checkers * inv15
+        # Compute global features and broadcast to all 26 positions
+        global_feats = compute_global_features(board)
+        features[i, :, 2:10] = global_feats[np.newaxis, :]
     return features
 
 
@@ -355,7 +361,7 @@ def _batched_inference(
 
     # Pre-allocate padded array directly (avoids separate encode + concat)
     padded_n = _pad_batch_size(n)
-    encoded = np.zeros((padded_n, 26, 2), dtype=np.float32)
+    encoded = np.zeros((padded_n, 26, 10), dtype=np.float32)
     inv15 = np.float32(1.0 / 15.0)
     for i, board in enumerate(boards):
         if board.player_to_move == Player.WHITE:
@@ -364,6 +370,9 @@ def _batched_inference(
         else:
             encoded[i, :, 0] = board.black_checkers * inv15
             encoded[i, :, 1] = board.white_checkers * inv15
+        # Compute global features and broadcast to all 26 positions
+        global_feats = compute_global_features(board)
+        encoded[i, :, 2:10] = global_feats[np.newaxis, :]
 
     encoded_jax = jnp.array(encoded)
     equity, _, _, _ = jit_fn(params, encoded_jax)

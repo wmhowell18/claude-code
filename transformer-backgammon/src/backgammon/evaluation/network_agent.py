@@ -14,7 +14,7 @@ from flax.training import train_state
 
 from backgammon.core.board import Board
 from backgammon.core.types import Player, Move, Dice, LegalMoves
-from backgammon.encoding.encoder import encode_board, raw_encoding_config
+from backgammon.encoding.encoder import encode_board, enhanced_encoding_config
 from backgammon.encoding.action_encoder import encode_move_to_action
 from backgammon.evaluation.agents import Agent
 from backgammon.evaluation.search import select_move as search_select_move
@@ -43,7 +43,7 @@ class NeuralNetworkAgent:
         self.temperature = temperature
         self.name = name
         self.ply = ply
-        self.encoding_config = raw_encoding_config()
+        self.encoding_config = enhanced_encoding_config()
 
     def select_move(
         self,

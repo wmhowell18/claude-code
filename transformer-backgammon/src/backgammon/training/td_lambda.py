@@ -144,11 +144,23 @@ def compute_td_lambda_targets(
     targets_white = [None] * T
     eligibility = np.zeros(6, dtype=np.float32)
 
+    # Pre-compute MC targets as fallback for degenerate TD targets
+    mc_targets = _monte_carlo_targets(game)
+
     for t in range(T - 1, -1, -1):
         eligibility = deltas[t] + lambda_param * eligibility
         target = V_white[t] + eligibility
         # Clamp to valid probability range
         target = np.clip(target, 0.0, 1.0)
+        # Renormalize to a valid probability distribution (must sum to 1)
+        target_sum = target.sum()
+        if target_sum < 1e-6:
+            # Degenerate target — fall back to MC target for this step
+            target = _to_6dim(mc_targets[t])
+            if game.steps[t].player == Player.BLACK:
+                target = _flip_6dim(target)
+        else:
+            target = target / target_sum
         targets_white[t] = target
 
     # Convert targets from White's perspective back to each step's player

@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 import random
 
 from backgammon.training.self_play import GameResult, GameStep
-from backgammon.encoding.encoder import encode_board, raw_encoding_config, outcome_to_equity
+from backgammon.encoding.encoder import encode_board, raw_encoding_config, outcome_to_equity, compute_global_features
 from backgammon.encoding.action_encoder import (
     encode_move_to_one_hot,
     create_action_mask,
@@ -25,18 +25,19 @@ from backgammon.core.types import Player
 
 
 def _encode_board_fast_single(board) -> np.ndarray:
-    """Fast single-board encoding for raw encoding (feature_dim=2).
+    """Fast single-board encoding with global features (feature_dim=10).
 
     Directly slices numpy checker arrays instead of calling encode_board()
-    which iterates 26 times per board in Python.
+    which iterates 26 times per board in Python. Appends 8 global features
+    (pip counts, contact, primes, bearoff) broadcast to every position.
 
     Args:
         board: Board object.
 
     Returns:
-        Array of shape (26, 2) with normalized checker counts.
+        Array of shape (26, 10) with raw + global features.
     """
-    features = np.empty((26, 2), dtype=np.float32)
+    features = np.empty((26, 10), dtype=np.float32)
     inv15 = np.float32(1.0 / 15.0)
     if board.player_to_move == Player.WHITE:
         features[:, 0] = board.white_checkers * inv15
@@ -44,6 +45,9 @@ def _encode_board_fast_single(board) -> np.ndarray:
     else:
         features[:, 0] = board.black_checkers * inv15
         features[:, 1] = board.white_checkers * inv15
+    # Compute global features and broadcast to all 26 positions
+    global_feats = compute_global_features(board)
+    features[:, 2:10] = global_feats[np.newaxis, :]
     return features
 
 
