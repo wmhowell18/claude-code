@@ -9,7 +9,7 @@ from backgammon.training.self_play import (
     play_game,
     generate_training_batch,
     compute_game_statistics,
-    _flip_equity_5dim,
+    _flip_equity_6dim,
 )
 from backgammon.core.board import initial_board, get_early_training_variants
 from backgammon.core.types import Player
@@ -366,51 +366,47 @@ class TestSelfPlayIntegration:
             assert len(result.steps) > 0
 
 
-class TestFlipEquity5Dim:
-    """Tests for 5-dim equity perspective flipping."""
+class TestFlipEquity6Dim:
+    """Tests for 6-dim equity perspective flipping."""
 
     def test_pure_win_normal(self):
         """Flipping a pure win_normal should give pure lose_normal."""
-        equity = np.array([1.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
-        flipped = _flip_equity_5dim(equity)
-        # lose_normal = 1 - sum = 0, so new win_normal = 0
-        # All zeros means lose_normal = 1 - 0 = 1 (implicit)
-        np.testing.assert_allclose(flipped, [0.0, 0.0, 0.0, 0.0, 0.0], atol=1e-6)
+        # [win_n, win_g, win_bg, lose_n, lose_g, lose_bg]
+        equity = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        flipped = _flip_equity_6dim(equity)
+        expected = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+        np.testing.assert_allclose(flipped, expected, atol=1e-6)
 
     def test_pure_lose_normal(self):
         """Flipping a pure lose_normal should give pure win_normal."""
-        # lose_normal = 1 - 0 = 1 (all explicit components zero)
-        equity = np.array([0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
-        flipped = _flip_equity_5dim(equity)
-        np.testing.assert_allclose(flipped, [1.0, 0.0, 0.0, 0.0, 0.0], atol=1e-6)
+        equity = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+        flipped = _flip_equity_6dim(equity)
+        expected = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        np.testing.assert_allclose(flipped, expected, atol=1e-6)
 
     def test_gammon_swap(self):
         """Win gammon should become lose gammon and vice versa."""
-        equity = np.array([0.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float32)  # win_gammon
-        flipped = _flip_equity_5dim(equity)
-        expected = np.array([0.0, 0.0, 0.0, 1.0, 0.0], dtype=np.float32)  # lose_gammon
+        equity = np.array([0.0, 1.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)  # win_gammon
+        flipped = _flip_equity_6dim(equity)
+        expected = np.array([0.0, 0.0, 0.0, 0.0, 1.0, 0.0], dtype=np.float32)  # lose_gammon
         np.testing.assert_allclose(flipped, expected, atol=1e-6)
 
     def test_backgammon_swap(self):
         """Win backgammon should become lose backgammon and vice versa."""
-        equity = np.array([0.0, 0.0, 1.0, 0.0, 0.0], dtype=np.float32)  # win_bg
-        flipped = _flip_equity_5dim(equity)
-        expected = np.array([0.0, 0.0, 0.0, 0.0, 1.0], dtype=np.float32)  # lose_bg
+        equity = np.array([0.0, 0.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float32)  # win_bg
+        flipped = _flip_equity_6dim(equity)
+        expected = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 1.0], dtype=np.float32)  # lose_bg
         np.testing.assert_allclose(flipped, expected, atol=1e-6)
 
     def test_double_flip_is_identity(self):
         """Flipping twice should return the original equity."""
-        equity = np.array([0.3, 0.1, 0.02, 0.05, 0.01], dtype=np.float32)
-        double_flipped = _flip_equity_5dim(_flip_equity_5dim(equity))
+        equity = np.array([0.3, 0.1, 0.02, 0.52, 0.05, 0.01], dtype=np.float32)
+        double_flipped = _flip_equity_6dim(_flip_equity_6dim(equity))
         np.testing.assert_allclose(double_flipped, equity, atol=1e-6)
 
     def test_probability_conservation(self):
-        """Sum of all 6 components (5 explicit + lose_normal) should remain 1."""
-        equity = np.array([0.3, 0.1, 0.02, 0.05, 0.01], dtype=np.float32)
-        flipped = _flip_equity_5dim(equity)
-        # All 6 probabilities: 5 explicit + implicit lose_normal
-        total = np.sum(flipped) + (1.0 - np.sum(flipped))  # Always 1 by definition
-        # But more importantly: each component should be non-negative
+        """Sum of all 6 components should remain 1 after flipping."""
+        equity = np.array([0.3, 0.1, 0.02, 0.52, 0.05, 0.01], dtype=np.float32)
+        flipped = _flip_equity_6dim(equity)
+        np.testing.assert_allclose(np.sum(flipped), np.sum(equity), atol=1e-6)
         assert np.all(flipped >= -1e-6)
-        # And implicit lose_normal should be non-negative
-        assert 1.0 - np.sum(flipped) >= -1e-6
