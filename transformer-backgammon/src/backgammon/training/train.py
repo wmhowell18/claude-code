@@ -96,6 +96,11 @@ class TrainingConfig:
     # EMA settings
     ema_decay: float = 0.999  # EMA decay rate for weight averaging
 
+    # Schedule-free optimizer (Meta, 2024). Eliminates the need to choose
+    # decay_steps for cosine schedule. Set True to use schedule-free AdamW
+    # instead of warmup + cosine decay.
+    use_schedule_free: bool = False
+
     # Replay buffer settings
     replay_buffer_size: int = 100_000
     replay_buffer_min_size: int = 1_000
@@ -309,20 +314,30 @@ def create_train_state(config: TrainingConfig, rng: jax.random.PRNGKey) -> train
     dummy_input = jnp.zeros((1, 26, 10))
     variables = model.init(rng, dummy_input, training=False)
 
-    # Learning rate schedule with warmup
-    schedule = optax.warmup_cosine_decay_schedule(
-        init_value=0.0,
-        peak_value=config.learning_rate,
-        warmup_steps=config.warmup_steps,
-        decay_steps=100000,  # Total training steps
-    )
-
-    # Optimizer with gradient clipping
-    # AdamW decouples weight decay from gradient update for better generalization
-    optimizer = optax.chain(
-        optax.clip_by_global_norm(config.max_grad_norm),
-        optax.adamw(learning_rate=schedule, weight_decay=0.01),
-    )
+    if config.use_schedule_free:
+        # Schedule-free AdamW (Meta, 2024): eliminates need to choose
+        # decay_steps. Works regardless of training length.
+        optimizer = optax.chain(
+            optax.clip_by_global_norm(config.max_grad_norm),
+            optax.contrib.schedule_free_adamw(
+                learning_rate=config.learning_rate,
+                warmup_steps=config.warmup_steps,
+                weight_decay=0.01,
+            ),
+        )
+    else:
+        # Standard warmup + cosine decay schedule
+        schedule = optax.warmup_cosine_decay_schedule(
+            init_value=0.0,
+            peak_value=config.learning_rate,
+            warmup_steps=config.warmup_steps,
+            decay_steps=100000,  # Total training steps
+        )
+        # AdamW decouples weight decay from gradient update for better generalization
+        optimizer = optax.chain(
+            optax.clip_by_global_norm(config.max_grad_norm),
+            optax.adamw(learning_rate=schedule, weight_decay=0.01),
+        )
 
     return train_state.TrainState.create(
         apply_fn=model.apply,
