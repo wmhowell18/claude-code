@@ -145,6 +145,10 @@ class TrainingConfig:
     use_dice_averaged_targets: bool = False  # Average V over all 21 dice outcomes for TD targets
     use_stratified_dice: bool = False  # Cycle through pre-shuffled dice instead of random
 
+    # 1-ply lookahead during self-play
+    use_1ply_selfplay: bool = False  # Use 1-ply dice-averaged lookahead for move selection
+    lookahead_top_k: int = 8  # Pre-screen to top-k moves before 1-ply expansion
+
     # Game length limits
     max_moves: int = 200  # Max moves per game before declaring draw
 
@@ -208,6 +212,10 @@ def v6e_quick_training_config() -> TrainingConfig:
         # TD(lambda) for better targets
         use_td_lambda=True,
         td_lambda=0.7,
+
+        # 1-ply lookahead for much stronger self-play training signal
+        use_1ply_selfplay=True,
+        lookahead_top_k=8,
 
         # Paths
         checkpoint_dir="checkpoints_v6e",
@@ -605,6 +613,8 @@ def train(config: Optional[TrainingConfig] = None):
                     record_value_estimates=record_values,
                     use_dice_averaged_targets=config.use_dice_averaged_targets,
                     use_stratified_dice=config.use_stratified_dice,
+                    use_1ply_lookahead=config.use_1ply_selfplay,
+                    lookahead_top_k=config.lookahead_top_k,
                 )
 
             # Add games to replay buffer (with TD(lambda) targets if enabled)

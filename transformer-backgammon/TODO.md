@@ -109,6 +109,14 @@ training quality and telemetry — address before committing to multi-hour TPU r
 
 - [x] **16. TD(lambda) returns** — Full TD(lambda) implementation following TD-Gammon (Tesauro 1995). Records network equity estimates during self-play, computes targets using backward eligibility traces in fixed-perspective (White) 6-dim equity space. Configurable lambda (default 0.7). Integrated into replay buffer and training loop. (Effort: M, Impact: large) *(Feb 2026)*
 - [ ] **17. N-step bootstrapping** — Use V(s') from the network for truncated episodes instead of waiting for game end. (Effort: M, Impact: large)
+- [x] **17b. 1-ply lookahead during self-play** — Integrated 1-ply dice-averaged lookahead into
+  `play_games_batched()` for move selection during training data generation. For each candidate move,
+  averages over all 21 opponent dice responses (opponent plays best 0-ply response). Uses top-k
+  pre-screening (0-ply) to limit 1-ply expansion to best 8 candidates. Configurable via
+  `use_1ply_selfplay` and `lookahead_top_k` in TrainingConfig. Enabled by default in all presets.
+  Motivation: Hilton's OCaml bot reached 50% vs pip-count in ~1K games with 1-ply; our 0-ply
+  self-play couldn't reach it in 15K games. (Effort: M, Impact: large — dramatically improves
+  training signal quality) *(Mar 2026)*
 - [ ] **18. Rollout-based training targets** — 1-ply rollout equity gives much better targets than raw game outcome. Key technique from gnubg. (Effort: L, Impact: large)
 - [x] **19. Exploration schedule** — Linear temperature decay from 1.0 → 0.1 over training. Configurable start/end temperatures. Logged per-batch. Warmstart phase uses fixed temperature. (Effort: S, Impact: moderate) *(Feb 2026)*
 - [ ] **20. Opponent diversity** — Periodically play against older snapshots and baseline agents, not just self. Prevents forgetting. (Effort: M, Impact: moderate)
