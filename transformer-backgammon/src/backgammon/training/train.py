@@ -194,7 +194,6 @@ class TrainingMetrics:
 
     # Training metrics
     loss: float
-    accuracy: float
     learning_rate: float
 
     # Timing
@@ -279,7 +278,7 @@ def create_train_state(config: TrainingConfig, rng: jax.random.PRNGKey) -> train
         num_layers=config.num_layers,
         ff_dim=config.ff_dim,
         dropout_rate=config.dropout_rate,
-        input_feature_dim=2,  # Raw encoding has 2 features per position
+        input_feature_dim=10,  # Enhanced encoding: 2 raw + 8 global features
         use_policy_head=config.train_policy,  # Enable policy prediction based on config
         num_actions=get_action_space_size() if config.train_policy else 0,
         dtype=dtype,
@@ -288,9 +287,9 @@ def create_train_state(config: TrainingConfig, rng: jax.random.PRNGKey) -> train
     # Initialize model
     model = BackgammonTransformer(config=transformer_config)
 
-    # Dummy input for initialization (26 positions x 2 features = 52 dims)
-    # Note: The network expects raw features, not flattened encoding
-    dummy_input = jnp.zeros((1, 26, 2))
+    # Dummy input for initialization (26 positions x 10 features)
+    # Enhanced encoding: 2 raw checker counts + 8 global board features
+    dummy_input = jnp.zeros((1, 26, 10))
     variables = model.init(rng, dummy_input, training=False)
 
     # Learning rate schedule with warmup
@@ -383,6 +382,14 @@ def train(config: Optional[TrainingConfig] = None):
     # Create training state
     print("🔧 Initializing model and optimizer...")
     state = create_train_state(config, jax_rng)
+
+    # LR schedule (recreated here for logging; matches the one in create_train_state)
+    lr_schedule = optax.warmup_cosine_decay_schedule(
+        init_value=0.0,
+        peak_value=config.learning_rate,
+        warmup_steps=config.warmup_steps,
+        decay_steps=100000,
+    )
 
     # Create replay buffer (training)
     print("💾 Creating replay buffer...")
@@ -511,7 +518,6 @@ def train(config: Optional[TrainingConfig] = None):
 
             # Train neural network (if buffer is ready)
             train_loss = 0.0
-            train_acc = 0.0
             max_grad_norm_seen = 0.0
             grad_clips = 0
 
@@ -543,10 +549,8 @@ def train(config: Optional[TrainingConfig] = None):
 
             batch_time = time.time() - batch_start
 
-            # Get current learning rate
-            # For simplicity, just use the peak learning rate from config
-            # (actual LR varies with warmup/cosine schedule)
-            current_lr = config.learning_rate
+            # Get actual learning rate from schedule
+            current_lr = float(lr_schedule(total_train_steps))
 
             # Create metrics
             metrics = TrainingMetrics(
@@ -558,7 +562,6 @@ def train(config: Optional[TrainingConfig] = None):
                 gammons=stats['gammons'],
                 backgammons=stats['backgammons'],
                 loss=train_loss,
-                accuracy=train_acc,
                 learning_rate=current_lr,
                 batch_time=batch_time,
                 games_per_second=len(games) / batch_time,

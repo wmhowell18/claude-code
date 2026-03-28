@@ -400,9 +400,9 @@ def compute_equity_error(
             - 'per_position': List of (name, predicted, expected, error)
     """
     from backgammon.evaluation.search import _batch_evaluate, _equity_to_value
-    from backgammon.encoding.encoder import raw_encoding_config
+    from backgammon.encoding.encoder import enhanced_encoding_config
 
-    encoding_config = raw_encoding_config()
+    encoding_config = enhanced_encoding_config()
 
     # Filter to positions with known equity
     known = [(p, p.expected_equity) for p in positions if p.expected_equity is not None]

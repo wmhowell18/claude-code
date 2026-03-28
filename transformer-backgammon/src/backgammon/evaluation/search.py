@@ -34,7 +34,7 @@ from backgammon.core.board import (
 )
 from backgammon.core.types import Player, Move, MoveStep, Dice, LegalMoves, GameOutcome
 from backgammon.core.dice import ALL_DICE_ROLLS, DICE_PROBABILITIES
-from backgammon.encoding.encoder import raw_encoding_config, EncodingConfig
+from backgammon.encoding.encoder import raw_encoding_config, enhanced_encoding_config, EncodingConfig
 
 
 # ==============================================================================
@@ -338,7 +338,7 @@ def evaluate_move_0ply(
         Value estimate from player's perspective (higher = better).
     """
     if encoding_config is None:
-        encoding_config = raw_encoding_config()
+        encoding_config = enhanced_encoding_config()
 
     new_board = apply_move(board, player, move)
 
@@ -376,7 +376,7 @@ def select_move_0ply(
         Tuple of (best_move, best_value).
     """
     if encoding_config is None:
-        encoding_config = raw_encoding_config()
+        encoding_config = enhanced_encoding_config()
 
     if not legal_moves:
         return (), 0.0
@@ -464,7 +464,7 @@ def evaluate_move_1ply(
         Value estimate from player's perspective (higher = better).
     """
     if encoding_config is None:
-        encoding_config = raw_encoding_config()
+        encoding_config = enhanced_encoding_config()
 
     new_board = apply_move(board, player, move)
 
@@ -581,7 +581,7 @@ def select_move_1ply(
         Tuple of (best_move, best_value).
     """
     if encoding_config is None:
-        encoding_config = raw_encoding_config()
+        encoding_config = enhanced_encoding_config()
 
     if not legal_moves:
         return (), 0.0
@@ -712,7 +712,7 @@ def evaluate_move_2ply(
         Value estimate from player's perspective (higher = better).
     """
     if encoding_config is None:
-        encoding_config = raw_encoding_config()
+        encoding_config = enhanced_encoding_config()
 
     new_board = apply_move(board, player, move)
 
@@ -886,7 +886,7 @@ def select_move_2ply(
         Tuple of (best_move, best_value).
     """
     if encoding_config is None:
-        encoding_config = raw_encoding_config()
+        encoding_config = enhanced_encoding_config()
 
     if not legal_moves:
         return (), 0.0
@@ -1039,7 +1039,7 @@ def select_move_2ply_pruned(
         Tuple of (best_move, best_value).
     """
     if encoding_config is None:
-        encoding_config = raw_encoding_config()
+        encoding_config = enhanced_encoding_config()
 
     if not legal_moves:
         return (), 0.0

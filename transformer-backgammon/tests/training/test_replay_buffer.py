@@ -138,10 +138,10 @@ class TestReplayBuffer:
         assert 'equity_target' in batch
         assert 'action_mask' in batch
 
-        # Check shapes (raw_encoding_config has feature_dim=2)
-        # Board encoding is (batch, 26 positions, 2 features)
+        # Check shapes (enhanced encoding: 2 raw + 8 global features = 10)
+        # Board encoding is (batch, 26 positions, 10 features)
         # Action space size is 1024 (from action_encoder.ACTION_SPACE_SIZE)
-        assert batch['board_encoding'].shape == (32, 26, 2)
+        assert batch['board_encoding'].shape == (32, 26, 10)
         assert batch['target_policy'].shape == (32, 1024)
         assert batch['equity_target'].shape == (32, 5)
         assert batch['action_mask'].shape == (32, 1024)
