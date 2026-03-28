@@ -137,6 +137,10 @@ class TrainingConfig:
     eval_num_games: int = 50  # Games per opponent during evaluation
     eval_ply: int = 0  # Search depth for evaluation (0 is fast, 1 is slow)
 
+    # Variance reduction
+    use_dice_averaged_targets: bool = False  # Average V over all 21 dice outcomes for TD targets
+    use_stratified_dice: bool = False  # Cycle through pre-shuffled dice instead of random
+
     # Game length limits
     max_moves: int = 200  # Max moves per game before declaring draw
 
@@ -589,6 +593,8 @@ def train(config: Optional[TrainingConfig] = None):
                     max_moves=config.max_moves,
                     rng=rng,
                     record_value_estimates=record_values,
+                    use_dice_averaged_targets=config.use_dice_averaged_targets,
+                    use_stratified_dice=config.use_stratified_dice,
                 )
 
             # Add games to replay buffer (with TD(lambda) targets if enabled)
