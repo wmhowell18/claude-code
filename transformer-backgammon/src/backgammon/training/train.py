@@ -120,6 +120,9 @@ class TrainingConfig:
     # Position weighting
     use_position_weighting: bool = True  # Weight positions by importance for sampling
 
+    # Data augmentation
+    use_color_flip_augmentation: bool = True  # Double data via color flipping
+
     # Validation and early stopping
     validation_fraction: float = 0.1  # Fraction of games used for validation
     early_stopping_patience: int = 5  # Stop after N eval checkpoints without improvement
@@ -431,6 +434,7 @@ def train(config: Optional[TrainingConfig] = None):
         min_size=config.replay_buffer_min_size,
         eviction_policy='fifo',
         use_position_weighting=config.use_position_weighting,
+        use_color_flip_augmentation=config.use_color_flip_augmentation,
     )
 
     # Create validation buffer (for early stopping)
