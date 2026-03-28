@@ -1,8 +1,8 @@
 # Backgammon Transformer — Feature Roadmap & TODO
 
-> **Status**: Search, benchmarking, training improvements, and doubling cube complete. 0/1/2-ply search with batch evaluation, move ordering with progressive deepening, transposition table, and TD(lambda) training implemented. Win rate tracking, benchmark positions, position weighting, validation splits, and early stopping integrated into training loop. Race equity formula for pure race positions. Full doubling cube with match play, match equity tables, cubeful equity, and cube decision network head.
+> **Status**: Search, benchmarking, training improvements, and doubling cube complete. 0/1/2-ply search with batch evaluation, move ordering with progressive deepening, transposition table, and TD(lambda) training implemented. Win rate tracking, benchmark positions, position weighting, validation splits, and early stopping integrated into training loop. Race equity formula for pure race positions. Full doubling cube with match play, match equity tables, cubeful equity, and cube decision network head. **Modern architecture upgrades (Mar 2026)**: EMA weights, AdamW, RMSNorm, SwiGLU, pre-norm, muP, Stochastic MuZero, schedule-free optimizer, color-flip augmentation.
 >
-> **Current Maturity**: ~7/10 for competitive play. Solid game engine + neural training + search + benchmarking + TD(lambda) + exploration schedule + global encoding features + race evaluation + training infrastructure (position weighting, validation, early stopping) + doubling cube + match play. Missing GnuBG interface, MCTS, and rollout-based training.
+> **Current Maturity**: ~8/10 for competitive play. Solid game engine + neural training + search + benchmarking + TD(lambda) + exploration schedule + global encoding features + race evaluation + training infrastructure (position weighting, validation, early stopping) + doubling cube + match play + modern transformer architecture (RMSNorm, SwiGLU, pre-norm) + EMA weights + AdamW + muP + Stochastic MuZero network + schedule-free optimizer option + color-flip data augmentation. Missing GnuBG interface, MCTS integration with MuZero, and rollout-based training.
 >
 > **Known Issues (Feb 2026)**: Code review identified several correctness bugs requiring attention before long training runs: policy head is non-functional (hash collisions + dummy targets), global features are implemented but not wired into training (input_feature_dim hardcoded to 2), TD targets are not renormalized before cross-entropy loss, and training telemetry is misleading (train_acc always 0.0, LR logged as constant peak). See "KNOWN ISSUES" section below.
 
@@ -132,6 +132,14 @@ training quality and telemetry — address before committing to multi-hour TPU r
 
 ### Architecture
 
+- [x] **111. EMA (Exponential Moving Average) of weights** — Maintain a running average of model params (decay=0.999). EMA params used for self-play, evaluation, and best-model checkpoints. Training weights jump around with each gradient step; EMA is smooth and almost always evaluates better. ~2x memory for params (trivial for 2M param model), zero extra compute. (Effort: S, Impact: moderate) *(Mar 2026)*
+- [x] **112. AdamW instead of Adam** — Switched `optax.adam` → `optax.adamw(weight_decay=0.01)`. Decouples weight decay from gradient update for better generalization. Standard in all modern training. (Effort: S, Impact: small) *(Mar 2026)*
+- [x] **113. RMSNorm instead of LayerNorm** — Replaced `nn.LayerNorm` with `nn.RMSNorm` in transformer blocks. Simpler (no mean subtraction), slightly faster, works as well or better. Used by LLaMA, Mistral, Gemma. (Effort: S, Impact: small) *(Mar 2026)*
+- [x] **114. SwiGLU activation** — Replaced GELU FFN with SwiGLU gated linear unit: `SwiGLU(x) = (W1·x * SiLU(W_gate·x)) · W2`. Consistently outperforms GELU. Used by LLaMA, PaLM, Mistral. Adds one extra Dense projection per FFN block. (Effort: S, Impact: moderate) *(Mar 2026)*
+- [x] **115. Pre-norm instead of post-norm** — Moved normalization before attention/FFN: `x + Attn(Norm(x))` instead of `Norm(x + Attn(x))`. More stable during training, used by all modern transformers since GPT-2. (Effort: S, Impact: moderate) *(Mar 2026)*
+- [x] **116. muP (Maximal Update Parameterization)** — Added `mup_base_embed_dim` config. When enabled: attention scales by 1/d instead of 1/√d, output logits scale by base_width/width. Tune hyperparams on small model, transfer to larger model without re-tuning. Disabled by default. (Effort: M, Impact: moderate for scaling) *(Mar 2026)*
+- [x] **117. Stochastic MuZero network** — New `network/muzero.py` with complete architecture: representation, dynamics, prediction, chance, and afterstate networks. Designed for backgammon's stochastic dice rolls. Includes value support encoding and dice outcome utilities. MCTS integration pending. (Effort: L, Impact: potentially large) *(Mar 2026)*
+- [x] **118. Schedule-free optimizer** — Added `use_schedule_free` config flag to use `optax.contrib.schedule_free_adamw`. Eliminates hardcoded decay_steps (100K was wrong if training runs longer/shorter). Disabled by default. Bumped optax minimum to >=0.2.0. (Effort: S, Impact: moderate) *(Mar 2026)*
 - [ ] **33. Architecture ablation study** — Compare transformer vs MLP vs CNN on same data. Transformer may be overkill for 26-position sequence. (Effort: L, Impact: informational)
 - [ ] **33b. Mixture of Experts (MoE) feed-forward layers** — Replace FeedForward in transformer
   blocks with MoE (4-8 experts, top-2 routing). Our alternative to XG's separate contact/race
@@ -222,7 +230,7 @@ training quality and telemetry — address before committing to multi-hour TPU r
 - [ ] **63. Opening book** — Pre-computed best moves for first 3-4 moves from gnubg/XtremeGammon. (Effort: S, Impact: moderate)
 - [ ] **64. Pre-training on expert games** — Train on gnubg rollout data or master-level human games before self-play. (Effort: M, Impact: large)
 - [ ] **65. Synthetic position generation** — Generate underrepresented board states for training diversity. (Effort: M, Impact: moderate)
-- [ ] **66. Data augmentation via board flipping** — Already partially implemented in encoder.py, not used in training loop. Wire it up. (Effort: S, Impact: small)
+- [x] **66. Data augmentation via board flipping** — Color-flip augmentation wired into replay buffer. Every position also gets its flipped version stored, doubling effective training data. Equity targets properly flipped (win↔lose). Enabled by default via `use_color_flip_augmentation=True`. (Effort: S, Impact: small) *(Mar 2026)*
 - [ ] **67. Position classification labels** — Label positions as race/contact/holding/back game/blitz/prime. Useful for per-category evaluation. (Effort: M, Impact: informational)
 - [ ] **68. Disagreement training** — Find positions where network and gnubg disagree, train harder on those. (Effort: M, Impact: moderate)
 
@@ -252,7 +260,7 @@ training quality and telemetry — address before committing to multi-hour TPU r
 - [ ] **81. Knowledge distillation** — Train smaller "fast" network from large "slow" one for real-time play. (Effort: M, Impact: moderate)
 - [ ] **82. Dirichlet noise injection** — Add noise to prior during self-play (AlphaZero technique) for exploration. (Effort: S, Impact: small)
 - [ ] **83. Resign detection** — Network knows when position is hopeless, saves training time on decided games. (Effort: S, Impact: small)
-- [ ] **84. Symmetry exploitation** — Explicitly use black/white symmetry and board reflection in training. (Effort: S, Impact: small)
+- [x] **84. Symmetry exploitation** — Color-flip augmentation in replay buffer ensures the network treats White and Black symmetrically. See item 66. (Effort: S, Impact: small) *(Mar 2026)*
 
 ### Competitive Play
 
@@ -290,10 +298,12 @@ training quality and telemetry — address before committing to multi-hour TPU r
 4. ~~**Item 16** (TD(lambda))~~ — DONE (td_lambda.py + self_play.py + replay_buffer.py)
 5. ~~**Items 19, 25-28** (exploration schedule + encoding improvements)~~ — DONE (encoder.py + train.py)
 6. ~~**Items 7-10** (doubling cube)~~ — DONE (core/cube.py + types + network cube head)
-7. **Fix items 103-105** (TD target normalization, disable policy head, wire global features) — fix these before any long training run, as they directly affect gradient signal and convergence
-8. **Longer training run** with the improved pipeline — see where the model plateaus
-8. **Items 17-18** (N-step bootstrapping + rollout targets) — even better training signal
-9. **Items 45-46** (MCTS) — sophisticated search for strongest play
+7. ~~**Items 111-118, 66, 84** (architecture modernization)~~ — DONE (EMA, AdamW, RMSNorm, SwiGLU, pre-norm, muP, Stochastic MuZero, schedule-free optimizer, color-flip augmentation)
+8. **Fix items 103-105** (TD target normalization, disable policy head, wire global features) — fix these before any long training run, as they directly affect gradient signal and convergence
+9. **Longer training run** with the improved pipeline — see where the model plateaus
+10. **Items 17-18** (N-step bootstrapping + rollout targets) — even better training signal
+11. **Wire Stochastic MuZero into training** (item 117 architecture done, needs MCTS integration + training loop)
+12. **Items 45-46** (MCTS) — sophisticated search for strongest play
 
 ---
 
@@ -335,3 +345,12 @@ training quality and telemetry — address before committing to multi-hour TPU r
 - [x] **Contact vs race detection** — `is_past_contact()` in `core/board.py`. (Feb 2026)
 - [x] **Race equity formula** — `race_equity_estimate()` using adjusted pip count / Keith count. (Feb 2026)
 - [x] **Move ordering heuristics** — `order_moves()` and `select_move_2ply_pruned()` for top-K pruning at 2-ply. (Feb 2026)
+- [x] **EMA weights** — Running average of model params (decay=0.999) for smoother evaluation/self-play. (Mar 2026)
+- [x] **AdamW optimizer** — Decoupled weight decay (0.01) for better generalization. (Mar 2026)
+- [x] **RMSNorm** — Replaced LayerNorm with RMSNorm in transformer blocks. (Mar 2026)
+- [x] **SwiGLU activation** — Gated linear unit replacing GELU in FFN blocks. (Mar 2026)
+- [x] **Pre-norm architecture** — Normalize before attention/FFN instead of after. (Mar 2026)
+- [x] **muP support** — Maximal Update Parameterization for width-transferable hyperparameters. (Mar 2026)
+- [x] **Stochastic MuZero network** — Complete world model architecture in `network/muzero.py`. (Mar 2026)
+- [x] **Schedule-free optimizer** — `optax.contrib.schedule_free_adamw` option for training-length-independent optimization. (Mar 2026)
+- [x] **Color-flip data augmentation** — Wired into replay buffer, doubling effective training data. (Mar 2026)
