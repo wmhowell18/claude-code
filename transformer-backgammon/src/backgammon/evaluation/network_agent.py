@@ -18,6 +18,7 @@ from backgammon.encoding.encoder import encode_board, enhanced_encoding_config
 from backgammon.encoding.action_encoder import encode_move_to_action
 from backgammon.evaluation.agents import Agent
 from backgammon.evaluation.search import select_move as search_select_move
+from backgammon.utils.jit_cache import get_jit_inference
 
 
 class NeuralNetworkAgent:
@@ -129,11 +130,8 @@ class NeuralNetworkAgent:
         """
         # Apply model (no gradient needed for inference)
         # Network returns (equity, policy, cube_decision, attention_weights)
-        equity, policy_logits, _, _ = self.state.apply_fn(
-            {'params': self.state.params},
-            encoded_board,
-            training=False,
-        )
+        jit_fn = get_jit_inference(self.state.apply_fn)
+        equity, policy_logits, _, _ = jit_fn(self.state.params, encoded_board)
 
         # Compute expected value from equity distribution using proper formula.
         # Equity outputs: [win_normal, win_gammon, win_bg, lose_gammon, lose_bg]
@@ -223,11 +221,8 @@ class NeuralNetworkAgent:
         encoded = encode_board(self.encoding_config, board)
         encoded_board = encoded.position_features
 
-        equity, _, _, _ = self.state.apply_fn(
-            {'params': self.state.params},
-            encoded_board,
-            training=False,
-        )
+        jit_fn = get_jit_inference(self.state.apply_fn)
+        equity, _, _, _ = jit_fn(self.state.params, encoded_board)
 
         return np.array(equity[0], dtype=np.float32)
 
