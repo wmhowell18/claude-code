@@ -439,7 +439,7 @@ def train(config: Optional[TrainingConfig] = None):
     # Attempt to restore from existing checkpoint
     checkpoint_dir = Path(config.checkpoint_dir)
     if checkpoint_dir.exists():
-        fresh_params = state.params
+        fresh_state = state
         try:
             state = checkpoints.restore_checkpoint(
                 ckpt_dir=str(checkpoint_dir),
@@ -447,19 +447,21 @@ def train(config: Optional[TrainingConfig] = None):
             )
             restored_step = int(state.step)
             if restored_step > 0:
-                # Validate that restored param shapes match the current model
-                if _params_shapes_match(fresh_params, state.params):
+                # Validate that restored param shapes match the current model.
+                # If not, discard the entire restored state (params + optimizer)
+                # since optimizer momentum buffers also have stale shapes.
+                if _params_shapes_match(fresh_state.params, state.params):
                     print(f"   Restored checkpoint at step {restored_step}")
                 else:
                     print(f"   ⚠️  Checkpoint at step {restored_step} incompatible "
                           "(architecture changed), starting from scratch")
-                    state = state.replace(params=fresh_params, step=0)
+                    state = fresh_state
             else:
                 print("   No checkpoint found, starting from scratch")
         except Exception as e:
             print(f"   ⚠️  Could not restore checkpoint: {e}")
             print("   Starting from scratch with new architecture")
-            state = state.replace(params=fresh_params, step=0)
+            state = fresh_state
     else:
         print("   No checkpoint directory, starting from scratch")
 
