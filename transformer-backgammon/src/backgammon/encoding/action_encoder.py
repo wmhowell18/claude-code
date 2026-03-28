@@ -9,7 +9,7 @@ from typing import List, Tuple, Optional, Dict
 from backgammon.core.types import Move, MoveStep, Player
 
 # Action space configuration
-ACTION_SPACE_SIZE = 1024  # Fixed size for neural network output
+ACTION_SPACE_SIZE = 4096  # Fixed size for neural network output (was 1024, increased to reduce hash collisions with doubles)
 
 # Maximum move sequence length in backgammon (usually 4 for doubles)
 MAX_MOVE_STEPS = 4

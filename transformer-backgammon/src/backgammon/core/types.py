@@ -390,11 +390,11 @@ class TransformerConfig:
     ff_dim: int = 512
     dropout_rate: float = 0.1
     layer_norm_epsilon: float = 1e-6
-    input_feature_dim: int = 2
+    input_feature_dim: int = 10  # 2 raw + 8 global features
     use_learned_positional_encoding: bool = True
     use_policy_head: bool = False
     use_cube_head: bool = False
-    num_actions: int = 1024  # Default action space size
+    num_actions: int = 4096  # Default action space size
     return_attention_weights: bool = False
     # Compute dtype for forward pass. None means float32 (default).
     # Set to jnp.bfloat16 on TPU for ~2x speedup. Parameters are always
