@@ -11,6 +11,7 @@ Implements:
 import os
 import time
 import json
+import uuid
 from pathlib import Path
 from typing import Optional, Tuple
 from dataclasses import dataclass, asdict
@@ -28,6 +29,9 @@ from backgammon.core.board import (
 )
 from backgammon.core.types import TransformerConfig
 from backgammon.encoding.action_encoder import get_action_space_size
+
+# Module-level run ID, set at the start of each train() call
+_current_run_id: str = ""
 from backgammon.evaluation.agents import pip_count_agent, greedy_pip_count_agent
 from backgammon.evaluation.network_agent import create_neural_agent
 from backgammon.training.self_play import (
@@ -408,7 +412,9 @@ def save_metrics(metrics: TrainingMetrics, config: TrainingConfig):
     log_file = log_dir / "training_log.jsonl"
 
     with open(log_file, 'a') as f:
-        f.write(json.dumps(asdict(metrics)) + '\n')
+        entry = asdict(metrics)
+        entry['run_id'] = _current_run_id
+        f.write(json.dumps(entry) + '\n')
 
 
 def _params_shapes_match(expected, actual):
@@ -429,8 +435,12 @@ def train(config: Optional[TrainingConfig] = None):
     Args:
         config: Training configuration (uses defaults if None)
     """
+    global _current_run_id
     if config is None:
         config = TrainingConfig()
+
+    # Generate a unique run ID so log entries from different runs can be separated
+    _current_run_id = uuid.uuid4().hex[:8]
 
     # Initialize random state
     rng = np.random.default_rng(config.seed)
