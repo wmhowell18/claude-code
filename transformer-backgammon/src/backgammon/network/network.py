@@ -232,8 +232,9 @@ class TransformerBlock(nn.Module):
         )(x, training=training)
 
         x = x + attn_output
-        # LayerNorm in float32 for numerical stability (bfloat16 variance can underflow)
-        x = nn.LayerNorm(
+        # RMSNorm in float32 for numerical stability (simpler than LayerNorm,
+        # no mean subtraction — used by LLaMA, Mistral, Gemma)
+        x = nn.RMSNorm(
             epsilon=self.config.layer_norm_epsilon, dtype=jnp.float32, name='ln1',
         )(x)
         if dtype is not None:
@@ -249,7 +250,7 @@ class TransformerBlock(nn.Module):
         )(x, training=training)
 
         x = x + ff_output
-        x = nn.LayerNorm(
+        x = nn.RMSNorm(
             epsilon=self.config.layer_norm_epsilon, dtype=jnp.float32, name='ln2',
         )(x)
         if dtype is not None:
