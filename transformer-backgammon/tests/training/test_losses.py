@@ -292,7 +292,8 @@ class TestComputeMetrics:
 
         assert 'loss' in metrics
         assert 'equity_loss' in metrics
-        assert 'accuracy' in metrics
+        assert 'equity_accuracy' in metrics
+        assert 'policy_accuracy' in metrics
         assert np.isfinite(metrics['loss'])
 
     def test_metrics_value_only(self):
@@ -312,5 +313,6 @@ class TestComputeMetrics:
 
         metrics = compute_metrics(state, batch)
 
-        assert metrics['accuracy'] == 0.0  # Placeholder in value-only mode
+        assert 'equity_accuracy' in metrics
+        assert 'policy_accuracy' not in metrics  # No policy head in value-only mode
         assert np.isfinite(metrics['loss'])

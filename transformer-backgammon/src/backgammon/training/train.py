@@ -727,6 +727,20 @@ def train(config: Optional[TrainingConfig] = None):
                     verbose=True,
                 )
 
+                # Training metrics (accuracy, detailed losses) on a sample
+                train_eval_batch = replay_buffer.sample_batch(
+                    min(config.training_batch_size, len(replay_buffer))
+                )
+                train_metrics = compute_metrics(ema_state, train_eval_batch)
+                train_eq_acc = train_metrics['equity_accuracy']
+                metrics_logger.log_metrics({
+                    'train_equity_accuracy': train_eq_acc,
+                    'train_equity_loss': train_metrics['equity_loss'],
+                }, step=batch_num, prefix="train_eval/")
+
+                if batch_num % config.log_every_n_batches == 0:
+                    print(f"  Train equity accuracy: {train_eq_acc:.3f}")
+
                 # Validation loss for early stopping
                 if val_buffer is not None and val_buffer.is_ready():
                     val_batch = val_buffer.sample_batch(
@@ -735,10 +749,12 @@ def train(config: Optional[TrainingConfig] = None):
                     val_metrics = compute_metrics(state, val_batch)
                     val_loss = val_metrics['loss']
 
+                    val_eq_acc = val_metrics.get('equity_accuracy', 0.0)
                     if batch_num % config.log_every_n_batches == 0:
-                        print(f"  Val loss: {val_loss:.4f} "
-                              f"(best: {best_val_loss:.4f}, "
-                              f"patience: {patience_counter}/{config.early_stopping_patience})")
+                        print(f"  Val loss: {val_loss:.4f} | "
+                              f"Val equity acc: {val_eq_acc:.3f} | "
+                              f"Best: {best_val_loss:.4f} | "
+                              f"Patience: {patience_counter}/{config.early_stopping_patience}")
 
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
@@ -762,6 +778,7 @@ def train(config: Optional[TrainingConfig] = None):
 
                     metrics_logger.log_metrics({
                         'val_loss': val_loss,
+                        'val_equity_accuracy': val_eq_acc,
                         'best_val_loss': best_val_loss,
                         'lr_plateau_counter': lr_plateau_counter,
                     }, step=batch_num, prefix="validation/")
