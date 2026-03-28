@@ -160,12 +160,32 @@ This project makes several bets relative to XG's approach:
 | Bet | Rationale | Risk |
 |-----|-----------|------|
 | Transformer > shallow MLP | Attention over board positions captures strategic relationships | May be overkill; MLP might be equally good with less compute |
+| Mixture of Experts > separate nets | Learned soft specialization instead of hard-coded phase detection | Adds routing complexity; may need careful load balancing |
 | GPU batching > CPU speed | Evaluate 1000 positions simultaneously instead of one at a time | Single-position latency matters for interactive play |
 | Modern RL > classical TD | TD(lambda) + curriculum + replay buffer should converge faster | More complex pipeline, more things to go wrong |
 | Scale > tuning | Larger model + more training should overcome tuning disadvantage | XG had years of careful tuning; we're starting fresh |
 | Open architecture > secrets | Transparent design allows community contribution | XG's proprietary tuning may be hard to replicate |
 
 The strongest bet is GPU batching. XG evaluates one position at a time on CPU. With a GPU, we can evaluate 512 positions in the time XG evaluates 1. This means our 2-ply search with GPU batching may be effectively faster than XG's 3-ply on CPU, depending on the position. This speed advantage compounds during training (more games per hour) and during play (deeper effective search).
+
+### Mixture of Experts: Our Answer to XG's Separate Networks
+
+XG uses separate neural networks for contact and non-contact (race) positions. This works well because these position types require fundamentally different evaluation — race positions care about pip count, wastage, and distribution, while contact positions care about primes, anchors, blots, and timing. But the hard boundary between "contact" and "race" is a limitation: a position transitioning from contact to race gets evaluated by whichever network the classifier picks, with no blending.
+
+Our plan is to use **Mixture of Experts (MoE)** instead. Rather than hand-coding a phase classifier, MoE lets the router learn soft specialization:
+
+- Replace the FeedForward layers in the transformer blocks with MoE layers (4-8 experts, top-2 routing)
+- Attention layers stay shared (positional relationships matter in all game phases)
+- Feed-forward experts specialize naturally (e.g., one expert for racing evaluation, another for prime structures)
+- A position in transition between contact and race gets a blend of expert outputs rather than being forced into one bucket
+
+This is the same approach used in Mixtral and Switch Transformer for language. The key advantages:
+- **No hand-coded phase detection**: The router learns when to use which expert
+- **Soft boundaries**: Transitional positions get blended evaluation
+- **Single model**: Simpler deployment, training, and checkpointing than managing multiple networks
+- **Capacity without cost**: Total parameters increase (more expert FFNs), but only top-k experts activate per position, keeping inference speed similar
+
+**Implementation plan**: Get the basic transformer working first (proof-of-concept), then add MoE as an architecture experiment. Start with MoE only in the last 1-2 transformer blocks, 4 experts with top-2 routing, and a small load-balancing loss to prevent expert collapse.
 
 ## What Specifically Would XG Not Expect?
 

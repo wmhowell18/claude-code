@@ -133,6 +133,13 @@ training quality and telemetry — address before committing to multi-hour TPU r
 ### Architecture
 
 - [ ] **33. Architecture ablation study** — Compare transformer vs MLP vs CNN on same data. Transformer may be overkill for 26-position sequence. (Effort: L, Impact: informational)
+- [ ] **33b. Mixture of Experts (MoE) feed-forward layers** — Replace FeedForward in transformer
+  blocks with MoE (4-8 experts, top-2 routing). Our alternative to XG's separate contact/race
+  networks: a single model where experts specialize naturally via learned routing. Attention stays
+  shared (positional relationships), experts specialize (evaluation strategy). Transitional positions
+  get blended evaluation instead of hard phase classification. Start with MoE only in last 1-2
+  blocks, add load-balancing loss. Do this AFTER basic transformer is validated as a working
+  proof-of-concept. See BEATING_XG.md for full rationale. (Effort: M, Impact: potentially large)
 - [ ] **34. Attention visualization** — Render attention maps to see what positions the network focuses on. Debugging tool. (Effort: S, Impact: informational)
 - [ ] **35. Learned temperature on equity softmax** — Let the network learn how "sharp" its equity distribution should be. (Effort: S, Impact: small)
 
