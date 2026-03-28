@@ -122,3 +122,40 @@ DICE_PROBABILITIES = {
     dice: 1/36 if is_doubles(dice) else 1/18
     for dice in ALL_DICE_ROLLS
 }
+
+
+class StratifiedDiceSampler:
+    """Cycles through a pre-shuffled deck of all 36 dice outcomes.
+
+    Each "epoch" contains all 36 possible (die1, die2) outcomes:
+    - 6 doubles (1 each)
+    - 15 non-doubles (2 each, for both orderings)
+
+    The deck is shuffled, then dealt one at a time. When exhausted,
+    a new shuffled deck is created. This guarantees that over every
+    36 rolls, each outcome appears with exactly correct frequency.
+    """
+
+    def __init__(self, rng: np.random.Generator):
+        self._rng = rng
+        self._deck: List[Dice] = []
+        self._index = 0
+        self._refill()
+
+    def _refill(self):
+        """Build and shuffle a new deck of 36 outcomes."""
+        deck = []
+        for d1 in range(1, 7):
+            for d2 in range(1, 7):
+                deck.append(canonicalize_dice((d1, d2)))
+        self._rng.shuffle(deck)
+        self._deck = deck
+        self._index = 0
+
+    def roll(self) -> Dice:
+        """Draw next dice from the shuffled deck."""
+        if self._index >= len(self._deck):
+            self._refill()
+        result = self._deck[self._index]
+        self._index += 1
+        return result

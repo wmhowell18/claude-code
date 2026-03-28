@@ -2,6 +2,7 @@
 
 import pytest
 import numpy as np
+from collections import Counter
 from backgammon.core.dice import (
     all_dice_rolls,
     is_doubles,
@@ -11,6 +12,7 @@ from backgammon.core.dice import (
     dice_to_string,
     ALL_DICE_ROLLS,
     DICE_PROBABILITIES,
+    StratifiedDiceSampler,
 )
 
 
@@ -87,3 +89,60 @@ class TestDiceUtilities:
         # Check individual probabilities
         assert abs(DICE_PROBABILITIES[(1, 1)] - 1/36) < 1e-6  # Doubles
         assert abs(DICE_PROBABILITIES[(1, 2)] - 1/18) < 1e-6  # Non-doubles
+
+
+class TestStratifiedDiceSampler:
+    """Tests for stratified dice sampling."""
+
+    def test_deck_has_36_outcomes(self):
+        """One full deck should yield exactly 36 rolls."""
+        rng = np.random.default_rng(42)
+        sampler = StratifiedDiceSampler(rng)
+        rolls = [sampler.roll() for _ in range(36)]
+        assert len(rolls) == 36
+
+    def test_exact_frequencies_per_epoch(self):
+        """Each epoch should have correct frequencies: doubles 1x, non-doubles 2x."""
+        rng = np.random.default_rng(42)
+        sampler = StratifiedDiceSampler(rng)
+        rolls = [sampler.roll() for _ in range(36)]
+        counts = Counter(rolls)
+
+        for dice_roll in ALL_DICE_ROLLS:
+            if is_doubles(dice_roll):
+                assert counts[dice_roll] == 1, f"{dice_roll} should appear 1x, got {counts[dice_roll]}"
+            else:
+                assert counts[dice_roll] == 2, f"{dice_roll} should appear 2x, got {counts[dice_roll]}"
+
+    def test_auto_refill(self):
+        """Sampler should auto-refill after 36 rolls."""
+        rng = np.random.default_rng(42)
+        sampler = StratifiedDiceSampler(rng)
+        # Draw 72 rolls (2 full decks)
+        rolls = [sampler.roll() for _ in range(72)]
+        assert len(rolls) == 72
+
+        # Each half should independently have correct frequencies
+        for epoch_rolls in [rolls[:36], rolls[36:]]:
+            counts = Counter(epoch_rolls)
+            for dice_roll in ALL_DICE_ROLLS:
+                expected = 1 if is_doubles(dice_roll) else 2
+                assert counts[dice_roll] == expected
+
+    def test_rolls_are_canonical(self):
+        """All rolls should be in canonical form (smaller die first)."""
+        rng = np.random.default_rng(42)
+        sampler = StratifiedDiceSampler(rng)
+        for _ in range(72):
+            roll = sampler.roll()
+            assert roll[0] <= roll[1], f"Roll {roll} not canonical"
+
+    def test_shuffled_order(self):
+        """Different seeds should produce different orderings."""
+        sampler1 = StratifiedDiceSampler(np.random.default_rng(1))
+        sampler2 = StratifiedDiceSampler(np.random.default_rng(2))
+        rolls1 = [sampler1.roll() for _ in range(36)]
+        rolls2 = [sampler2.roll() for _ in range(36)]
+        # Same set, different order (extremely unlikely to be identical)
+        assert Counter(rolls1) == Counter(rolls2)
+        assert rolls1 != rolls2

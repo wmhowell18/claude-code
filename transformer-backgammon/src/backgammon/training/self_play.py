@@ -18,7 +18,7 @@ from flax.training import train_state
 
 from backgammon.core.board import Board, apply_move, generate_legal_moves, is_game_over, winner
 from backgammon.core.types import Player, Move, GameOutcome
-from backgammon.core.dice import roll_dice
+from backgammon.core.dice import roll_dice, ALL_DICE_ROLLS, DICE_PROBABILITIES, StratifiedDiceSampler
 from backgammon.encoding.encoder import compute_global_features
 from backgammon.evaluation.agents import Agent, pip_count_agent, random_agent
 
@@ -296,7 +296,7 @@ def _get_jit_inference(apply_fn):
 # Batch sizes to pad to, minimizing JIT recompilations on TPU.
 # Each unique batch size triggers a new compilation; padding to these
 # common sizes keeps the number of compilations small.
-_BATCH_PAD_SIZES = [1, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
+_BATCH_PAD_SIZES = [1, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
 
 
 def _pad_batch_size(n: int) -> int:
@@ -443,6 +443,25 @@ class _ActiveGame:
     selected_move: Optional[Move] = None
 
 
+def _flip_equity_5dim(equity: np.ndarray) -> np.ndarray:
+    """Flip 5-dim equity from one player's perspective to the other's.
+
+    Input:  [win_normal, win_gammon, win_bg, lose_gammon, lose_bg]
+    P(lose_normal) = 1 - sum(all 5)
+
+    Output: [new_win_normal, new_win_gammon, new_win_bg, new_lose_gammon, new_lose_bg]
+    where wins become losses and vice versa.
+    """
+    lose_normal = 1.0 - np.sum(equity)
+    return np.array([
+        lose_normal,       # new win_normal = old lose_normal
+        equity[3],         # new win_gammon = old lose_gammon
+        equity[4],         # new win_bg = old lose_bg
+        equity[1],         # new lose_gammon = old win_gammon
+        equity[2],         # new lose_bg = old win_bg
+    ], dtype=np.float32)
+
+
 def play_games_batched(
     num_games: int,
     state: train_state.TrainState,
@@ -451,6 +470,8 @@ def play_games_batched(
     max_moves: int = 200,
     rng: Optional[np.random.Generator] = None,
     record_value_estimates: bool = False,
+    use_dice_averaged_targets: bool = False,
+    use_stratified_dice: bool = False,
 ) -> List[GameResult]:
     """Play multiple games simultaneously with batched neural network inference.
 
@@ -476,6 +497,11 @@ def play_games_batched(
         rng: NumPy random generator.
         record_value_estimates: If True, record per-step equity estimates
             for TD(lambda) target computation.
+        use_dice_averaged_targets: If True, record dice-averaged equity
+            estimates instead of raw V(s). Averages over all 21 dice outcomes
+            weighted by probability, removing dice variance from TD targets.
+        use_stratified_dice: If True, use stratified dice sampling (pre-shuffled
+            deck of all 36 outcomes) instead of uniform random rolls.
 
     Returns:
         List of GameResult objects (same interface as generate_training_batch).
@@ -487,6 +513,9 @@ def play_games_batched(
 
     # Get JIT-compiled inference function (cached across calls)
     jit_fn = _get_jit_inference(state.apply_fn)
+
+    # Initialize stratified dice sampler if enabled
+    dice_sampler = StratifiedDiceSampler(rng) if use_stratified_dice else None
 
     # Initialize all games
     games = []
@@ -513,7 +542,7 @@ def play_games_batched(
                 g.done = True
                 g.outcome = winner(g.board)
                 continue
-            g.current_dice = roll_dice(rng)
+            g.current_dice = dice_sampler.roll() if dice_sampler else roll_dice(rng)
             g.current_moves = generate_legal_moves(
                 g.board, g.board.player_to_move, g.current_dice
             )
@@ -532,14 +561,47 @@ def play_games_batched(
         # Track which result boards belong to which game/move
         games_needing_selection = []
 
+        # (c) Dice-averaged target boards (when enabled)
+        dice_avg_boards = []
+        # Maps game_index -> list of (dice_roll, [(move_type, move_val_or_idx), ...])
+        dice_avg_info = {}
+
         for i in still_active:
             g = games[i]
             player = g.board.player_to_move
 
-            # Collect current position for equity estimate
-            if record_value_estimates:
+            # Collect current position for equity estimate (standard path)
+            if record_value_estimates and not use_dice_averaged_targets:
                 equity_boards.append(g.board)
                 equity_game_indices.append(i)
+
+            # Collect dice-averaged evaluation boards
+            if record_value_estimates and use_dice_averaged_targets:
+                game_dice_info = []
+                for dice_roll in ALL_DICE_ROLLS:
+                    moves = generate_legal_moves(g.board, player, dice_roll)
+                    if not moves:
+                        moves = [()]  # No legal moves, empty move
+                    roll_move_info = []
+                    for move in moves:
+                        if not move:  # Empty move (blocked)
+                            # Turn passes; board unchanged, still current player's
+                            # perspective. Mark as 'network_noflip' so Phase 4b
+                            # doesn't flip the equity.
+                            roll_move_info.append(('network_noflip', len(dice_avg_boards)))
+                            dice_avg_boards.append(g.board)
+                        else:
+                            new_board = apply_move(g.board, player, move)
+                            our_off = (new_board.white_checkers[25] if player == Player.WHITE
+                                       else new_board.black_checkers[25])
+                            if our_off == 15:
+                                roll_move_info.append(('terminal',
+                                    _terminal_value_for_player(new_board, player)))
+                            else:
+                                roll_move_info.append(('network', len(dice_avg_boards)))
+                                dice_avg_boards.append(new_board)
+                    game_dice_info.append((dice_roll, roll_move_info))
+                dice_avg_info[i] = game_dice_info
 
             # Single legal move → auto-select, no evaluation needed
             if len(g.current_moves) <= 1:
@@ -563,12 +625,14 @@ def play_games_batched(
             games_needing_selection.append((i, move_info))
 
         # --- Phase 3: Single batched inference for ALL boards ---
-        # Combine equity boards and move-eval boards into one batch
+        # Combine equity, move-eval, and dice-avg boards into one batch
         # to minimize TPU dispatches (one forward pass per game step).
-        all_boards = equity_boards + move_eval_boards
+        all_boards = equity_boards + move_eval_boards + dice_avg_boards
         n_equity = len(equity_boards)
+        n_move_eval = len(move_eval_boards)
         equity_estimates = None
         move_eval_values = np.array([], dtype=np.float32)
+        dice_avg_equity_raw = None
 
         if all_boards:
             all_equity_raw = _batched_inference(jit_fn, state.params, all_boards)
@@ -577,15 +641,69 @@ def play_games_batched(
             if n_equity > 0:
                 equity_estimates = all_equity_raw[:n_equity]
             if move_eval_boards:
-                move_eval_equity = all_equity_raw[n_equity:]
+                move_eval_equity = all_equity_raw[n_equity:n_equity + n_move_eval]
                 move_eval_values = _equity_to_value_np(move_eval_equity)
+            if dice_avg_boards:
+                dice_avg_equity_raw = all_equity_raw[n_equity + n_move_eval:]
 
         # --- Phase 4: Record equity estimates for TD(lambda) ---
-        if record_value_estimates and equity_estimates is not None:
+        if record_value_estimates and not use_dice_averaged_targets and equity_estimates is not None:
             for idx, game_i in enumerate(equity_game_indices):
                 games[game_i].value_estimates.append(
                     equity_estimates[idx].copy()
                 )
+
+        # --- Phase 4b: Compute and record dice-averaged equity estimates ---
+        if record_value_estimates and use_dice_averaged_targets and dice_avg_equity_raw is not None:
+            for game_i, game_dice_info in dice_avg_info.items():
+                g = games[game_i]
+                player = g.board.player_to_move
+                avg_equity = np.zeros(5, dtype=np.float32)
+
+                for dice_roll, roll_move_info in game_dice_info:
+                    prob = DICE_PROBABILITIES[dice_roll]
+                    # Find best move for this dice roll (max scalar value)
+                    best_equity = None
+                    best_value = -float('inf')
+
+                    for mtype, mval in roll_move_info:
+                        if mtype == 'terminal':
+                            # Terminal value is already from our perspective
+                            val = mval
+                            # Build a synthetic equity for terminal
+                            eq = np.zeros(5, dtype=np.float32)
+                            if val > 0:
+                                if val >= 3:
+                                    eq[2] = 1.0  # win_bg
+                                elif val >= 2:
+                                    eq[1] = 1.0  # win_gammon
+                                else:
+                                    eq[0] = 1.0  # win_normal
+                            elif val < 0:
+                                if val <= -3:
+                                    eq[4] = 1.0  # lose_bg
+                                elif val <= -2:
+                                    eq[3] = 1.0  # lose_gammon
+                                # else: lose_normal is implicit (1 - sum)
+                        elif mtype == 'network_noflip':
+                            # Blocked position: board is still from current player's
+                            # perspective, no flip needed.
+                            eq = dice_avg_equity_raw[mval].copy()
+                            val = _equity_to_value_np(eq.reshape(1, -1))[0]
+                        else:
+                            # Network equity is from board's player_to_move perspective.
+                            # After apply_move, that's the opponent. Flip to our perspective.
+                            raw_eq = dice_avg_equity_raw[mval]
+                            eq = _flip_equity_5dim(raw_eq)
+                            val = _equity_to_value_np(eq.reshape(1, -1))[0]
+
+                        if val > best_value:
+                            best_value = val
+                            best_equity = eq
+
+                    avg_equity += prob * best_equity
+
+                g.value_estimates.append(avg_equity)
 
         # --- Phase 5: Select moves using temperature-based exploration ---
         for game_i, move_info in games_needing_selection:
