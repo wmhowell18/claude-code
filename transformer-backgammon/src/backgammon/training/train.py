@@ -22,20 +22,15 @@ import numpy as np
 import optax
 from flax.training import train_state, checkpoints
 
-from backgammon.core.board import (
-    get_early_training_variants,
-    get_mid_training_variants,
-    get_late_training_variants,
-)
+from backgammon.core.board import get_late_training_variants
 from backgammon.core.types import TransformerConfig
 from backgammon.encoding.action_encoder import get_action_space_size
 
 # Module-level run ID, set at the start of each train() call
 _current_run_id: str = ""
-from backgammon.evaluation.agents import pip_count_agent, greedy_pip_count_agent
+
 from backgammon.evaluation.network_agent import create_neural_agent
 from backgammon.training.self_play import (
-    generate_training_batch,
     compute_game_statistics,
     play_games_batched,
 )
@@ -67,11 +62,13 @@ def _update_ema_params(ema_params, params, decay: float):
 class TrainingConfig:
     """Training configuration."""
 
-    # Training phases (curriculum learning)
-    warmstart_games: int = 500  # Pip count vs pip count
-    early_phase_games: int = 1000  # Simplified variants dominant
-    mid_phase_games: int = 3000  # Mixed variants
-    late_phase_games: int = 10000  # Full complexity
+    # Training duration
+    total_games: int = 15000  # Total self-play games to generate
+    # Legacy curriculum fields (ignored when total_games is set)
+    warmstart_games: int = 0
+    early_phase_games: int = 0
+    mid_phase_games: int = 0
+    late_phase_games: int = 0
 
     # Batch and checkpoint settings
     games_per_batch: int = 32
@@ -168,11 +165,8 @@ def v6e_quick_training_config() -> TrainingConfig:
     Total: ~2,500 games.
     """
     return TrainingConfig(
-        # Small curriculum for quick validation
-        warmstart_games=200,
-        early_phase_games=500,
-        mid_phase_games=800,
-        late_phase_games=1000,
+        # Total games for quick validation
+        total_games=2500,
 
         # Small model (~500K params) — fits easily in 16GB HBM
         embed_dim=64,
@@ -260,27 +254,25 @@ class TrainingPhase:
         Returns:
             Tuple of (phase_name, variant_function)
         """
-        n = self.total_games_played
-
-        if n < self.config.warmstart_games:
-            return "warmstart", get_early_training_variants
-        elif n < self.config.warmstart_games + self.config.early_phase_games:
-            return "early", get_early_training_variants
-        elif n < (self.config.warmstart_games + self.config.early_phase_games +
-                  self.config.mid_phase_games):
-            return "mid", get_mid_training_variants
-        else:
-            return "late", get_late_training_variants
+        return "selfplay", get_late_training_variants
 
     def should_use_pip_count_warmstart(self) -> bool:
         """Check if we should use pip count agents (warmstart phase)."""
-        return self.total_games_played < self.config.warmstart_games
+        return False
+
+    def get_total_target(self) -> int:
+        """Get total target game count."""
+        if self.config.total_games > 0:
+            return self.config.total_games
+        # Legacy fallback: sum of phase games
+        return (self.config.warmstart_games + self.config.early_phase_games +
+                self.config.mid_phase_games + self.config.late_phase_games)
 
     def get_current_temperature(self) -> float:
         """Get current exploration temperature based on training progress.
 
         Linearly decays from temperature_start to temperature_end over
-        the course of training. During warmstart, returns temperature_start.
+        the course of training.
 
         Returns:
             Current temperature value.
@@ -288,15 +280,11 @@ class TrainingPhase:
         if not self.config.use_temperature_schedule:
             return self.config.neural_agent_temperature
 
-        total_target = (self.config.warmstart_games + self.config.early_phase_games +
-                        self.config.mid_phase_games + self.config.late_phase_games)
-        # Progress through non-warmstart training
-        neural_games = max(0, self.total_games_played - self.config.warmstart_games)
-        neural_total = total_target - self.config.warmstart_games
-        if neural_total <= 0:
+        total_target = self.get_total_target()
+        if total_target <= 0:
             return self.config.temperature_start
 
-        progress = min(1.0, neural_games / neural_total)
+        progress = min(1.0, self.total_games_played / total_target)
         return self.config.temperature_start + progress * (
             self.config.temperature_end - self.config.temperature_start
         )
@@ -542,12 +530,6 @@ def train(config: Optional[TrainingConfig] = None):
     lr_plateau_counter = 0
     lr_plateau_patience = 3  # Warn after 3 eval checkpoints without improvement
 
-    # Create agents
-    # Use greedy pip count for warmstart (fast: pip count only, no heuristic scans)
-    # Full pip count agent is too slow for bulk game generation
-    warmstart_agent = greedy_pip_count_agent()
-    pip_agent = pip_count_agent()  # Used for evaluation
-
     batch_num = 0
     total_train_steps = int(state.step)
 
@@ -562,11 +544,11 @@ def train(config: Optional[TrainingConfig] = None):
     # identical Board objects every batch (helps TPU game throughput).
     phase_variants_cache = {}
 
+    total_target = phase_manager.get_total_target()
     print(f"\n🎲 Starting training:")
-    print(f"   Warmstart: {config.warmstart_games} games (pip count vs pip count)")
-    print(f"   Early:     {config.early_phase_games} games (simplified variants)")
-    print(f"   Mid:       {config.mid_phase_games} games (mixed variants)")
-    print(f"   Late:      {config.late_phase_games} games (full complexity)")
+    print(f"   Total games: {total_target}")
+    print(f"   1-ply lookahead: {'ON' if config.use_1ply_selfplay else 'OFF'}")
+    print(f"   Temperature: {config.temperature_start} → {config.temperature_end}")
     print(f"\n💾 Checkpoints: {config.checkpoint_dir}")
     print(f"📊 Logs: {config.log_dir}\n")
 
@@ -574,52 +556,33 @@ def train(config: Optional[TrainingConfig] = None):
         while True:
             batch_start = time.time()
 
-            # Get current phase
+            # Get current phase and variants
             phase_name, get_variants_fn = phase_manager.get_current_phase()
-            use_warmstart = phase_manager.should_use_pip_count_warmstart()
-
-            # Generate training batch through self-play
-            record_values = config.use_td_lambda and not use_warmstart
 
             if phase_name not in phase_variants_cache:
                 phase_variants_cache[phase_name] = get_variants_fn()
             variants = phase_variants_cache[phase_name]
 
-            if use_warmstart:
-                # Warmstart: greedy pip count vs greedy pip count (fast, sequential)
-                games = generate_training_batch(
-                    num_games=config.games_per_batch,
-                    white_agent=warmstart_agent,
-                    black_agent=warmstart_agent,
-                    variants=variants,
-                    rng=rng,
-                    record_value_estimates=False,
-                    max_moves=config.max_moves,
-                )
-            else:
-                # Neural self-play: batched simulation (dramatically faster)
-                # Plays all games simultaneously with JIT-compiled batched
-                # inference, reducing ~7800 TPU dispatches to ~120 per batch.
-                current_temp = phase_manager.get_current_temperature()
-                # Use EMA params for self-play (smoother, better evaluation)
-                ema_state = _make_ema_state(state, ema_params)
-                games = play_games_batched(
-                    num_games=config.games_per_batch,
-                    state=ema_state,
-                    variants=variants,
-                    temperature=current_temp,
-                    max_moves=config.max_moves,
-                    rng=rng,
-                    record_value_estimates=record_values,
-                    use_dice_averaged_targets=config.use_dice_averaged_targets,
-                    use_stratified_dice=config.use_stratified_dice,
-                    use_1ply_lookahead=config.use_1ply_selfplay,
-                    lookahead_top_k=config.lookahead_top_k,
-                )
+            # Neural self-play: batched simulation
+            current_temp = phase_manager.get_current_temperature()
+            ema_state = _make_ema_state(state, ema_params)
+            games = play_games_batched(
+                num_games=config.games_per_batch,
+                state=ema_state,
+                variants=variants,
+                temperature=current_temp,
+                max_moves=config.max_moves,
+                rng=rng,
+                record_value_estimates=config.use_td_lambda,
+                use_dice_averaged_targets=config.use_dice_averaged_targets,
+                use_stratified_dice=config.use_stratified_dice,
+                use_1ply_lookahead=config.use_1ply_selfplay,
+                lookahead_top_k=config.lookahead_top_k,
+            )
 
             # Add games to replay buffer (with TD(lambda) targets if enabled)
             # Split between training and validation buffers
-            td_lambda_param = config.td_lambda if record_values else None
+            td_lambda_param = config.td_lambda if config.use_td_lambda else None
             for game in games:
                 if (val_buffer is not None and
                         rng.random() < config.validation_fraction):
@@ -706,7 +669,7 @@ def train(config: Optional[TrainingConfig] = None):
             # Console logging
             if batch_num % config.log_every_n_batches == 0:
                 buffer_status = f"{len(replay_buffer)}/{replay_buffer.max_size}"
-                temp_str = f"Temp: {phase_manager.get_current_temperature():.2f} | " if not use_warmstart else ""
+                temp_str = f"Temp: {phase_manager.get_current_temperature():.2f} | "
                 grad_str = f" | GradNorm: {max_grad_norm_seen:.2f}" if max_grad_norm_seen > 0 else ""
                 clip_str = f" (clipped {grad_clips}x)" if grad_clips > 0 else ""
                 print(f"[{phase_name:8s}] Batch {batch_num:4d} | "
@@ -789,8 +752,6 @@ def train(config: Optional[TrainingConfig] = None):
                 print(f"💾 Checkpoint saved at batch {batch_num}")
 
             # Check if training complete
-            total_target = (config.warmstart_games + config.early_phase_games +
-                           config.mid_phase_games + config.late_phase_games)
             if phase_manager.total_games_played >= total_target:
                 print(f"\n✅ Training complete! {phase_manager.total_games_played} games played")
                 print(f"   Total training steps: {total_train_steps}")

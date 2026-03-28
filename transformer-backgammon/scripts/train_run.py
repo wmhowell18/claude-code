@@ -31,7 +31,7 @@ import time
 PRESETS = {
     "smoke": {
         "description": "Pipeline validation (~5 min). Tiny model, 500 games.",
-        "games": {"warmstart": 100, "early": 100, "mid": 150, "late": 150},
+        "total_games": 500,
         "model": {"embed_dim": 64, "num_heads": 4, "num_layers": 2, "ff_dim": 256},
         "training": {
             "training_batch_size": 256,
@@ -53,7 +53,7 @@ PRESETS = {
     },
     "quick-2.5k": {
         "description": "Quick validation (~15-30 min). Small model, 2,500 games.",
-        "games": {"warmstart": 200, "early": 500, "mid": 800, "late": 1000},
+        "total_games": 2500,
         "model": {"embed_dim": 64, "num_heads": 4, "num_layers": 2, "ff_dim": 256},
         "training": {
             "training_batch_size": 512,
@@ -75,7 +75,7 @@ PRESETS = {
     },
     "dev-5k": {
         "description": "Development run (~30-60 min). Small model, 5,000 games.",
-        "games": {"warmstart": 500, "early": 1000, "mid": 1500, "late": 2000},
+        "total_games": 5000,
         "model": {"embed_dim": 64, "num_heads": 4, "num_layers": 2, "ff_dim": 256},
         "training": {
             "training_batch_size": 512,
@@ -97,7 +97,7 @@ PRESETS = {
     },
     "poc-15k": {
         "description": "Proof-of-concept (~1-2 hr). Medium model, 15,000 games.",
-        "games": {"warmstart": 1000, "early": 3000, "mid": 5000, "late": 6000},
+        "total_games": 15000,
         "model": {"embed_dim": 128, "num_heads": 8, "num_layers": 4, "ff_dim": 512},
         "training": {
             "training_batch_size": 256,
@@ -119,7 +119,7 @@ PRESETS = {
     },
     "full-50k": {
         "description": "Full training (~4-6 hr). Medium model, 50,000 games.",
-        "games": {"warmstart": 2000, "early": 8000, "mid": 15000, "late": 25000},
+        "total_games": 50000,
         "model": {"embed_dim": 128, "num_heads": 8, "num_layers": 4, "ff_dim": 512},
         "training": {
             "training_batch_size": 256,
@@ -141,7 +141,7 @@ PRESETS = {
     },
     "long-200k": {
         "description": "Long training (~24+ hr). Large model, 200,000 games.",
-        "games": {"warmstart": 5000, "early": 25000, "mid": 70000, "late": 100000},
+        "total_games": 200000,
         "model": {"embed_dim": 256, "num_heads": 16, "num_layers": 8, "ff_dim": 1024},
         "training": {
             "training_batch_size": 512,
@@ -177,10 +177,6 @@ def estimate_params(model_cfg):
     return MODEL_PARAMS.get(key, "unknown")
 
 
-def total_games(games_cfg):
-    return sum(games_cfg.values())
-
-
 # ── Display ───────────────────────────────────────────────────────────────
 
 def print_presets():
@@ -192,7 +188,7 @@ def print_presets():
     print(fmt.format("PRESET", "", "", "DESCRIPTION"))
     print("  " + "-" * 68)
     for name, cfg in PRESETS.items():
-        g = total_games(cfg["games"])
+        g = cfg["total_games"]
         p = estimate_params(cfg["model"])
         desc = cfg["description"].split(".")[0]  # First sentence only
         print(fmt.format(name, f"{g:,}", p, desc))
@@ -201,10 +197,9 @@ def print_presets():
 
 def print_config_summary(name, cfg, dtype):
     """Print a summary of the chosen configuration."""
-    g = cfg["games"]
     m = cfg["model"]
     t = cfg["training"]
-    total = total_games(g)
+    total = cfg["total_games"]
     params = estimate_params(m)
 
     print()
@@ -216,11 +211,7 @@ def print_config_summary(name, cfg, dtype):
     print(f"  Model:       {m['num_layers']}L / {m['embed_dim']}d / {m['num_heads']}H / "
           f"{m['ff_dim']}ff  ({params} params)")
     print(f"  Dtype:       {dtype}")
-    print(f"  Games:       {total:,} total")
-    print(f"    warmstart: {g['warmstart']:,}")
-    print(f"    early:     {g['early']:,}")
-    print(f"    mid:       {g['mid']:,}")
-    print(f"    late:      {g['late']:,}")
+    print(f"  Games:       {total:,} (neural self-play, full variants)")
     print(f"  Batch:       {t['training_batch_size']} train / "
           f"{t['games_per_batch']} self-play")
     print(f"  LR:          {t['learning_rate']:.0e} (warmup {t['warmup_steps']}, "
@@ -239,7 +230,7 @@ def interactive_select():
     print()
     for i, name in enumerate(names, 1):
         cfg = PRESETS[name]
-        g = total_games(cfg["games"])
+        g = cfg["total_games"]
         p = estimate_params(cfg["model"])
         print(f"  [{i}] {name:<14s}  {g:>7,} games, {p:>6s} params — "
               f"{cfg['description']}")
@@ -262,18 +253,14 @@ def build_config(preset_name, dtype="bfloat16", checkpoint_dir=None, log_dir=Non
     from backgammon.training.train import TrainingConfig
 
     cfg = PRESETS[preset_name]
-    g = cfg["games"]
     m = cfg["model"]
     t = cfg["training"]
     e = cfg["eval"]
     p = cfg["paths"]
 
     config = TrainingConfig(
-        # Curriculum phases
-        warmstart_games=g["warmstart"],
-        early_phase_games=g["early"],
-        mid_phase_games=g["mid"],
-        late_phase_games=g["late"],
+        # Total games (no curriculum — pure self-play)
+        total_games=cfg["total_games"],
 
         # Model
         embed_dim=m["embed_dim"],
@@ -439,7 +426,7 @@ def main():
     print_config_summary(preset_name, cfg, args.dtype)
 
     # Confirm for long runs
-    tg = total_games(cfg["games"])
+    tg = cfg["total_games"]
     if tg >= 50_000:
         resp = input(f"This run has {tg:,} games and may take hours. Continue? [Y/n] ")
         if resp.strip().lower() == "n":
