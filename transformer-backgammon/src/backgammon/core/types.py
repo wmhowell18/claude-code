@@ -233,8 +233,8 @@ class CubeDecisionQuality:
 class Equity:
     """Network output: equity estimation.
 
-    Represents the probability distribution over game outcomes.
-    Note: P(lose normal) = 1 - sum(all other probabilities)
+    Represents the probability distribution over 6 game outcomes.
+    All 6 probabilities sum to 1.0.
 
     Attributes:
         win_normal: P(win without gammon)
@@ -293,12 +293,13 @@ class Equity:
         return (win_value + lose_value) * cube_value
 
     def to_array(self) -> NDArray[np.float32]:
-        """Convert to numpy array [win_normal, win_gammon, win_bg, lose_gammon, lose_bg]."""
+        """Convert to numpy array [win_n, win_g, win_bg, lose_n, lose_g, lose_bg]."""
         return np.array(
             [
                 self.win_normal,
                 self.win_gammon,
                 self.win_backgammon,
+                self.lose_normal,
                 self.lose_gammon,
                 self.lose_backgammon,
             ],
@@ -307,15 +308,25 @@ class Equity:
 
     @staticmethod
     def from_array(arr: NDArray[np.float32]) -> "Equity":
-        """Create from numpy array."""
-        assert len(arr) == 5, "Array must have exactly 5 elements"
-        return Equity(
+        """Create from 6-dim numpy array.
+
+        arr[3] (lose_normal) is not stored as a field — it's recomputed as
+        1 - sum(other 5). This is safe because the 6 values must sum to 1.0
+        for a valid probability distribution.
+        """
+        assert len(arr) == 6, "Array must have exactly 6 elements"
+        eq = Equity(
             win_normal=float(arr[0]),
             win_gammon=float(arr[1]),
             win_backgammon=float(arr[2]),
-            lose_gammon=float(arr[3]),
-            lose_backgammon=float(arr[4]),
+            lose_gammon=float(arr[4]),
+            lose_backgammon=float(arr[5]),
         )
+        # Verify the implicit lose_normal matches arr[3] (catches distribution errors)
+        assert abs(eq.lose_normal - float(arr[3])) < 0.02, (
+            f"lose_normal mismatch: computed {eq.lose_normal:.4f} vs arr[3]={arr[3]:.4f}"
+        )
+        return eq
 
 
 @dataclass
@@ -496,11 +507,11 @@ class Batch:
 
     Attributes:
         boards: Encoded boards [batch_size, 26, feature_dim]
-        target_equities: Target equity values [batch_size, 5]
+        target_equities: Target equity values [batch_size, 6]
         target_policies: Optional policy targets [batch_size, num_moves]
     """
     boards: EncodedBoard
-    target_equities: NDArray[np.float32]  # [batch_size, 5]
+    target_equities: NDArray[np.float32]  # [batch_size, 6]
     target_policies: Optional[NDArray[np.float32]] = None  # [batch_size, num_moves]
 
 

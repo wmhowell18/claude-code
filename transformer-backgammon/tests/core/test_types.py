@@ -156,7 +156,7 @@ class TestEquity:
         )
 
         arr = equity.to_array()
-        assert arr.shape == (5,)
+        assert arr.shape == (6,)
         assert arr.dtype == np.float32
 
         equity2 = Equity.from_array(arr)

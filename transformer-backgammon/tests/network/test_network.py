@@ -161,7 +161,7 @@ class TestForwardPass:
         equity, policy, cube_dec, attn_weights = forward(model, params, encoded, training=False)
 
         # Check output shapes
-        assert equity.shape == (1, 5)  # Batch=1, 5 equity components
+        assert equity.shape == (1, 6)  # Batch=1, 6 equity components
         assert policy is None  # Policy head not enabled
 
         # Equity should be valid probabilities
@@ -183,7 +183,7 @@ class TestForwardPass:
         )
 
         # Check output shapes
-        assert equity.shape == (4, 5)  # Batch=4, 5 equity components
+        assert equity.shape == (4, 6)  # Batch=4, 6 equity components
 
     def test_forward_training_mode(self, setup_network):
         """Test forward pass in training mode with dropout."""
@@ -196,7 +196,7 @@ class TestForwardPass:
 
         # Different dropout keys should give slightly different results
         # (though for small network difference might be small)
-        assert equity1.shape == equity2.shape == (1, 5)
+        assert equity1.shape == equity2.shape == (1, 6)
 
     def test_attention_weights(self):
         """Test returning attention weights."""
@@ -268,8 +268,8 @@ class TestLossFunctions:
 
     def test_total_loss(self):
         """Test combined loss."""
-        equity_pred = jnp.array([[0.2, 0.3, 0.1, 0.2, 0.2]], dtype=jnp.float32)
-        equity_target = jnp.array([[0.2, 0.3, 0.1, 0.2, 0.2]], dtype=jnp.float32)
+        equity_pred = jnp.array([[0.2, 0.2, 0.1, 0.2, 0.2, 0.1]], dtype=jnp.float32)
+        equity_target = jnp.array([[0.2, 0.2, 0.1, 0.2, 0.2, 0.1]], dtype=jnp.float32)
 
         loss = total_loss(equity_pred, equity_target)
 
@@ -280,8 +280,8 @@ class TestLossFunctions:
 
     def test_total_loss_with_policy(self):
         """Test combined loss with policy."""
-        equity_pred = jnp.array([[0.2, 0.3, 0.1, 0.2, 0.2]], dtype=jnp.float32)
-        equity_target = jnp.array([[0.2, 0.3, 0.1, 0.2, 0.2]], dtype=jnp.float32)
+        equity_pred = jnp.array([[0.2, 0.2, 0.1, 0.2, 0.2, 0.1]], dtype=jnp.float32)
+        equity_target = jnp.array([[0.2, 0.2, 0.1, 0.2, 0.2, 0.1]], dtype=jnp.float32)
         policy_pred = jnp.array([[1.0, 2.0, 0.5]], dtype=jnp.float32)
         policy_target = jnp.array([[0.2, 0.6, 0.2]], dtype=jnp.float32)
 
@@ -318,7 +318,7 @@ class TestTraining:
         features = jnp.array(encoded_batch.position_features, dtype=jnp.float32)
 
         # Create dummy targets
-        targets = jnp.ones((8, 5), dtype=jnp.float32) / 5.0  # Uniform distribution
+        targets = jnp.ones((8, 6), dtype=jnp.float32) / 6.0  # Uniform distribution
 
         return state, features, targets, rng_key
 
@@ -407,7 +407,7 @@ class TestModelComponents:
         equity, policy, cube_dec, attn = model.apply(params, dummy_input, training=False)
 
         # Check shapes
-        assert equity.shape == (2, 5)
+        assert equity.shape == (2, 6)
         assert policy is None  # Not using policy head
         assert cube_dec is None  # Not using cube head
 
@@ -426,7 +426,7 @@ class TestModelComponents:
         equity, policy, cube_dec, attn = model.apply(params, dummy_input, training=False)
 
         # Both heads should produce output
-        assert equity.shape == (1, 5)
+        assert equity.shape == (1, 6)
         assert policy is not None
         assert policy.shape == (1, config.num_actions)
         assert cube_dec is None  # Not using cube head
@@ -450,7 +450,7 @@ class TestBFloat16:
 
         # Output should be float32 (cast at softmax/output heads)
         assert equity.dtype == jnp.float32
-        assert equity.shape == (4, 5)
+        assert equity.shape == (4, 6)
         assert jnp.all(jnp.isfinite(equity))
 
         # Equity should be valid probabilities
@@ -473,7 +473,7 @@ class TestBFloat16:
         # Both outputs should be float32
         assert equity.dtype == jnp.float32
         assert policy.dtype == jnp.float32
-        assert equity.shape == (2, 5)
+        assert equity.shape == (2, 6)
         assert policy.shape == (2, config.num_actions)
 
     def test_bfloat16_params_are_float32(self):
@@ -499,7 +499,7 @@ class TestBFloat16:
         state = create_train_state(model, params, learning_rate=1e-4)
 
         features = jnp.ones((8, 26, 2), dtype=jnp.float32)
-        targets = jnp.ones((8, 5), dtype=jnp.float32) / 5.0
+        targets = jnp.ones((8, 6), dtype=jnp.float32) / 6.0
 
         new_state, loss = train_step(state, features, targets, rng_key)
         assert jnp.isfinite(loss)

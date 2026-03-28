@@ -16,7 +16,7 @@
 
 3. **Global features not wired into training** — `train.py` hardcodes `input_feature_dim=2`, ignoring the 8-dim global features (pip counts, contact, primes, bearoff). Per TODO.md, "the single highest-impact improvement available."
 
-4. **TD targets not renormalized after clipping** — After clipping to [0,1], the 5-dim probability vector may not sum to 1.0, causing cross-entropy instability.
+4. ~~**TD targets not renormalized after clipping**~~ — **FIXED (Mar 2026)**: Moved to 6-dim equity representation throughout. All targets now sum to 1.0 and produce proper gradient signal, including previously zero-gradient lose_normal outcomes.
 
 ### HIGH PRIORITY — Fix Before Production Run
 

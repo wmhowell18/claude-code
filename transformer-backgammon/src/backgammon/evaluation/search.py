@@ -244,14 +244,13 @@ def _encode_boards_batch(
 
 
 def _equity_to_value(equity: jnp.ndarray) -> jnp.ndarray:
-    """Convert 5-dim equity distribution to scalar expected value.
+    """Convert 6-dim equity distribution to scalar expected value.
 
-    Equity: [win_normal, win_gammon, win_bg, lose_gammon, lose_bg]
-    P(lose_normal) = 1 - sum(equity)
+    Equity: [win_normal, win_gammon, win_bg, lose_normal, lose_gammon, lose_bg]
     Value = win_probs*points - lose_probs*points
 
     Args:
-        equity: Shape (..., 5) equity probabilities.
+        equity: Shape (..., 6) equity probabilities.
 
     Returns:
         Shape (...,) scalar expected value in roughly [-3, +3].
@@ -261,11 +260,10 @@ def _equity_to_value(equity: jnp.ndarray) -> jnp.ndarray:
         + equity[..., 1] * 2.0
         + equity[..., 2] * 3.0
     )
-    lose_normal = 1.0 - jnp.sum(equity, axis=-1)
     lose_value = (
-        lose_normal * 1.0
-        + equity[..., 3] * 2.0
-        + equity[..., 4] * 3.0
+        equity[..., 3] * 1.0
+        + equity[..., 4] * 2.0
+        + equity[..., 5] * 3.0
     )
     return win_value - lose_value
 

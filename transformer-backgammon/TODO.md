@@ -4,7 +4,7 @@
 >
 > **Current Maturity**: ~8/10 for competitive play. Solid game engine + neural training + search + benchmarking + TD(lambda) + exploration schedule + global encoding features + race evaluation + training infrastructure (position weighting, validation, early stopping) + doubling cube + match play + modern transformer architecture (RMSNorm, SwiGLU, pre-norm) + EMA weights + AdamW + muP + Stochastic MuZero network + schedule-free optimizer option + color-flip data augmentation. Missing GnuBG interface, MCTS integration with MuZero, and rollout-based training.
 >
-> **Known Issues (Feb 2026)**: Code review identified several correctness bugs requiring attention before long training runs: policy head is non-functional (hash collisions + dummy targets), global features are implemented but not wired into training (input_feature_dim hardcoded to 2), TD targets are not renormalized before cross-entropy loss, and training telemetry is misleading (train_acc always 0.0, LR logged as constant peak). See "KNOWN ISSUES" section below.
+> **Known Issues (Feb 2026, updated Mar 2026)**: Code review identified several correctness bugs requiring attention before long training runs: policy head is non-functional (hash collisions + dummy targets), global features are implemented but not wired into training (input_feature_dim hardcoded to 2), ~~TD targets are not renormalized before cross-entropy loss~~ **(FIXED Mar 2026 — moved to 6-dim equity, fixing zero-gradient bug for lose_normal outcomes)**, and training telemetry is misleading (train_acc always 0.0, LR logged as constant peak). See "KNOWN ISSUES" section below.
 
 ---
 
@@ -34,12 +34,17 @@ training quality and telemetry — address before committing to multi-hour TPU r
   LR — making LR curves completely uninformative for debugging schedule issues. Fix: extract actual
   LR from the optax state via `state.opt_state`. (Effort: S, Impact: diagnostic)
 
-- [ ] **103. TD targets not renormalized before cross-entropy** — `td_lambda.py` clips each
-  component of the 6-dim target to [0, 1] elementwise, then converts to 5-dim and passes to
-  `compute_equity_loss`. The result may not sum to 1 (or may sum near 0 for large eligibility
-  traces), which collapses gradient signal for those samples and can cause cross-entropy instability.
-  Fix: after clipping, renormalize the 5-dim target to sum to 1 (or to skip samples where sum < ε).
-  (Effort: S, Impact: training quality)
+- [x] **103. TD targets not renormalized / lose_normal zero-gradient bug** — The original 5-dim
+  equity representation (`[win_n, win_g, win_bg, lose_g, lose_bg]`) with implicit `lose_normal`
+  caused TWO bugs: (1) TD targets lost information when converting 6-dim→5-dim (lose_normal dropped),
+  causing gradient magnitude to vary with lose_normal fraction; (2) MC targets for "lose normal"
+  outcomes were all-zeros `[0,0,0,0,0]`, producing **zero gradient** — the network literally could
+  not learn normal losses. Fix: moved entire codebase to explicit 6-dim equity
+  `[win_n, win_g, win_bg, lose_n, lose_g, lose_bg]` with softmax over 6 outputs. All targets now
+  sum to 1.0 and every outcome produces proper gradient signal. Changed 17 files: network ValueHead
+  (Dense(5)→Dense(6)), losses, td_lambda, replay_buffer, encoder, search, self_play, types, and
+  all tests. (Effort: M, Impact: large — fixes silent training failure for ~17% of game outcomes)
+  *(Mar 2026)*
 
 - [ ] **104. Policy head non-functional — disable until fixed** — Two compounding issues: (1)
   `action_encoder.py` maps moves to 1024 slots via a hash with frequent collisions for the 20-100+
@@ -299,7 +304,7 @@ training quality and telemetry — address before committing to multi-hour TPU r
 5. ~~**Items 19, 25-28** (exploration schedule + encoding improvements)~~ — DONE (encoder.py + train.py)
 6. ~~**Items 7-10** (doubling cube)~~ — DONE (core/cube.py + types + network cube head)
 7. ~~**Items 111-118, 66, 84** (architecture modernization)~~ — DONE (EMA, AdamW, RMSNorm, SwiGLU, pre-norm, muP, Stochastic MuZero, schedule-free optimizer, color-flip augmentation)
-8. **Fix items 103-105** (TD target normalization, disable policy head, wire global features) — fix these before any long training run, as they directly affect gradient signal and convergence
+8. ~~**Fix item 103**~~ (6-dim equity / TD target normalization) — DONE (Mar 2026). **Fix items 104-105** (disable policy head, wire global features) — fix these before any long training run, as they directly affect gradient signal and convergence
 9. **Longer training run** with the improved pipeline — see where the model plateaus
 10. **Items 17-18** (N-step bootstrapping + rollout targets) — even better training signal
 11. **Wire Stochastic MuZero into training** (item 117 architecture done, needs MCTS integration + training loop)
@@ -354,3 +359,4 @@ training quality and telemetry — address before committing to multi-hour TPU r
 - [x] **Stochastic MuZero network** — Complete world model architecture in `network/muzero.py`. (Mar 2026)
 - [x] **Schedule-free optimizer** — `optax.contrib.schedule_free_adamw` option for training-length-independent optimization. (Mar 2026)
 - [x] **Color-flip data augmentation** — Wired into replay buffer, doubling effective training data. (Mar 2026)
+- [x] **6-dim equity (fix item 103)** — Moved from 5-dim to explicit 6-dim equity `[win_n, win_g, win_bg, lose_n, lose_g, lose_bg]`. Fixed zero-gradient bug for lose_normal outcomes and TD target information loss. 17 files changed. (Mar 2026)

@@ -143,7 +143,7 @@ class TestReplayBuffer:
         # Action space size is 4096 (from action_encoder.ACTION_SPACE_SIZE)
         assert batch['board_encoding'].shape == (32, 26, 10)
         assert batch['target_policy'].shape == (32, 1024)
-        assert batch['equity_target'].shape == (32, 5)
+        assert batch['equity_target'].shape == (32, 6)
         assert batch['action_mask'].shape == (32, 1024)
 
         # Check types
@@ -176,15 +176,17 @@ class TestReplayBuffer:
         batch = buffer.sample_batch(6)
         equities = batch['equity_target']
 
-        # Shape should be (6, 5)
-        assert equities.shape == (6, 5)
+        # Shape should be (6, 6)
+        assert equities.shape == (6, 6)
 
-        # Each row should be a valid probability distribution component
+        # Each row should be a valid probability distribution
         # For white steps: win_normal=1.0, rest=0.0
-        # For black steps: all zeros (lose_normal is implicit)
+        # For black steps: lose_normal=1.0, rest=0.0
         for eq in equities:
             # All values should be 0 or 1
             assert all(v in [0.0, 1.0] for v in eq)
+            # Should sum to 1.0 (one-hot)
+            assert abs(float(sum(eq)) - 1.0) < 1e-6
 
     def test_clear_buffer(self):
         """Test clearing buffer."""
@@ -315,14 +317,15 @@ class TestReplayBufferIntegration:
         batch = buffer.sample_batch(30)
         equities = batch['equity_target']
 
-        # Should have shape (30, 5)
-        assert equities.shape == (30, 5)
+        # Should have shape (30, 6)
+        assert equities.shape == (30, 6)
 
         # Should have some win_normal=1.0 entries (white win from white's perspective)
-        # and some all-zeros entries (white win from black's perspective = lose_normal)
+        # and some lose_normal=1.0 entries (white win from black's perspective)
         win_normal_values = equities[:, 0]
+        lose_normal_values = equities[:, 3]
         assert any(v == 1.0 for v in win_normal_values)
-        assert any(v == 0.0 for v in win_normal_values)
+        assert any(v == 1.0 for v in lose_normal_values)
 
     def test_replay_buffer_with_training_loop(self):
         """Test buffer works in a simple training loop simulation."""

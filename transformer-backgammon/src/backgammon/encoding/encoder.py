@@ -772,8 +772,8 @@ def outcome_to_equity(outcome: GameOutcome, player: Player) -> Equity:
     else:
         # We lost - set appropriate loss probability to 1.0
         if outcome.points == 1:
-            # Normal loss (lose_normal is implicit)
-            pass  # All zeros is correct
+            # Normal loss — all 5 fields stay 0, so lose_normal computes to 1.0
+            pass
         elif outcome.points == 2:
             equity.lose_gammon = 1.0
         else:  # points == 3
@@ -789,7 +789,7 @@ def equity_to_array(equity: Equity) -> NDArray[np.float32]:
         equity: Equity probabilities
 
     Returns:
-        Array of shape (5,) containing equity components
+        Array of shape (6,): [win_n, win_g, win_bg, lose_n, lose_g, lose_bg]
     """
     return equity.to_array()
 
@@ -798,7 +798,7 @@ def array_to_equity(arr: NDArray[np.float32]) -> Equity:
     """Decode equity from array.
 
     Args:
-        arr: Array of shape (5,) containing equity components
+        arr: Array of shape (6,): [win_n, win_g, win_bg, lose_n, lose_g, lose_bg]
 
     Returns:
         Equity object

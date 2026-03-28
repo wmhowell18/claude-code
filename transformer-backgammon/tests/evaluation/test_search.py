@@ -116,29 +116,29 @@ class TestEquityToValue:
     """Tests for equity-to-value conversion."""
 
     def test_all_win_normal(self):
-        equity = jnp.array([[1.0, 0.0, 0.0, 0.0, 0.0]])
+        equity = jnp.array([[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]])
         assert float(_equity_to_value(equity)[0]) == pytest.approx(1.0, abs=1e-5)
 
     def test_all_lose_normal(self):
-        equity = jnp.array([[0.0, 0.0, 0.0, 0.0, 0.0]])
+        equity = jnp.array([[0.0, 0.0, 0.0, 1.0, 0.0, 0.0]])
         assert float(_equity_to_value(equity)[0]) == pytest.approx(-1.0, abs=1e-5)
 
     def test_all_win_gammon(self):
-        equity = jnp.array([[0.0, 1.0, 0.0, 0.0, 0.0]])
+        equity = jnp.array([[0.0, 1.0, 0.0, 0.0, 0.0, 0.0]])
         assert float(_equity_to_value(equity)[0]) == pytest.approx(2.0, abs=1e-5)
 
     def test_all_win_backgammon(self):
-        equity = jnp.array([[0.0, 0.0, 1.0, 0.0, 0.0]])
+        equity = jnp.array([[0.0, 0.0, 1.0, 0.0, 0.0, 0.0]])
         assert float(_equity_to_value(equity)[0]) == pytest.approx(3.0, abs=1e-5)
 
     def test_all_lose_gammon(self):
-        equity = jnp.array([[0.0, 0.0, 0.0, 1.0, 0.0]])
+        equity = jnp.array([[0.0, 0.0, 0.0, 0.0, 1.0, 0.0]])
         assert float(_equity_to_value(equity)[0]) == pytest.approx(-2.0, abs=1e-5)
 
     def test_batch(self):
         equity = jnp.array([
-            [1.0, 0.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
         ])
         vals = _equity_to_value(equity)
         assert vals.shape == (2,)

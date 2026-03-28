@@ -444,7 +444,7 @@ class TestEquityEncoding:
         )
 
         arr = equity_to_array(equity)
-        assert arr.shape == (5,)
+        assert arr.shape == (6,)
 
         equity2 = array_to_equity(arr)
         assert abs(equity2.win_normal - equity.win_normal) < 1e-6

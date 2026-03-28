@@ -108,7 +108,7 @@ class TestCreateTrainState:
 
         # Check outputs (network returns tuple of (equity, policy_logits, cube_decision, attention_weights))
         equity, policy_logits, _, _ = output
-        assert equity.shape == (1, 5)  # Equity prediction (5 outcomes)
+        assert equity.shape == (1, 6)  # Equity prediction (6 outcomes)
         assert policy_logits.shape == (1, 1024)  # Action space size
 
 
@@ -195,7 +195,7 @@ class TestReplayBufferIntegration:
         # Verify batch structure
         assert batch['board_encoding'].shape[0] == 16
         assert batch['target_policy'].shape == (16, 1024)
-        assert batch['equity_target'].shape == (16, 5)
+        assert batch['equity_target'].shape == (16, 6)
         assert batch['action_mask'].shape == (16, 1024)
 
 
@@ -625,7 +625,7 @@ class TestConfigurationVariations:
 
         # Check outputs - policy should be None in value-only mode
         equity, policy, _, _ = output
-        assert equity.shape == (1, 5)  # Equity prediction
+        assert equity.shape == (1, 6)  # Equity prediction
         assert policy is None  # No policy in value-only mode
 
     def test_different_network_sizes(self):
@@ -663,5 +663,5 @@ class TestConfigurationVariations:
             )
 
             equity, policy, _, _ = output
-            assert equity.shape == (1, 5)  # Equity prediction
+            assert equity.shape == (1, 6)  # Equity prediction
             assert policy.shape == (1, 1024)  # Policy logits

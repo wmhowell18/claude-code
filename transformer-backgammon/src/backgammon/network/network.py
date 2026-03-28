@@ -280,7 +280,8 @@ class ValueHead(nn.Module):
     """Value head for equity prediction.
 
     Converts transformer output to equity probabilities.
-    Uses global pooling followed by MLP to produce 5 equity values.
+    Uses global pooling followed by MLP to produce 6 equity values
+    (win_n, win_g, win_bg, lose_n, lose_g, lose_bg).
 
     Attributes:
         config: Transformer configuration
@@ -299,8 +300,8 @@ class ValueHead(nn.Module):
             x: Transformer output of shape [batch, seq_len, embed_dim]
 
         Returns:
-            Equity probabilities of shape [batch, 5] (always float32)
-            (win_normal, win_gammon, win_backgammon, lose_gammon, lose_backgammon)
+            Equity probabilities of shape [batch, 6] (always float32)
+            (win_normal, win_gammon, win_bg, lose_normal, lose_gammon, lose_bg)
         """
         dtype = self.config.dtype
         batch_size, seq_len, embed_dim = x.shape
@@ -320,7 +321,7 @@ class ValueHead(nn.Module):
             self.config.ff_dim // 2, dtype=dtype, param_dtype=jnp.float32, name='fc1',
         )(pooled)
         x = nn.gelu(x)
-        x = nn.Dense(5, dtype=dtype, param_dtype=jnp.float32, name='equity')(x)
+        x = nn.Dense(6, dtype=dtype, param_dtype=jnp.float32, name='equity')(x)
 
         # muP: scale output logits by base_width/width
         x = x * self.mup_output_scale
@@ -452,7 +453,7 @@ class BackgammonTransformer(nn.Module):
 
         Returns:
             Tuple of (equity, policy, cube_decision, attention_weights)
-            - equity: [batch, 5] - equity predictions
+            - equity: [batch, 6] - equity predictions
             - policy: [batch, num_actions] or None
             - cube_decision: [batch, 4] or None (no_double, double, take, pass)
             - attention_weights: [batch, num_layers, num_heads, seq_len, seq_len] or None

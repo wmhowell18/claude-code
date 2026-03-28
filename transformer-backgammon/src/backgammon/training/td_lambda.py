@@ -31,28 +31,21 @@ from backgammon.encoding.encoder import outcome_to_equity
 from backgammon.training.self_play import GameResult
 
 
-def _to_6dim(equity5: np.ndarray) -> np.ndarray:
-    """Convert 5-dim equity to 6-dim (make lose_normal explicit).
+def _ensure_6dim(equity: np.ndarray) -> np.ndarray:
+    """Ensure equity is in 6-dim format.
 
-    Input:  [win_normal, win_gammon, win_bg, lose_gammon, lose_bg]
-    Output: [win_normal, win_gammon, win_bg, lose_normal, lose_gammon, lose_bg]
+    If already 6-dim, returns as-is. If 5-dim (legacy), converts by
+    computing lose_normal = 1 - sum(5 components).
+
+    6-dim format: [win_normal, win_gammon, win_bg, lose_normal, lose_gammon, lose_bg]
     """
-    lose_normal = max(0.0, 1.0 - np.sum(equity5))
+    if len(equity) == 6:
+        return equity.astype(np.float32)
+    # Legacy 5-dim: [win_normal, win_gammon, win_bg, lose_gammon, lose_bg]
+    lose_normal = max(0.0, 1.0 - np.sum(equity))
     return np.array([
-        equity5[0], equity5[1], equity5[2],
-        lose_normal, equity5[3], equity5[4],
-    ], dtype=np.float32)
-
-
-def _to_5dim(equity6: np.ndarray) -> np.ndarray:
-    """Convert 6-dim equity to 5-dim (drop lose_normal, it's implicit).
-
-    Input:  [win_normal, win_gammon, win_bg, lose_normal, lose_gammon, lose_bg]
-    Output: [win_normal, win_gammon, win_bg, lose_gammon, lose_bg]
-    """
-    return np.array([
-        equity6[0], equity6[1], equity6[2],
-        equity6[4], equity6[5],
+        equity[0], equity[1], equity[2],
+        lose_normal, equity[3], equity[4],
     ], dtype=np.float32)
 
 
@@ -92,8 +85,9 @@ def compute_td_lambda_targets(
             0.7 = recommended default for backgammon.
 
     Returns:
-        List of 5-dim equity target arrays, one per game step,
+        List of 6-dim equity target arrays, one per game step,
         from the perspective of the player to move at that step.
+        Format: [win_n, win_g, win_bg, lose_n, lose_g, lose_bg]
     """
     if game.outcome is None:
         return []  # Skip draws
@@ -116,13 +110,14 @@ def compute_td_lambda_targets(
     # We flip Black's estimates to White's perspective.
     V_white = []
     for t in range(T):
-        v6 = _to_6dim(np.array(game.value_estimates[t], dtype=np.float32))
+        v6 = _ensure_6dim(np.array(game.value_estimates[t], dtype=np.float32))
         if game.steps[t].player == Player.BLACK:
             v6 = _flip_6dim(v6)
         V_white.append(v6)
 
     # Compute final game outcome from White's perspective in 6-dim
-    outcome_white = _to_6dim(outcome_to_equity(game.outcome, Player.WHITE).to_array())
+    # (Equity.to_array() already returns 6-dim)
+    outcome_white = outcome_to_equity(game.outcome, Player.WHITE).to_array()
 
     # Compute TD errors (delta_t) in White's perspective.
     # delta_t = V_white(s_{t+1}) - V_white(s_t)  for t < T-1
@@ -156,7 +151,7 @@ def compute_td_lambda_targets(
         target_sum = target.sum()
         if target_sum < 1e-6:
             # Degenerate target — fall back to MC target for this step
-            target = _to_6dim(mc_targets[t])
+            target = _ensure_6dim(mc_targets[t])
             if game.steps[t].player == Player.BLACK:
                 target = _flip_6dim(target)
         else:
@@ -169,7 +164,7 @@ def compute_td_lambda_targets(
         target6 = targets_white[t]
         if game.steps[t].player == Player.BLACK:
             target6 = _flip_6dim(target6)
-        targets.append(_to_5dim(target6))
+        targets.append(target6)
 
     return targets
 
@@ -184,7 +179,7 @@ def _monte_carlo_targets(game: GameResult) -> List[np.ndarray]:
         game: Completed game.
 
     Returns:
-        List of 5-dim equity target arrays.
+        List of 6-dim equity target arrays.
     """
     targets = []
     for step in game.steps:
@@ -198,23 +193,21 @@ def _flip_equity_if_needed(
     from_player: Player,
     to_player: Player,
 ) -> np.ndarray:
-    """Flip 5-dim equity distribution if the perspective player changed.
+    """Flip 6-dim equity distribution if the perspective player changed.
 
     When converting equity from one player's perspective to the other's,
     wins become losses and vice versa.
 
     Args:
-        equity: 5-dim equity from from_player's perspective.
+        equity: 6-dim equity from from_player's perspective.
         from_player: Player whose perspective the equity is from.
         to_player: Player whose perspective we want.
 
     Returns:
-        Equity from to_player's perspective (5-dim).
+        Equity from to_player's perspective (6-dim).
     """
     if from_player == to_player:
         return equity.copy()
 
-    # Convert to 6-dim, flip, convert back
-    eq6 = _to_6dim(equity)
-    flipped6 = _flip_6dim(eq6)
-    return _to_5dim(flipped6)
+    eq6 = _ensure_6dim(equity)
+    return _flip_6dim(eq6)
