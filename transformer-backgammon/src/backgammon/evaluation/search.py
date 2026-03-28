@@ -34,7 +34,7 @@ from backgammon.core.board import (
 )
 from backgammon.core.types import Player, Move, MoveStep, Dice, LegalMoves, GameOutcome
 from backgammon.core.dice import ALL_DICE_ROLLS, DICE_PROBABILITIES
-from backgammon.encoding.encoder import raw_encoding_config, enhanced_encoding_config, EncodingConfig
+from backgammon.encoding.encoder import raw_encoding_config, enhanced_encoding_config, EncodingConfig, compute_global_features
 
 
 # ==============================================================================
@@ -231,10 +231,15 @@ def _encode_boards_batch(
         (batch_size, 26, encoding_config.feature_dim), dtype=np.float32
     )
     for i, board in enumerate(boards):
+        global_feats = compute_global_features(board) if encoding_config.include_global_features else None
         for point in range(26):
-            features[i, point] = extract_position_features(
+            per_pos = extract_position_features(
                 encoding_config, board, point
             )
+            if global_feats is not None:
+                features[i, point] = np.concatenate([per_pos, global_feats])
+            else:
+                features[i, point] = per_pos
     return features
 
 
