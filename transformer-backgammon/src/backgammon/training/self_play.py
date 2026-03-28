@@ -442,6 +442,8 @@ def play_games_batched(
     record_value_estimates: bool = False,
     use_dice_averaged_targets: bool = False,
     use_stratified_dice: bool = False,
+    use_1ply_lookahead: bool = False,
+    lookahead_top_k: int = 8,
 ) -> List[GameResult]:
     """Play multiple games simultaneously with batched neural network inference.
 
@@ -472,6 +474,15 @@ def play_games_batched(
             weighted by probability, removing dice variance from TD targets.
         use_stratified_dice: If True, use stratified dice sampling (pre-shuffled
             deck of all 36 outcomes) instead of uniform random rolls.
+        use_1ply_lookahead: If True, select moves using 1-ply dice-averaged
+            lookahead instead of 0-ply direct evaluation. For each candidate
+            move, averages over all 21 opponent dice responses to get a much
+            more accurate value estimate. Dramatically improves training signal
+            quality at the cost of ~5-10x slower game generation.
+        lookahead_top_k: When use_1ply_lookahead is True, pre-screen moves
+            at 0-ply and only expand the top-k candidates at 1-ply. Reduces
+            batch sizes by ~2x while rarely missing the best move. Set to a
+            large number (e.g. 100) to disable pre-screening.
 
     Returns:
         List of GameResult objects (same interface as generate_training_batch).
@@ -677,35 +688,186 @@ def play_games_batched(
                 g.value_estimates.append(avg_equity)
 
         # --- Phase 5: Select moves using temperature-based exploration ---
-        for game_i, move_info in games_needing_selection:
-            g = games[game_i]
-            n_moves = len(move_info)
-            values = np.empty(n_moves, dtype=np.float32)
+        if not use_1ply_lookahead:
+            # 0-ply path: select directly from network values
+            for game_i, move_info in games_needing_selection:
+                g = games[game_i]
+                n_moves = len(move_info)
+                values = np.empty(n_moves, dtype=np.float32)
 
-            for mi, (mtype, mval) in enumerate(move_info):
-                if mtype == 'terminal':
-                    values[mi] = mval
+                for mi, (mtype, mval) in enumerate(move_info):
+                    if mtype == 'terminal':
+                        values[mi] = mval
+                    else:
+                        # Network value is from board's player_to_move (=opponent
+                        # after our move). Negate for our perspective.
+                        values[mi] = -float(move_eval_values[mval])
+
+                # Temperature-based move selection
+                if temperature <= 0.0:
+                    best_idx = int(np.argmax(values))
                 else:
-                    # Network value is from board's player_to_move (=opponent
-                    # after our move). Negate for our perspective.
-                    values[mi] = -float(move_eval_values[mval])
+                    # Softmax with temperature over value estimates
+                    adjusted = values / temperature
+                    adjusted -= adjusted.max()  # numerical stability
+                    probs = np.exp(adjusted)
+                    prob_sum = probs.sum()
+                    if prob_sum > 0:
+                        probs /= prob_sum
+                    else:
+                        probs = np.ones(n_moves, dtype=np.float32) / n_moves
+                    best_idx = rng.choice(n_moves, p=probs)
 
-            # Temperature-based move selection
-            if temperature <= 0.0:
-                best_idx = int(np.argmax(values))
+                g.selected_move = g.current_moves[best_idx]
+        else:
+            # --- Phase 5b: 1-ply lookahead move selection ---
+            # For each game, use 0-ply values to pre-screen top-k moves,
+            # then expand those moves at 1-ply (average over 21 opponent
+            # dice responses) for much stronger move selection.
+
+            # Step 1: Compute 0-ply values for pre-screening
+            games_for_1ply = []  # (game_i, top_k_move_indices)
+            for game_i, move_info in games_needing_selection:
+                g = games[game_i]
+                n_moves = len(move_info)
+                values_0ply = np.empty(n_moves, dtype=np.float32)
+
+                for mi, (mtype, mval) in enumerate(move_info):
+                    if mtype == 'terminal':
+                        values_0ply[mi] = mval
+                    else:
+                        values_0ply[mi] = -float(move_eval_values[mval])
+
+                # Select top-k candidates (or all if fewer than top-k)
+                if n_moves <= lookahead_top_k:
+                    top_k_indices = list(range(n_moves))
+                else:
+                    top_k_indices = list(np.argsort(values_0ply)[::-1][:lookahead_top_k])
+
+                games_for_1ply.append((game_i, move_info, top_k_indices))
+
+            # Step 2: Collect all opponent-response boards for 1-ply evaluation
+            oneply_boards = []  # All boards to evaluate in one batch
+            # For each game: list of per-move info
+            # Per-move info: list of 21 dice entries
+            # Each dice entry: list of (type, value_or_board_idx)
+            oneply_game_info = []
+
+            for game_i, move_info, top_k_indices in games_for_1ply:
+                g = games[game_i]
+                player = g.board.player_to_move
+                opponent = Player.BLACK if player == Player.WHITE else Player.WHITE
+                game_move_info = []
+
+                for mi in top_k_indices:
+                    mtype, mval = move_info[mi]
+
+                    if mtype == 'terminal':
+                        # Our move ends the game — no opponent response needed
+                        game_move_info.append(('terminal', mval, None))
+                        continue
+
+                    # Apply our candidate move
+                    new_board = apply_move(g.board, player, g.current_moves[mi])
+
+                    # For each of 21 opponent dice rolls, collect responses
+                    dice_entries = []
+                    for dice_roll in ALL_DICE_ROLLS:
+                        opp_moves = generate_legal_moves(new_board, opponent, dice_roll)
+
+                        if not opp_moves:
+                            # Opponent can't move — board unchanged, our turn again.
+                            # Value from network is from player_to_move's perspective
+                            # which is still opponent (turn didn't change if no legal moves,
+                            # but player_to_move flipped in apply_move... actually the board
+                            # after our move has opponent as player_to_move, and if they
+                            # can't move it stays as-is). We need to evaluate new_board.
+                            dice_entries.append([('network', len(oneply_boards))])
+                            oneply_boards.append(new_board)
+                            continue
+
+                        responses = []
+                        for opp_move in opp_moves:
+                            after_opp = apply_move(new_board, opponent, opp_move)
+                            # Check if opponent's move ends the game
+                            opp_off = (after_opp.white_checkers[25] if opponent == Player.WHITE
+                                       else after_opp.black_checkers[25])
+                            if opp_off == 15:
+                                responses.append(('terminal',
+                                    _terminal_value_for_player(after_opp, player)))
+                            else:
+                                responses.append(('network', len(oneply_boards)))
+                                oneply_boards.append(after_opp)
+                        dice_entries.append(responses)
+
+                    game_move_info.append(('network', 0, dice_entries))
+
+                oneply_game_info.append((game_i, move_info, top_k_indices, game_move_info))
+
+            # Step 3: Single batched inference for all 1-ply boards
+            if oneply_boards:
+                oneply_equity_raw = _batched_inference(jit_fn, state.params, oneply_boards)
+                oneply_values = _equity_to_value_np(oneply_equity_raw)
             else:
-                # Softmax with temperature over value estimates
-                adjusted = values / temperature
-                adjusted -= adjusted.max()  # numerical stability
-                probs = np.exp(adjusted)
-                prob_sum = probs.sum()
-                if prob_sum > 0:
-                    probs /= prob_sum
-                else:
-                    probs = np.ones(n_moves, dtype=np.float32) / n_moves
-                best_idx = rng.choice(n_moves, p=probs)
+                oneply_values = np.array([], dtype=np.float32)
 
-            g.selected_move = g.current_moves[best_idx]
+            # Step 4: Compute 1-ply values and select moves
+            for game_i, move_info, top_k_indices, game_move_info in oneply_game_info:
+                g = games[game_i]
+                player = g.board.player_to_move
+                n_candidates = len(top_k_indices)
+                values_1ply = np.empty(n_candidates, dtype=np.float32)
+
+                for ci, move_data in enumerate(game_move_info):
+                    data_type, data_val, dice_entries = move_data
+
+                    if data_type == 'terminal':
+                        values_1ply[ci] = data_val
+                        continue
+
+                    # Compute dice-averaged value
+                    weighted_value = 0.0
+                    for dice_idx, responses in enumerate(dice_entries):
+                        prob = DICE_PROBABILITIES[ALL_DICE_ROLLS[dice_idx]]
+                        opp_best = -float('inf')
+
+                        for rtype, rval in responses:
+                            if rtype == 'terminal':
+                                # Terminal value already from our perspective
+                                opp_val = -rval  # opponent wants to maximize their value
+                                opp_best = max(opp_best, opp_val)
+                            else:
+                                # Network value is from board's player_to_move.
+                                # After opponent moves, player_to_move = us.
+                                # So this is OUR value. Opponent's = negated.
+                                our_val = float(oneply_values[rval])
+                                opp_val = -our_val
+                                opp_best = max(opp_best, opp_val)
+
+                        if opp_best == -float('inf'):
+                            opp_best = 0.0
+
+                        # Our value for this dice outcome = negative of opponent's best
+                        weighted_value += prob * (-opp_best)
+
+                    values_1ply[ci] = weighted_value
+
+                # Temperature-based move selection over 1-ply values
+                if temperature <= 0.0:
+                    best_ci = int(np.argmax(values_1ply))
+                else:
+                    adjusted = values_1ply / temperature
+                    adjusted -= adjusted.max()
+                    probs = np.exp(adjusted)
+                    prob_sum = probs.sum()
+                    if prob_sum > 0:
+                        probs /= prob_sum
+                    else:
+                        probs = np.ones(n_candidates, dtype=np.float32) / n_candidates
+                    best_ci = rng.choice(n_candidates, p=probs)
+
+                # Map back to original move index
+                g.selected_move = g.current_moves[top_k_indices[best_ci]]
 
         # --- Phase 6: Apply moves and record game steps ---
         for i in still_active:

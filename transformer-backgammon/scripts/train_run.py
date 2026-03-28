@@ -304,6 +304,10 @@ def build_config(preset_name, dtype="bfloat16", checkpoint_dir=None, log_dir=Non
         use_td_lambda=True,
         td_lambda=0.7,
 
+        # 1-ply lookahead for stronger self-play training signal
+        use_1ply_selfplay=True,
+        lookahead_top_k=8,
+
         # Data augmentation
         use_position_weighting=True,
         use_color_flip_augmentation=True,
