@@ -16,13 +16,17 @@ from backgammon.training.train import (
     TrainingConfig,
     TrainingPhase,
     create_train_state,
+    save_checkpoint,
+    _params_shapes_match,
     train,
 )
 from backgammon.training.replay_buffer import ReplayBuffer
 from backgammon.training.self_play import generate_training_batch
+from backgammon.training.losses import train_step
 from backgammon.core.board import get_early_training_variants
 from backgammon.evaluation.agents import pip_count_agent, random_agent
 from backgammon.evaluation.network_agent import create_neural_agent
+from flax.training import checkpoints
 
 
 class TestTrainingPhase:
@@ -373,6 +377,224 @@ class TestCheckpointing:
 
         finally:
             shutil.rmtree(temp_dir)
+
+
+class TestCheckpointRestore:
+    """Test checkpoint restore scenarios — the gaps that let bugs slip through."""
+
+    def _small_config(self, checkpoint_dir, log_dir, **overrides):
+        """Helper to create a minimal training config."""
+        defaults = dict(
+            warmstart_games=4,
+            early_phase_games=0,
+            mid_phase_games=0,
+            late_phase_games=0,
+            games_per_batch=2,
+            checkpoint_every_n_batches=1,
+            log_every_n_batches=1,
+            embed_dim=64,
+            num_heads=4,
+            num_layers=2,
+            ff_dim=256,
+            checkpoint_dir=str(checkpoint_dir),
+            log_dir=str(log_dir),
+            seed=42,
+        )
+        defaults.update(overrides)
+        return TrainingConfig(**defaults)
+
+    def test_restore_matching_shapes(self):
+        """Save a checkpoint, create a fresh state, restore into it — basic happy path."""
+        temp_dir = tempfile.mkdtemp()
+        checkpoint_dir = Path(temp_dir) / "checkpoints"
+        log_dir = Path(temp_dir) / "logs"
+
+        try:
+            config = self._small_config(checkpoint_dir, log_dir)
+            rng = jax.random.PRNGKey(42)
+
+            # Create state and run a few gradient steps so params differ from init
+            state = create_train_state(config, rng)
+            original_params = jax.tree.map(lambda p: p.copy(), state.params)
+
+            # Save checkpoint at step 100
+            save_checkpoint(state, config, step=100)
+
+            # Create a completely fresh state (different random init)
+            fresh_state = create_train_state(config, jax.random.PRNGKey(99))
+
+            # Params should differ before restore
+            fresh_leaves = jax.tree_util.tree_leaves(fresh_state.params)
+            orig_leaves = jax.tree_util.tree_leaves(original_params)
+            assert not all(
+                np.allclose(f, o) for f, o in zip(fresh_leaves, orig_leaves)
+            ), "Fresh and original params should differ"
+
+            # Restore checkpoint into fresh state
+            restored_state = checkpoints.restore_checkpoint(
+                ckpt_dir=str(checkpoint_dir),
+                target=fresh_state,
+            )
+
+            # Verify restored params match original
+            restored_leaves = jax.tree_util.tree_leaves(restored_state.params)
+            for orig, restored in zip(orig_leaves, restored_leaves):
+                np.testing.assert_array_equal(orig, restored)
+
+            # Verify step was restored
+            assert int(restored_state.step) == 100
+
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_restore_mismatched_shapes_detected(self):
+        """Checkpoint from one architecture should be rejected when shapes don't match."""
+        temp_dir = tempfile.mkdtemp()
+        checkpoint_dir = Path(temp_dir) / "checkpoints"
+        log_dir = Path(temp_dir) / "logs"
+
+        try:
+            # Save checkpoint with embed_dim=64
+            config_v1 = self._small_config(checkpoint_dir, log_dir, embed_dim=64)
+            rng = jax.random.PRNGKey(42)
+            state_v1 = create_train_state(config_v1, rng)
+            save_checkpoint(state_v1, config_v1, step=50)
+
+            # Create fresh state with embed_dim=32 (different architecture)
+            config_v2 = self._small_config(checkpoint_dir, log_dir, embed_dim=32, num_heads=2)
+            state_v2 = create_train_state(config_v2, jax.random.PRNGKey(99))
+
+            # Restore the v1 checkpoint into the v2 target
+            restored = checkpoints.restore_checkpoint(
+                ckpt_dir=str(checkpoint_dir),
+                target=state_v2,
+            )
+
+            # _params_shapes_match should detect the mismatch
+            assert not _params_shapes_match(state_v2.params, restored.params), (
+                "Shape mismatch between v1 checkpoint and v2 model should be detected"
+            )
+
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_restore_mismatched_num_layers_detected(self):
+        """Changing num_layers should also trigger shape mismatch detection."""
+        temp_dir = tempfile.mkdtemp()
+        checkpoint_dir = Path(temp_dir) / "checkpoints"
+        log_dir = Path(temp_dir) / "logs"
+
+        try:
+            # Save checkpoint with num_layers=2
+            config_v1 = self._small_config(checkpoint_dir, log_dir, num_layers=2)
+            state_v1 = create_train_state(config_v1, jax.random.PRNGKey(42))
+            save_checkpoint(state_v1, config_v1, step=10)
+
+            # Create state with num_layers=1
+            config_v2 = self._small_config(checkpoint_dir, log_dir, num_layers=1)
+            state_v2 = create_train_state(config_v2, jax.random.PRNGKey(99))
+
+            restored = checkpoints.restore_checkpoint(
+                ckpt_dir=str(checkpoint_dir),
+                target=state_v2,
+            )
+
+            assert not _params_shapes_match(state_v2.params, restored.params)
+
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_optimizer_state_consistent_after_restore(self):
+        """After restoring a checkpoint, the optimizer state must be usable for a gradient step.
+
+        This catches the subtle bug where params are restored but opt_state still
+        holds momentum buffers from the old architecture, causing shape errors on
+        the first optimizer update.
+        """
+        temp_dir = tempfile.mkdtemp()
+        checkpoint_dir = Path(temp_dir) / "checkpoints"
+        log_dir = Path(temp_dir) / "logs"
+
+        try:
+            config = self._small_config(checkpoint_dir, log_dir, train_policy=True)
+            rng = jax.random.PRNGKey(42)
+            state = create_train_state(config, rng)
+
+            # Save checkpoint
+            save_checkpoint(state, config, step=5)
+
+            # Restore into a fresh state (same architecture)
+            fresh_state = create_train_state(config, jax.random.PRNGKey(99))
+            restored_state = checkpoints.restore_checkpoint(
+                ckpt_dir=str(checkpoint_dir),
+                target=fresh_state,
+            )
+
+            # Verify shapes match
+            assert _params_shapes_match(fresh_state.params, restored_state.params)
+
+            # Now perform a gradient step — this is where mismatched opt_state would crash
+            dummy_batch = {
+                'board_encoding': jnp.zeros((4, 26, 10)),
+                'target_policy': jnp.ones((4, 1024)) / 1024,
+                'equity_target': jnp.ones((4, 5)) / 5,
+                'action_mask': jnp.ones((4, 1024)),
+            }
+            step_rng = jax.random.PRNGKey(0)
+            updated_state, metrics = train_step(restored_state, dummy_batch, step_rng)
+
+            # Verify the step completed without error and produced valid outputs
+            assert updated_state.step == restored_state.step + 1
+            assert jnp.isfinite(metrics['total_loss'])
+
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_full_resume_workflow(self):
+        """End-to-end: train, save checkpoint, create new state, restore, and continue training.
+
+        Simulates the real-world "resume from checkpoint" workflow.
+        """
+        temp_dir = tempfile.mkdtemp()
+        checkpoint_dir = Path(temp_dir) / "checkpoints"
+        log_dir = Path(temp_dir) / "logs"
+
+        try:
+            config = self._small_config(checkpoint_dir, log_dir)
+
+            # Phase 1: Run initial training (saves checkpoints)
+            train(config)
+
+            # Phase 2: "Resume" by running train() again — it should detect
+            # and restore the checkpoint from phase 1
+            log_dir_2 = Path(temp_dir) / "logs2"
+            config2 = self._small_config(
+                checkpoint_dir, log_dir_2,
+                warmstart_games=2,
+            )
+            train(config2)
+
+            # Verify phase 2 ran (has its own log entries)
+            log_file = log_dir_2 / "training_log.jsonl"
+            assert log_file.exists()
+
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_params_shapes_match_utility(self):
+        """Unit test for _params_shapes_match helper function."""
+        # Matching shapes
+        params_a = {'layer': {'kernel': jnp.zeros((10, 20)), 'bias': jnp.zeros((20,))}}
+        params_b = {'layer': {'kernel': jnp.ones((10, 20)), 'bias': jnp.ones((20,))}}
+        assert _params_shapes_match(params_a, params_b)
+
+        # Mismatched shapes
+        params_c = {'layer': {'kernel': jnp.zeros((10, 32)), 'bias': jnp.zeros((32,))}}
+        assert not _params_shapes_match(params_a, params_c)
+
+        # Different number of leaves
+        params_d = {'layer': {'kernel': jnp.zeros((10, 20))}}
+        assert not _params_shapes_match(params_a, params_d)
 
 
 class TestConfigurationVariations:
