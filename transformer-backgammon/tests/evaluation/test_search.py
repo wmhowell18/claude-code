@@ -18,9 +18,10 @@ from backgammon.core.board import (
     is_game_over,
 )
 from backgammon.core.types import Player
-from backgammon.encoding.encoder import raw_encoding_config
+from backgammon.encoding.encoder import raw_encoding_config, enhanced_encoding_config
 from backgammon.training.train import TrainingConfig, create_train_state
 from backgammon.evaluation.search import (
+    _encode_boards_batch,
     _equity_to_value,
     _batch_evaluate,
     _terminal_value,
@@ -74,6 +75,42 @@ def _bearoff_board(white_pts, black_pts):
 # ============================================================
 # Pure unit tests (no network needed)
 # ============================================================
+
+
+class TestEncodeBoardsBatch:
+    """Tests for _encode_boards_batch with different encoding configs."""
+
+    def test_raw_encoding(self):
+        """Test batch encoding with raw config (no global features)."""
+        config = raw_encoding_config()
+        boards = [initial_board(), empty_board()]
+        result = _encode_boards_batch(boards, config)
+        assert result.shape == (2, 26, config.feature_dim)
+        assert result.dtype == np.float32
+
+    def test_enhanced_encoding_with_global_features(self):
+        """Test batch encoding with enhanced config (global features enabled).
+
+        Regression test: _encode_boards_batch previously did not concatenate
+        global features, causing shape (2,) vs (10,) broadcast error.
+        """
+        config = enhanced_encoding_config()
+        assert config.include_global_features
+        boards = [initial_board(), empty_board(), initial_board()]
+        result = _encode_boards_batch(boards, config)
+        assert result.shape == (3, 26, config.feature_dim)
+
+    def test_enhanced_matches_encode_board(self):
+        """Batch encoding should match single-board encoding."""
+        from backgammon.encoding.encoder import encode_board
+        config = enhanced_encoding_config()
+        board = initial_board()
+
+        single = encode_board(config, board).position_features[0]
+        batch = _encode_boards_batch([board], config)[0]
+
+        np.testing.assert_allclose(batch, single, atol=1e-6)
+
 
 class TestEquityToValue:
     """Tests for equity-to-value conversion."""
