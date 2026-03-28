@@ -416,7 +416,6 @@ class TransformerConfig:
         assert 0 <= self.dropout_rate < 1, "dropout_rate must be in [0, 1)"
 
 
-@dataclass
 # ==============================================================================
 # GAME SIMULATION
 # ==============================================================================
