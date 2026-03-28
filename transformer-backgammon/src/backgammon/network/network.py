@@ -99,6 +99,7 @@ class MultiHeadAttention(nn.Module):
     dropout_rate: float = 0.1
     return_attention_weights: bool = False
     dtype: Any = None
+    use_mup_scaling: bool = False
 
     @nn.compact
     def __call__(
@@ -132,7 +133,11 @@ class MultiHeadAttention(nn.Module):
         q, k, v = qkv[0], qkv[1], qkv[2]
 
         # Scaled dot-product attention
-        scale = jnp.sqrt(head_dim).astype(x.dtype)
+        # muP uses 1/d scaling instead of 1/sqrt(d) for stable width transfer
+        if self.use_mup_scaling:
+            scale = jnp.array(head_dim, dtype=x.dtype)
+        else:
+            scale = jnp.sqrt(jnp.array(head_dim, dtype=x.dtype))
         attn_weights = jnp.einsum('bhqd,bhkd->bhqk', q, k) / scale
 
         # Softmax
@@ -243,6 +248,7 @@ class TransformerBlock(nn.Module):
             dropout_rate=self.config.dropout_rate,
             return_attention_weights=self.return_attention_weights,
             dtype=dtype,
+            use_mup_scaling=self.config.mup_base_embed_dim > 0,
             name='attention'
         )(normed, training=training)
         x = x + attn_output
@@ -279,9 +285,11 @@ class ValueHead(nn.Module):
     Attributes:
         config: Transformer configuration
         pool_type: Pooling strategy ("mean", "max", "cls")
+        mup_output_scale: muP output scaling factor (1.0 = no scaling)
     """
     config: TransformerConfig
     pool_type: str = "mean"
+    mup_output_scale: float = 1.0
 
     @nn.compact
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
@@ -314,6 +322,9 @@ class ValueHead(nn.Module):
         x = nn.gelu(x)
         x = nn.Dense(5, dtype=dtype, param_dtype=jnp.float32, name='equity')(x)
 
+        # muP: scale output logits by base_width/width
+        x = x * self.mup_output_scale
+
         # Cast to float32 before softmax for numerical stability
         x = x.astype(jnp.float32)
         x = nn.softmax(x, axis=-1)
@@ -329,9 +340,11 @@ class PolicyHead(nn.Module):
     Attributes:
         config: Transformer configuration
         num_actions: Number of possible actions
+        mup_output_scale: muP output scaling factor (1.0 = no scaling)
     """
     config: TransformerConfig
     num_actions: int
+    mup_output_scale: float = 1.0
 
     @nn.compact
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
@@ -356,6 +369,9 @@ class PolicyHead(nn.Module):
             self.num_actions, dtype=dtype, param_dtype=jnp.float32, name='policy',
         )(x)
 
+        # muP: scale output logits
+        x = x * self.mup_output_scale
+
         # Cast logits to float32 for stable cross-entropy
         return x.astype(jnp.float32)
 
@@ -368,8 +384,10 @@ class CubeHead(nn.Module):
 
     Attributes:
         config: Transformer configuration
+        mup_output_scale: muP output scaling factor (1.0 = no scaling)
     """
     config: TransformerConfig
+    mup_output_scale: float = 1.0
 
     @nn.compact
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
@@ -392,6 +410,9 @@ class CubeHead(nn.Module):
         )(pooled)
         x = nn.gelu(x)
         x = nn.Dense(4, dtype=dtype, param_dtype=jnp.float32, name='cube_decision')(x)
+
+        # muP: scale output logits
+        x = x * self.mup_output_scale
 
         # Cast logits to float32 for stable downstream computation
         return x.astype(jnp.float32)
@@ -444,7 +465,11 @@ class BackgammonTransformer(nn.Module):
         if dtype is not None:
             x = x.astype(dtype)
 
-        # Input projection
+        # muP width multiplier for output scaling
+        mup_base = self.config.mup_base_embed_dim
+        mup_scale = mup_base / self.config.embed_dim if mup_base > 0 else 1.0
+
+        # Input projection (muP: input layer uses standard 1/sqrt(fan_in) init)
         x = nn.Dense(
             self.config.embed_dim, dtype=dtype, param_dtype=jnp.float32, name='input_proj',
         )(x)
@@ -480,9 +505,11 @@ class BackgammonTransformer(nn.Module):
                 all_attention_weights.append(attn_weights)
 
         # Value head (equity prediction)
+        # muP: scale output logits by base_width/width for width-invariant outputs
         equity = ValueHead(
             config=self.config,
             pool_type="mean",
+            mup_output_scale=mup_scale,
             name='value_head'
         )(x)
 
@@ -492,6 +519,7 @@ class BackgammonTransformer(nn.Module):
             policy = PolicyHead(
                 config=self.config,
                 num_actions=self.config.num_actions,
+                mup_output_scale=mup_scale,
                 name='policy_head'
             )(x)
 
@@ -500,6 +528,7 @@ class BackgammonTransformer(nn.Module):
         if self.config.use_cube_head:
             cube_decision = CubeHead(
                 config=self.config,
+                mup_output_scale=mup_scale,
                 name='cube_head'
             )(x)
 

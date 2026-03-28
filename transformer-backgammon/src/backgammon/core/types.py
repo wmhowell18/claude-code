@@ -400,6 +400,12 @@ class TransformerConfig:
     # Set to jnp.bfloat16 on TPU for ~2x speedup. Parameters are always
     # stored in float32 regardless of this setting.
     dtype: Any = None
+    # muP (Maximal Update Parameterization): set base_embed_dim to enable.
+    # When enabled, hyperparameters tuned on a small model (base_embed_dim)
+    # transfer directly to larger models without re-tuning.
+    # Set to the embed_dim of the smallest model you tune on (e.g., 64).
+    # Set to 0 to disable muP.
+    mup_base_embed_dim: int = 0
 
     def __post_init__(self):
         """Validate configuration."""
