@@ -162,7 +162,11 @@ class MultiHeadAttention(nn.Module):
 
 
 class FeedForward(nn.Module):
-    """Feed-forward network used in transformer blocks.
+    """SwiGLU feed-forward network used in transformer blocks.
+
+    Uses gated linear unit with SiLU activation (SwiGLU), as used by
+    LLaMA, PaLM, and Mistral. Consistently outperforms plain GELU FFN.
+    Formula: SwiGLU(x) = (W1 x * SiLU(W_gate x)) W2
 
     Attributes:
         embed_dim: Embedding dimension
@@ -177,7 +181,7 @@ class FeedForward(nn.Module):
 
     @nn.compact
     def __call__(self, x: jnp.ndarray, training: bool = False) -> jnp.ndarray:
-        """Apply feed-forward network.
+        """Apply SwiGLU feed-forward network.
 
         Args:
             x: Input tensor of shape [batch, seq_len, embed_dim]
@@ -186,8 +190,11 @@ class FeedForward(nn.Module):
         Returns:
             Output tensor of shape [batch, seq_len, embed_dim]
         """
-        x = nn.Dense(self.ff_dim, dtype=self.dtype, param_dtype=jnp.float32, name='fc1')(x)
-        x = nn.gelu(x)
+        # SwiGLU: gate = SiLU(W_gate x), value = W1 x, output = (gate * value) W2
+        gate = nn.Dense(self.ff_dim, dtype=self.dtype, param_dtype=jnp.float32, name='gate')(x)
+        gate = nn.silu(gate)
+        value = nn.Dense(self.ff_dim, dtype=self.dtype, param_dtype=jnp.float32, name='fc1')(x)
+        x = gate * value
         x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=not training)
         x = nn.Dense(self.embed_dim, dtype=self.dtype, param_dtype=jnp.float32, name='fc2')(x)
         x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=not training)
