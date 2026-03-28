@@ -318,9 +318,10 @@ def create_train_state(config: TrainingConfig, rng: jax.random.PRNGKey) -> train
     )
 
     # Optimizer with gradient clipping
+    # AdamW decouples weight decay from gradient update for better generalization
     optimizer = optax.chain(
         optax.clip_by_global_norm(config.max_grad_norm),
-        optax.adam(learning_rate=schedule),
+        optax.adamw(learning_rate=schedule, weight_decay=0.01),
     )
 
     return train_state.TrainState.create(
