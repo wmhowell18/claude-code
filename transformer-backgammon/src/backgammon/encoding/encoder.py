@@ -403,9 +403,9 @@ def compute_global_features(board: Board) -> NDArray[np.float32]:
     # 1. Contact detection
     is_contact = _detect_contact(board, player)
 
-    # 2-3. Normalized pip counts (167 is max possible pip count)
-    our_pips = pip_count(board, player) / 167.0
-    opp_pips = pip_count(board, opponent) / 167.0
+    # 2-3. Normalized pip counts (375 = 15 checkers × 25 max pips each on bar)
+    our_pips = pip_count(board, player) / 375.0
+    opp_pips = pip_count(board, opponent) / 375.0
 
     # 4-5. Home board control (how many of the 6 home board points are "made")
     our_home = _count_home_board_points(board, player) / 6.0
@@ -946,10 +946,10 @@ def encode_global_board_features(board: Board) -> NDArray[np.float32]:
     player = board.player_to_move
     opponent = player.opponent()
 
-    # Pip counts (normalize by typical max ~167 for initial position)
+    # Pip counts (normalize by true max: 15 checkers × 25 pips on bar = 375)
     our_pips = pip_count(board, player)
     opp_pips = pip_count(board, opponent)
-    pip_norm = 167.0  # Approximate max pip count
+    pip_norm = 375.0  # True maximum pip count
 
     our_pip_norm = our_pips / pip_norm
     opp_pip_norm = opp_pips / pip_norm
