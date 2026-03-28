@@ -35,6 +35,7 @@ from backgammon.core.board import (
 from backgammon.core.types import Player, Move, MoveStep, Dice, LegalMoves, GameOutcome
 from backgammon.core.dice import ALL_DICE_ROLLS, DICE_PROBABILITIES
 from backgammon.encoding.encoder import raw_encoding_config, enhanced_encoding_config, EncodingConfig, compute_global_features
+from backgammon.utils.jit_cache import get_jit_inference
 
 
 # ==============================================================================
@@ -291,11 +292,8 @@ def _batch_evaluate(
     encoded = _encode_boards_batch(boards, encoding_config)
     encoded_jax = jnp.array(encoded)
 
-    equity, _, _, _ = state.apply_fn(
-        {'params': state.params},
-        encoded_jax,
-        training=False,
-    )
+    jit_fn = get_jit_inference(state.apply_fn)
+    equity, _, _, _ = jit_fn(state.params, encoded_jax)
     values = _equity_to_value(equity)
     return np.array(values, dtype=np.float32)
 
