@@ -45,6 +45,20 @@ from backgammon.evaluation.benchmark import (
 )
 
 
+def _init_ema_params(params):
+    """Initialize EMA parameters as a copy of the current params."""
+    return jax.tree.map(lambda p: p.copy(), params)
+
+
+def _update_ema_params(ema_params, params, decay: float):
+    """Update EMA parameters: ema = decay * ema + (1 - decay) * params."""
+    return jax.tree.map(
+        lambda ema, p: decay * ema + (1.0 - decay) * p,
+        ema_params,
+        params,
+    )
+
+
 @dataclass
 class TrainingConfig:
     """Training configuration."""
@@ -79,6 +93,14 @@ class TrainingConfig:
     warmup_steps: int = 1000
     max_grad_norm: float = 1.0
 
+    # EMA settings
+    ema_decay: float = 0.999  # EMA decay rate for weight averaging
+
+    # Schedule-free optimizer (Meta, 2024). Eliminates the need to choose
+    # decay_steps for cosine schedule. Set True to use schedule-free AdamW
+    # instead of warmup + cosine decay.
+    use_schedule_free: bool = False
+
     # Replay buffer settings
     replay_buffer_size: int = 100_000
     replay_buffer_min_size: int = 1_000
@@ -97,6 +119,9 @@ class TrainingConfig:
 
     # Position weighting
     use_position_weighting: bool = True  # Weight positions by importance for sampling
+
+    # Data augmentation
+    use_color_flip_augmentation: bool = True  # Double data via color flipping
 
     # Validation and early stopping
     validation_fraction: float = 0.1  # Fraction of games used for validation
@@ -292,19 +317,30 @@ def create_train_state(config: TrainingConfig, rng: jax.random.PRNGKey) -> train
     dummy_input = jnp.zeros((1, 26, 10))
     variables = model.init(rng, dummy_input, training=False)
 
-    # Learning rate schedule with warmup
-    schedule = optax.warmup_cosine_decay_schedule(
-        init_value=0.0,
-        peak_value=config.learning_rate,
-        warmup_steps=config.warmup_steps,
-        decay_steps=100000,  # Total training steps
-    )
-
-    # Optimizer with gradient clipping
-    optimizer = optax.chain(
-        optax.clip_by_global_norm(config.max_grad_norm),
-        optax.adam(learning_rate=schedule),
-    )
+    if config.use_schedule_free:
+        # Schedule-free AdamW (Meta, 2024): eliminates need to choose
+        # decay_steps. Works regardless of training length.
+        optimizer = optax.chain(
+            optax.clip_by_global_norm(config.max_grad_norm),
+            optax.contrib.schedule_free_adamw(
+                learning_rate=config.learning_rate,
+                warmup_steps=config.warmup_steps,
+                weight_decay=0.01,
+            ),
+        )
+    else:
+        # Standard warmup + cosine decay schedule
+        schedule = optax.warmup_cosine_decay_schedule(
+            init_value=0.0,
+            peak_value=config.learning_rate,
+            warmup_steps=config.warmup_steps,
+            decay_steps=100000,  # Total training steps
+        )
+        # AdamW decouples weight decay from gradient update for better generalization
+        optimizer = optax.chain(
+            optax.clip_by_global_norm(config.max_grad_norm),
+            optax.adamw(learning_rate=schedule, weight_decay=0.01),
+        )
 
     return train_state.TrainState.create(
         apply_fn=model.apply,
@@ -398,6 +434,7 @@ def train(config: Optional[TrainingConfig] = None):
         min_size=config.replay_buffer_min_size,
         eviction_policy='fifo',
         use_position_weighting=config.use_position_weighting,
+        use_color_flip_augmentation=config.use_color_flip_augmentation,
     )
 
     # Create validation buffer (for early stopping)
@@ -446,6 +483,13 @@ def train(config: Optional[TrainingConfig] = None):
     batch_num = 0
     total_train_steps = 0
 
+    # EMA (Exponential Moving Average) of weights for smoother evaluation
+    ema_params = _init_ema_params(state.params)
+
+    def _make_ema_state(current_state, ema_p):
+        """Create a train state with EMA params for inference."""
+        return current_state.replace(params=ema_p)
+
     # Cache generated starting variants per phase to avoid rebuilding
     # identical Board objects every batch (helps TPU game throughput).
     phase_variants_cache = {}
@@ -489,9 +533,11 @@ def train(config: Optional[TrainingConfig] = None):
                 # Plays all games simultaneously with JIT-compiled batched
                 # inference, reducing ~7800 TPU dispatches to ~120 per batch.
                 current_temp = phase_manager.get_current_temperature()
+                # Use EMA params for self-play (smoother, better evaluation)
+                ema_state = _make_ema_state(state, ema_params)
                 games = play_games_batched(
                     num_games=config.games_per_batch,
-                    state=state,
+                    state=ema_state,
                     variants=variants,
                     temperature=current_temp,
                     max_moves=config.max_moves,
@@ -532,6 +578,11 @@ def train(config: Optional[TrainingConfig] = None):
 
                     # Training step (gradient update)
                     state, step_metrics = train_step(state, train_batch, step_rng)
+
+                    # Update EMA weights
+                    ema_params = _update_ema_params(
+                        ema_params, state.params, config.ema_decay
+                    )
 
                     # Accumulate metrics
                     train_loss += float(step_metrics['total_loss'])
@@ -601,8 +652,10 @@ def train(config: Optional[TrainingConfig] = None):
 
             # Evaluation checkpoint
             if batch_num % config.eval_every_n_batches == 0 and replay_buffer.is_ready():
+                # Use EMA params for evaluation (smoother, better performance)
+                ema_state = _make_ema_state(state, ema_params)
                 run_evaluation_checkpoint(
-                    state=state,
+                    state=ema_state,
                     step=batch_num,
                     games_played=phase_manager.total_games_played,
                     eval_history=eval_history,
@@ -629,8 +682,9 @@ def train(config: Optional[TrainingConfig] = None):
                         best_val_loss = val_loss
                         patience_counter = 0
                         best_state_step = batch_num
-                        # Save best model checkpoint
-                        save_checkpoint(state, config, batch_num, is_best=True)
+                        # Save best model checkpoint (using EMA params)
+                        ema_state_for_save = _make_ema_state(state, ema_params)
+                        save_checkpoint(ema_state_for_save, config, batch_num, is_best=True)
                     else:
                         patience_counter += 1
 
@@ -673,10 +727,11 @@ def train(config: Optional[TrainingConfig] = None):
                 # Save final checkpoint
                 save_checkpoint(state, config, batch_num)
 
-                # Final evaluation
+                # Final evaluation (using EMA params)
                 print("\n📊 Final evaluation:")
+                ema_state = _make_ema_state(state, ema_params)
                 run_evaluation_checkpoint(
-                    state=state,
+                    state=ema_state,
                     step=batch_num,
                     games_played=phase_manager.total_games_played,
                     eval_history=eval_history,

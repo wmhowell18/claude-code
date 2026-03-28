@@ -24,10 +24,11 @@ After the bug fixes just landed:
 | Component | Status | XG Parity? |
 |-----------|--------|------------|
 | Game engine | Complete | Yes |
-| Neural network | Transformer, untrained | Unknown |
-| Training pipeline | TD(lambda) + curriculum | Comparable approach |
+| Neural network | Modern transformer (RMSNorm, SwiGLU, pre-norm, muP) | Comparable architecture |
+| Training pipeline | TD(lambda) + curriculum + EMA + AdamW + color-flip aug | Comparable approach |
 | Search | 0/1/2-ply with batching | Behind (XG uses 3-ply + rollouts) |
 | Board encoding | 10-dim enhanced | Reasonable |
+| World model | Stochastic MuZero architecture (not yet trained) | Ahead (XG has none) |
 | Bearoff database | None | Major gap |
 | Opening book | None | Minor gap |
 | Cube decisions | Infrastructure only | Major gap |

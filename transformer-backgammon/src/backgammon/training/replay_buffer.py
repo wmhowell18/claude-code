@@ -21,6 +21,7 @@ from backgammon.encoding.action_encoder import (
     create_action_mask,
     get_action_space_size,
 )
+from backgammon.core.board import flip_board
 from backgammon.core.types import Player
 
 
@@ -51,6 +52,36 @@ def _encode_board_fast_single(board) -> np.ndarray:
     return features
 
 
+def _flip_equity_target(target: np.ndarray) -> np.ndarray:
+    """Flip equity target for color-flipped augmentation.
+
+    Input target: [win_normal, win_gammon, win_bg, lose_gammon, lose_bg]
+    P(lose_normal) = 1 - sum(all 5 values)
+
+    After flipping perspective:
+    - new_win_normal = old_lose_normal = 1 - sum(old)
+    - new_win_gammon = old_lose_gammon
+    - new_win_bg = old_lose_bg
+    - new_lose_gammon = old_win_gammon
+    - new_lose_bg = old_win_bg
+
+    Args:
+        target: Equity target array of shape (5,).
+
+    Returns:
+        Flipped equity target array of shape (5,).
+    """
+    target = np.asarray(target, dtype=np.float32)
+    lose_normal = 1.0 - target.sum()
+    return np.array([
+        lose_normal,       # new win_normal = old lose_normal
+        target[3],         # new win_gammon = old lose_gammon
+        target[4],         # new win_bg = old lose_bg
+        target[1],         # new lose_gammon = old win_gammon
+        target[2],         # new lose_bg = old win_bg
+    ], dtype=np.float32)
+
+
 @dataclass
 class ReplayBuffer:
     """Experience replay buffer for training data.
@@ -70,6 +101,11 @@ class ReplayBuffer:
 
     # Position weighting
     use_position_weighting: bool = False
+
+    # Color-flip augmentation: for every position, also store the
+    # color-flipped version. Doubles effective training data and ensures
+    # the network treats White and Black symmetrically.
+    use_color_flip_augmentation: bool = False
 
     # Internal storage
     _steps: List[Tuple[GameStep, float]] = field(default_factory=list)
@@ -140,6 +176,18 @@ class ReplayBuffer:
             ) if self.use_position_weighting else 1.0
 
             self._add_step(step, value_target, weight)
+
+            # Color-flip augmentation: add the flipped version too
+            if self.use_color_flip_augmentation:
+                flipped_step = GameStep(
+                    board=flip_board(step.board),
+                    player=step.player.opponent(),
+                    legal_moves=step.legal_moves,
+                    move_taken=step.move_taken,
+                    dice=step.dice,
+                )
+                flipped_target = _flip_equity_target(value_target)
+                self._add_step(flipped_step, flipped_target, weight)
 
     def _add_step(self, step: GameStep, value_target: float, weight: float = 1.0) -> None:
         """Add single step to buffer with pre-encoded board features.

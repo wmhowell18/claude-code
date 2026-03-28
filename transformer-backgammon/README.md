@@ -28,10 +28,10 @@ Input (Board State)
     ↓
 Encoder (26 positions → feature vectors)
     ↓
-Transformer Encoder
-  - Multi-head Self-Attention (learns positional relationships)
-  - Feed-Forward Networks
-  - Layer Normalization
+Transformer Encoder (modern architecture)
+  - Pre-norm with RMSNorm (not post-norm LayerNorm)
+  - Multi-head Self-Attention (with optional muP scaling)
+  - SwiGLU Feed-Forward Networks (gated, not GELU)
   - Residual Connections
     ↓
 Global Pooling (sequence → fixed representation)
@@ -39,7 +39,10 @@ Global Pooling (sequence → fixed representation)
 Output Heads
   - Value Head → Equity (win/gammon/backgammon probabilities)
   - Policy Head → Move probabilities (optional)
+  - Cube Head → Double/take/pass decisions (optional)
 ```
+
+Also includes a **Stochastic MuZero** architecture (`network/muzero.py`) with learned world model for MCTS-based planning with dice as chance nodes.
 
 ### Key Design Decisions
 
@@ -146,9 +149,9 @@ transformer-backgammon/
 |--------|--------------|--------------|
 | **Platform** | CPU-optimized | GPU-optimized |
 | **Evaluation** | Sequential 2-3 ply | Batched 2-3 ply |
-| **Network** | Shallow (~20k params) | Deep transformer (1M-50M params) |
-| **Features** | Hand-crafted | Learned (transformer) |
-| **Training** | Years of refinement | Modern RL + scale |
+| **Network** | Shallow (~20k params) | Deep transformer (1M-50M params) with RMSNorm, SwiGLU, pre-norm, muP |
+| **Features** | Hand-crafted | Learned (transformer) + global features |
+| **Training** | Years of refinement | Modern RL + EMA + AdamW + color-flip aug + schedule-free opt |
 | **Speed** | Very fast on CPU | 10-100× faster on GPU (batched) |
 
 ## Getting Started

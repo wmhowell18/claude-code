@@ -2,6 +2,8 @@
 
 Granular, ordered steps to validate the training pipeline and get a small model working before committing to a large run.
 
+> **Architecture update (Mar 2026)**: The transformer now uses modern best practices: RMSNorm (not LayerNorm), SwiGLU activation (not GELU), pre-norm (not post-norm), AdamW (not Adam), EMA weight averaging for evaluation, and color-flip data augmentation. muP and schedule-free optimizer are available as options. A Stochastic MuZero network architecture is also available in `network/muzero.py` but not yet wired into training.
+
 ---
 
 ## Step 1: Run Smoke Test

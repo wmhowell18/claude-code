@@ -18,10 +18,11 @@ transformer-backgammon/
 │   │   └── presets.py         # Encoding presets (raw, one-hot, etc.)
 │   │
 │   ├── network/
-│   │   ├── transformer.py     # Main transformer architecture
+│   │   ├── network.py         # Main transformer architecture (RMSNorm, SwiGLU, pre-norm, muP)
+│   │   ├── muzero.py          # Stochastic MuZero world model for MCTS with dice chance nodes
 │   │   ├── attention.py       # Multi-head attention implementation
 │   │   ├── layers.py          # Transformer blocks, FFN, etc.
-│   │   ├── heads.py           # Value and policy heads
+│   │   ├── heads.py           # Value, policy, and cube heads
 │   │   └── configs.py         # Network configuration presets
 │   │
 │   ├── training/
