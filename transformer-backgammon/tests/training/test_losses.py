@@ -130,9 +130,9 @@ class TestComputeCombinedLoss:
     def test_combined_mode_returns_all_metrics(self):
         """With policy head enabled, all metrics should be present."""
         policy_logits = jnp.zeros((2, 4))
-        equity_pred = jnp.ones((2, 5)) / 5
+        equity_pred = jnp.ones((2, 6)) / 6
         target_policy = jnp.ones((2, 4)) / 4
-        equity_target = jnp.ones((2, 5)) / 5
+        equity_target = jnp.ones((2, 6)) / 6
         mask = jnp.ones((2, 4))
 
         loss, metrics = compute_combined_loss(
@@ -148,8 +148,8 @@ class TestComputeCombinedLoss:
 
     def test_value_only_mode(self):
         """With policy_logits=None, should use equity loss only."""
-        equity_pred = jnp.ones((2, 5)) / 5
-        equity_target = jnp.ones((2, 5)) / 5
+        equity_pred = jnp.ones((2, 6)) / 6
+        equity_target = jnp.ones((2, 6)) / 6
 
         loss, metrics = compute_combined_loss(
             None, equity_pred, None, equity_target, None
@@ -162,9 +162,9 @@ class TestComputeCombinedLoss:
     def test_weight_scaling(self):
         """Policy and equity weights should scale their contributions."""
         policy_logits = jnp.zeros((2, 4))
-        equity_pred = jnp.ones((2, 5)) / 5
+        equity_pred = jnp.ones((2, 6)) / 6
         target_policy = jnp.ones((2, 4)) / 4
-        equity_target = jnp.ones((2, 5)) / 5
+        equity_target = jnp.ones((2, 6)) / 6
         mask = jnp.ones((2, 4))
 
         _, metrics_default = compute_combined_loss(
@@ -199,7 +199,7 @@ class TestTrainStep:
         batch = {
             'board_encoding': jnp.zeros((4, 26, 10)),
             'target_policy': jnp.ones((4, 1024)) / 1024,
-            'equity_target': jnp.ones((4, 5)) / 5,
+            'equity_target': jnp.ones((4, 6)) / 6,
             'action_mask': jnp.ones((4, 1024)),
         }
         return state, batch
@@ -258,7 +258,7 @@ class TestTrainStep:
         batch = {
             'board_encoding': jnp.zeros((4, 26, 10)),
             'target_policy': jnp.zeros((4, 1024)),
-            'equity_target': jnp.ones((4, 5)) / 5,
+            'equity_target': jnp.ones((4, 6)) / 6,
             'action_mask': jnp.ones((4, 1024)),
         }
         rng = jax.random.PRNGKey(0)
@@ -284,7 +284,7 @@ class TestComputeMetrics:
         batch = {
             'board_encoding': jnp.zeros((2, 26, 10)),
             'target_policy': jnp.ones((2, 1024)) / 1024,
-            'equity_target': jnp.ones((2, 5)) / 5,
+            'equity_target': jnp.ones((2, 6)) / 6,
             'action_mask': jnp.ones((2, 1024)),
         }
 
@@ -307,7 +307,7 @@ class TestComputeMetrics:
         batch = {
             'board_encoding': jnp.zeros((2, 26, 10)),
             'target_policy': jnp.zeros((2, 1024)),
-            'equity_target': jnp.ones((2, 5)) / 5,
+            'equity_target': jnp.ones((2, 6)) / 6,
             'action_mask': jnp.ones((2, 1024)),
         }
 

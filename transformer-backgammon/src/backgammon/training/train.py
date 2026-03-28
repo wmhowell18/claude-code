@@ -746,10 +746,10 @@ def train(config: Optional[TrainingConfig] = None):
                     val_batch = val_buffer.sample_batch(
                         min(config.training_batch_size, len(val_buffer))
                     )
-                    val_metrics = compute_metrics(state, val_batch)
+                    val_metrics = compute_metrics(ema_state, val_batch)
                     val_loss = val_metrics['loss']
 
-                    val_eq_acc = val_metrics.get('equity_accuracy', 0.0)
+                    val_eq_acc = val_metrics['equity_accuracy']
                     if batch_num % config.log_every_n_batches == 0:
                         print(f"  Val loss: {val_loss:.4f} | "
                               f"Val equity acc: {val_eq_acc:.3f} | "

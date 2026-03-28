@@ -537,7 +537,7 @@ class TestCheckpointRestore:
             dummy_batch = {
                 'board_encoding': jnp.zeros((4, 26, 10)),
                 'target_policy': jnp.ones((4, 1024)) / 1024,
-                'equity_target': jnp.ones((4, 5)) / 5,
+                'equity_target': jnp.ones((4, 6)) / 6,
                 'action_mask': jnp.ones((4, 1024)),
             }
             step_rng = jax.random.PRNGKey(0)
