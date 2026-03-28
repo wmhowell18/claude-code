@@ -50,7 +50,7 @@ class GameResult:
         num_moves: Total number of moves played.
         starting_position: Initial board state.
         value_estimates: Optional per-step value estimates from the network
-            during self-play. Shape: list of 5-element arrays (equity dist)
+            during self-play. Shape: list of 6-element arrays (equity dist)
             from the perspective of the player to move at each step.
             Used for TD(lambda) target computation.
     """
@@ -154,7 +154,7 @@ def _get_agent_equity(agent: Agent, board: Board) -> Optional[np.ndarray]:
         board: Board state to evaluate.
 
     Returns:
-        5-dim equity array or None if agent doesn't support it.
+        6-dim equity array or None if agent doesn't support it.
     """
     # The Agent wrapper stores the underlying function; check if the
     # agent's underlying object has get_equity_estimate.
@@ -345,7 +345,7 @@ def _batched_inference(
     """Run JIT-compiled batched inference on a list of boards.
 
     Handles encoding, batch padding (to minimize JIT recompilations),
-    and returns raw 5-dim equity arrays.
+    and returns raw 6-dim equity arrays.
 
     Args:
         jit_fn: JIT-compiled inference function.
@@ -353,11 +353,11 @@ def _batched_inference(
         boards: List of Board objects to evaluate.
 
     Returns:
-        Array of shape (len(boards), 5) with raw equity distributions.
+        Array of shape (len(boards), 6) with raw equity distributions.
     """
     n = len(boards)
     if n == 0:
-        return np.zeros((0, 5), dtype=np.float32)
+        return np.zeros((0, 6), dtype=np.float32)
 
     # Pre-allocate padded array directly (avoids separate encode + concat)
     padded_n = _pad_batch_size(n)
@@ -382,14 +382,13 @@ def _batched_inference(
 
 
 def _equity_to_value_np(equity: np.ndarray) -> np.ndarray:
-    """Convert 5-dim equity distributions to scalar expected values.
+    """Convert 6-dim equity distributions to scalar expected values.
 
-    equity: [..., 5] = [win_normal, win_gammon, win_bg, lose_gammon, lose_bg]
-    P(lose_normal) = 1 - sum(equity)
+    equity: [..., 6] = [win_n, win_g, win_bg, lose_n, lose_g, lose_bg]
     Value = win_points - lose_points
 
     Args:
-        equity: Array of shape (..., 5).
+        equity: Array of shape (..., 6).
 
     Returns:
         Array of shape (...,) with scalar values in roughly [-3, +3].
@@ -399,11 +398,10 @@ def _equity_to_value_np(equity: np.ndarray) -> np.ndarray:
         + equity[..., 1] * 2.0
         + equity[..., 2] * 3.0
     )
-    lose_normal = 1.0 - np.sum(equity, axis=-1)
     lose_value = (
-        lose_normal * 1.0
-        + equity[..., 3] * 2.0
-        + equity[..., 4] * 3.0
+        equity[..., 3] * 1.0
+        + equity[..., 4] * 2.0
+        + equity[..., 5] * 3.0
     )
     return win_value - lose_value
 

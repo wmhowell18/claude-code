@@ -30,7 +30,7 @@ Transformer Encoder (configurable depth/width)
 Global Mean Pooling
     |
 Output Heads
-  - Value Head  -> 5-dim equity (softmax: P(win), P(win gammon), ...)
+  - Value Head  -> 6-dim equity (softmax: P(win), P(win gammon), ..., P(lose normal), ...)
   - Policy Head -> Move probabilities (optional, disabled for now)
   - Cube Head   -> Double/take/pass decisions (optional)
 ```

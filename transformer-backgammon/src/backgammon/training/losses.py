@@ -47,14 +47,14 @@ def compute_equity_loss(
     equity_pred: jnp.ndarray,
     equity_target: jnp.ndarray,
 ) -> jnp.ndarray:
-    """Compute equity loss (cross-entropy on 5-dim distribution).
+    """Compute equity loss (cross-entropy on 6-dim distribution).
 
-    The network outputs a softmax over 5 equity outcomes. We use
-    cross-entropy against the target equity distribution.
+    The network outputs a softmax over 6 equity outcomes:
+    (win_n, win_g, win_bg, lose_n, lose_g, lose_bg).
 
     Args:
-        equity_pred: Predicted equity probabilities (batch_size, 5)
-        equity_target: Target equity distribution (batch_size, 5)
+        equity_pred: Predicted equity probabilities (batch_size, 6)
+        equity_target: Target equity distribution (batch_size, 6)
 
     Returns:
         Scalar loss
@@ -78,9 +78,9 @@ def compute_combined_loss(
 
     Args:
         policy_logits: Network policy logits (None for value-only mode)
-        equity_pred: Network equity predictions (batch_size, 5)
+        equity_pred: Network equity predictions (batch_size, 6)
         target_policy: Target policy (ignored in value-only mode)
-        equity_target: Target equity distribution (batch_size, 5)
+        equity_target: Target equity distribution (batch_size, 6)
         mask: Action mask (ignored in value-only mode)
         policy_weight: Weight for policy loss
         equity_weight: Weight for equity loss
@@ -156,7 +156,7 @@ def train_step(
             rngs={'dropout': rng},
         )
 
-        # Compute loss using equity distribution directly (5-dim cross-entropy)
+        # Compute loss using equity distribution directly (6-dim cross-entropy)
         loss, metrics = compute_combined_loss(
             policy_logits,
             equity_pred,
@@ -225,7 +225,7 @@ def prepare_training_batch(
         return {
             'board_encoding': jnp.zeros((1, 26, encoding_config.feature_dim)),
             'target_policy': jnp.zeros((1, action_size)),
-            'equity_target': jnp.zeros((1, 5)),
+            'equity_target': jnp.zeros((1, 6)),
             'action_mask': jnp.ones((1, action_size)),
         }
 

@@ -607,7 +607,7 @@ def _expected_match_equity(
 ) -> float:
     """Calculate expected match equity given an equity distribution and stake.
 
-    Converts the 5-dimensional equity distribution into a single match
+    Converts the 6-outcome equity distribution into a single match
     equity value by weighting each outcome by its probability and looking
     up the resulting match equity.
 

@@ -55,28 +55,23 @@ def _encode_board_fast_single(board) -> np.ndarray:
 def _flip_equity_target(target: np.ndarray) -> np.ndarray:
     """Flip equity target for color-flipped augmentation.
 
-    Input target: [win_normal, win_gammon, win_bg, lose_gammon, lose_bg]
-    P(lose_normal) = 1 - sum(all 5 values)
+    Input target (6-dim): [win_n, win_g, win_bg, lose_n, lose_g, lose_bg]
 
-    After flipping perspective:
-    - new_win_normal = old_lose_normal = 1 - sum(old)
-    - new_win_gammon = old_lose_gammon
-    - new_win_bg = old_lose_bg
-    - new_lose_gammon = old_win_gammon
-    - new_lose_bg = old_win_bg
+    Flipping swaps wins and losses:
+    [lose_n, lose_g, lose_bg, win_n, win_g, win_bg]
 
     Args:
-        target: Equity target array of shape (5,).
+        target: Equity target array of shape (6,).
 
     Returns:
-        Flipped equity target array of shape (5,).
+        Flipped equity target array of shape (6,).
     """
     target = np.asarray(target, dtype=np.float32)
-    lose_normal = 1.0 - target.sum()
     return np.array([
-        lose_normal,       # new win_normal = old lose_normal
-        target[3],         # new win_gammon = old lose_gammon
-        target[4],         # new win_bg = old lose_bg
+        target[3],         # new win_normal = old lose_normal
+        target[4],         # new win_gammon = old lose_gammon
+        target[5],         # new win_bg = old lose_bg
+        target[0],         # new lose_normal = old win_normal
         target[1],         # new lose_gammon = old win_gammon
         target[2],         # new lose_bg = old win_bg
     ], dtype=np.float32)
@@ -169,7 +164,7 @@ class ReplayBuffer:
             else:
                 # Fallback: pure Monte Carlo target
                 equity = outcome_to_equity(game_result.outcome, step.player)
-                value_target = equity.to_array()  # shape (5,)
+                value_target = equity.to_array()  # shape (6,)
 
             weight = _compute_position_weight(
                 value_target, i, num_steps,
@@ -244,7 +239,7 @@ class ReplayBuffer:
             Training batch dictionary with:
                 - 'board_encoding': (batch_size, 26, feature_dim)
                 - 'target_policy': (batch_size, num_actions)
-                - 'equity_target': (batch_size, 5)
+                - 'equity_target': (batch_size, 6)
                 - 'action_mask': (batch_size, num_actions)
 
         Raises:
@@ -350,7 +345,7 @@ class ReplayBuffer:
             }
 
         # Compute statistics from equity targets
-        equities = np.array([v for _, v in self._steps])  # (N, 5)
+        equities = np.array([v for _, v in self._steps])  # (N, 6)
         # Win probability = sum of win components (indices 0,1,2)
         win_probs = equities[:, 0] + equities[:, 1] + equities[:, 2]
 
@@ -378,7 +373,7 @@ def _compute_position_weight(
        the network can learn them quickly.
 
     Args:
-        equity_target: 5-dim equity target [wn, wg, wb, lg, lb].
+        equity_target: 6-dim equity target [wn, wg, wbg, ln, lg, lbg].
         step_index: Position in the game (0 = first move).
         total_steps: Total number of steps in the game.
 
