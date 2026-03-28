@@ -5,6 +5,7 @@
 ### transformer-backgammon
 
 - Always commit and push changes **before** running tests. The test suite requires dependencies that are only available in the CI/remote environment, not locally.
+- **TODO hygiene**: When working on the codebase, check `TODO.md` for stale items — entries marked `[ ]` that are actually already done in the code. Mark them `[x]` with date. Also check the "Known Issues" header and "Recommended Order of Attack" section for outdated references.
 - **End-of-session documentation**: At the end of every session, make a note of all completed tasks and update the relevant docs:
   - `TODO.md` — Mark items as `[x]` done with date, add new entries for any new work
   - `NEXT_STEPS.md` — Update if training pipeline or architecture changed

@@ -4,7 +4,7 @@
 >
 > **Current Maturity**: ~8/10 for competitive play. Solid game engine + neural training + search + benchmarking + TD(lambda) + exploration schedule + global encoding features + race evaluation + training infrastructure (position weighting, validation, early stopping) + doubling cube + match play + modern transformer architecture (RMSNorm, SwiGLU, pre-norm) + EMA weights + AdamW + muP + Stochastic MuZero network + schedule-free optimizer option + color-flip data augmentation. Missing GnuBG interface, MCTS integration with MuZero, and rollout-based training.
 >
-> **Known Issues (Feb 2026, updated Mar 2026)**: Code review identified several correctness bugs requiring attention before long training runs: policy head is non-functional (hash collisions + dummy targets), global features are implemented but not wired into training (input_feature_dim hardcoded to 2), ~~TD targets are not renormalized before cross-entropy loss~~ **(FIXED Mar 2026 — moved to 6-dim equity, fixing zero-gradient bug for lose_normal outcomes)**, and training telemetry is misleading (train_acc always 0.0, LR logged as constant peak). See "KNOWN ISSUES" section below.
+> **Known Issues (Feb 2026, updated Mar 2026)**: Code review identified several correctness bugs requiring attention before long training runs: policy head is non-functional (hash collisions + dummy targets — workaround: `train_policy=False` default), ~~global features are implemented but not wired into training~~ **(FIXED Mar 2026 — `input_feature_dim=10` with 8 global features)**, ~~TD targets are not renormalized before cross-entropy loss~~ **(FIXED Mar 2026 — moved to 6-dim equity, fixing zero-gradient bug for lose_normal outcomes)**, ~~dead code and stale configs~~ **(FIXED Mar 2026 — removed dead `train_step` from network.py and stale `TrainingConfig` from types.py)**, and training telemetry is misleading (train_acc always 0.0, LR logged as constant peak). See "KNOWN ISSUES" section below.
 
 ---
 
@@ -55,26 +55,19 @@ training quality and telemetry — address before committing to multi-hour TPU r
   for value-only training, then address item 59 (precomputed action lookup) to fix the root cause.
   (Effort: M, Impact: large — fixes training stability and removes wasted compute)
 
-- [ ] **105. Global features not wired into training** — Items 25-28, 31-32 are marked complete,
-  but `train.py:282` hardcodes `input_feature_dim=2` (raw 2-feature encoding only). The 8-dim
-  global features implemented in `encode_global_board_features()` — pip counts, contact detection,
-  prime length, bearoff progress, race equity — are never seen by the network during training. The
-  `enhanced_encoding_config()` and `full_encoding_config()` presets exist but are unused. Fix:
-  switch training to use `full_encoding_config()` and update `input_feature_dim` accordingly. This
-  is the single highest-impact improvement available without new code. (Effort: S, Impact: large)
+- [x] **105. Global features not wired into training** — Previously `input_feature_dim` was
+  hardcoded to 2 (raw only). Now fixed: `train.py:319` uses `input_feature_dim=10` (2 raw + 8
+  global features), `replay_buffer.py:_encode_board_fast_single()` encodes all 10 features
+  (raw checkers + pip counts, contact, primes, bearoff), and all network preset configs use
+  `input_feature_dim=10`. Global features are fully wired into training. *(Mar 2026)*
 
-- [ ] **106. Dead `train_step` in `network.py`** — `network.py:769` defines a second
-  `@jax.jit train_step` with a different loss formulation: no gradient clipping, raw cross-entropy
-  without the combined loss wrapper. The main training loop imports `train_step` from `losses.py`.
-  The `network.py` version is dead code, but risks being imported by mistake and producing silently
-  wrong behavior (different gradients, no clipping). Fix: delete the dead function and the
-  associated dead helpers (`equity_loss`, `mse_equity_loss`, `policy_loss`, `total_loss`,
-  `create_train_state`, `eval_step`). (Effort: S, Impact: safety/clarity)
+- [x] **106. Dead `train_step` in `network.py`** — Previously `network.py` contained a second
+  `train_step` with a different loss formulation (no gradient clipping, raw cross-entropy) plus
+  dead helpers (`equity_loss`, `mse_equity_loss`, `policy_loss`, `total_loss`, `create_train_state`,
+  `eval_step`). All removed. The single authoritative `train_step` is in `losses.py`. *(Mar 2026)*
 
-- [ ] **107. Stale `TrainingConfig` in `types.py`** — `types.py` contains a `TrainingConfig`
-  dataclass that conflicts with the real `TrainingConfig` in `train.py`. The one in `types.py` is
-  an older, simpler version that is not used anywhere in the training loop. Risks confusion and
-  wrong-import bugs. Fix: delete it. (Effort: S, Impact: clarity)
+- [x] **107. Stale `TrainingConfig` in `types.py`** — The duplicate `TrainingConfig` dataclass in
+  `types.py` has been removed. The single authoritative `TrainingConfig` is in `train.py`. *(Mar 2026)*
 
 ---
 
@@ -304,8 +297,8 @@ training quality and telemetry — address before committing to multi-hour TPU r
 5. ~~**Items 19, 25-28** (exploration schedule + encoding improvements)~~ — DONE (encoder.py + train.py)
 6. ~~**Items 7-10** (doubling cube)~~ — DONE (core/cube.py + types + network cube head)
 7. ~~**Items 111-118, 66, 84** (architecture modernization)~~ — DONE (EMA, AdamW, RMSNorm, SwiGLU, pre-norm, muP, Stochastic MuZero, schedule-free optimizer, color-flip augmentation)
-8. ~~**Fix item 103**~~ (6-dim equity / TD target normalization) — DONE (Mar 2026). **Fix items 104-105** (disable policy head, wire global features) — fix these before any long training run, as they directly affect gradient signal and convergence
-9. **Longer training run** with the improved pipeline — see where the model plateaus
+8. ~~**Fix items 103, 105-107**~~ — DONE (Mar 2026). 6-dim equity, global features wired, dead code removed. **Item 104** (policy head hash collisions) worked around with `train_policy=False` default; root fix deferred to item 59
+9. **Longer training run** with the improved pipeline — use `scripts/train_run.py` with presets (poc-15k, full-50k, long-200k)
 10. **Items 17-18** (N-step bootstrapping + rollout targets) — even better training signal
 11. **Wire Stochastic MuZero into training** (item 117 architecture done, needs MCTS integration + training loop)
 12. **Items 45-46** (MCTS) — sophisticated search for strongest play
