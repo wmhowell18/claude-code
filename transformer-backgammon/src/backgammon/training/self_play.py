@@ -441,22 +441,16 @@ class _ActiveGame:
     selected_move: Optional[Move] = None
 
 
-def _flip_equity_5dim(equity: np.ndarray) -> np.ndarray:
-    """Flip 5-dim equity from one player's perspective to the other's.
+def _flip_equity_6dim(equity: np.ndarray) -> np.ndarray:
+    """Flip 6-dim equity from one player's perspective to the other's.
 
-    Input:  [win_normal, win_gammon, win_bg, lose_gammon, lose_bg]
-    P(lose_normal) = 1 - sum(all 5)
-
-    Output: [new_win_normal, new_win_gammon, new_win_bg, new_lose_gammon, new_lose_bg]
-    where wins become losses and vice versa.
+    Input:  [win_normal, win_gammon, win_bg, lose_normal, lose_gammon, lose_bg]
+    Output: [lose_normal, lose_gammon, lose_bg, win_normal, win_gammon, win_bg]
+    (swaps first 3 and last 3)
     """
-    lose_normal = 1.0 - np.sum(equity)
     return np.array([
-        lose_normal,       # new win_normal = old lose_normal
-        equity[3],         # new win_gammon = old lose_gammon
-        equity[4],         # new win_bg = old lose_bg
-        equity[1],         # new lose_gammon = old win_gammon
-        equity[2],         # new lose_bg = old win_bg
+        equity[3], equity[4], equity[5],
+        equity[0], equity[1], equity[2],
     ], dtype=np.float32)
 
 
@@ -656,7 +650,7 @@ def play_games_batched(
             for game_i, game_dice_info in dice_avg_info.items():
                 g = games[game_i]
                 player = g.board.player_to_move
-                avg_equity = np.zeros(5, dtype=np.float32)
+                avg_equity = np.zeros(6, dtype=np.float32)
 
                 for dice_roll, roll_move_info in game_dice_info:
                     prob = DICE_PROBABILITIES[dice_roll]
@@ -668,8 +662,8 @@ def play_games_batched(
                         if mtype == 'terminal':
                             # Terminal value is already from our perspective
                             val = mval
-                            # Build a synthetic equity for terminal
-                            eq = np.zeros(5, dtype=np.float32)
+                            # Build a synthetic 6-dim equity for terminal
+                            eq = np.zeros(6, dtype=np.float32)
                             if val > 0:
                                 if val >= 3:
                                     eq[2] = 1.0  # win_bg
@@ -679,10 +673,11 @@ def play_games_batched(
                                     eq[0] = 1.0  # win_normal
                             elif val < 0:
                                 if val <= -3:
-                                    eq[4] = 1.0  # lose_bg
+                                    eq[5] = 1.0  # lose_bg
                                 elif val <= -2:
-                                    eq[3] = 1.0  # lose_gammon
-                                # else: lose_normal is implicit (1 - sum)
+                                    eq[4] = 1.0  # lose_gammon
+                                else:
+                                    eq[3] = 1.0  # lose_normal
                         elif mtype == 'network_noflip':
                             # Blocked position: board is still from current player's
                             # perspective, no flip needed.
@@ -692,7 +687,7 @@ def play_games_batched(
                             # Network equity is from board's player_to_move perspective.
                             # After apply_move, that's the opponent. Flip to our perspective.
                             raw_eq = dice_avg_equity_raw[mval]
-                            eq = _flip_equity_5dim(raw_eq)
+                            eq = _flip_equity_6dim(raw_eq)
                             val = _equity_to_value_np(eq.reshape(1, -1))[0]
 
                         if val > best_value:
