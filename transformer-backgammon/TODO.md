@@ -4,7 +4,7 @@
 >
 > **Current Maturity**: ~8/10 for competitive play. Solid game engine + neural training + search + benchmarking + TD(lambda) + exploration schedule + global encoding features + race evaluation + training infrastructure (position weighting, validation, early stopping) + doubling cube + match play + modern transformer architecture (RMSNorm, SwiGLU, pre-norm) + EMA weights + AdamW + muP + Stochastic MuZero network + schedule-free optimizer option + color-flip data augmentation. Missing GnuBG interface, MCTS integration with MuZero, and rollout-based training.
 >
-> **Known Issues (Feb 2026, updated Mar 2026)**: Code review identified several correctness bugs requiring attention before long training runs: policy head is non-functional (hash collisions + dummy targets — workaround: `train_policy=False` default), ~~global features are implemented but not wired into training~~ **(FIXED Mar 2026 — `input_feature_dim=10` with 8 global features)**, ~~TD targets are not renormalized before cross-entropy loss~~ **(FIXED Mar 2026 — moved to 6-dim equity, fixing zero-gradient bug for lose_normal outcomes)**, ~~dead code and stale configs~~ **(FIXED Mar 2026 — removed dead `train_step` from network.py and stale `TrainingConfig` from types.py)**, and training telemetry is misleading (train_acc always 0.0, LR logged as constant peak). See "KNOWN ISSUES" section below.
+> **Known Issues (Feb 2026, updated Mar 2026)**: Code review identified several correctness bugs requiring attention before long training runs: policy head is non-functional (hash collisions + dummy targets — workaround: `train_policy=False` default), ~~global features are implemented but not wired into training~~ **(FIXED Mar 2026 — `input_feature_dim=10` with 8 global features)**, ~~TD targets are not renormalized before cross-entropy loss~~ **(FIXED Mar 2026 — moved to 6-dim equity, fixing zero-gradient bug for lose_normal outcomes)**, ~~dead code and stale configs~~ **(FIXED Mar 2026 — removed dead `train_step` from network.py and stale `TrainingConfig` from types.py)**, ~~and training telemetry is misleading (train_acc always 0.0, LR logged as constant peak)~~ **(FIXED Mar 2026 — equity_accuracy metric added, LR reads from schedule)**. See "KNOWN ISSUES" section below.
 
 ---
 
@@ -22,17 +22,17 @@ Items are grouped by priority tier. Within each tier, items are roughly ordered 
 *Correctness bugs and silent failures identified in code review (Feb 2026). These directly affect
 training quality and telemetry — address before committing to multi-hour TPU runs.*
 
-- [ ] **101. `train_acc` always 0.0** — `train.py` initializes `train_acc = 0.0` and never
-  updates it during the training loop. `compute_metrics()` computes accuracy but is only called for
-  validation. Training logs always show 0.0 accuracy, making this metric useless for monitoring
-  convergence. Fix: call `compute_metrics()` on a training minibatch at eval checkpoints, or remove
-  the metric. (Effort: S, Impact: diagnostic)
+- [x] **101. `train_acc` always 0.0** — Fixed: added `equity_accuracy` metric (top-1 outcome
+  match between predicted and target 6-dim equity distributions) to `compute_metrics()`. Now called
+  on a training minibatch at every eval checkpoint, logged to metrics logger and console. Renamed
+  old `accuracy` key to `policy_accuracy` (only present when policy head is enabled). Also fixed
+  pre-existing stale test dimensions (5→6 dim equity, 1024→4096 action space). Validation now uses
+  EMA state for consistency with training eval. *(Mar 2026)*
 
-- [ ] **102. LR logged as constant peak LR** — `train.py:547-549` hardcodes
-  `current_lr = config.learning_rate` instead of reading the actual scheduled value from optax
-  state. The warmup and cosine decay schedule is running correctly, but logs always show the peak
-  LR — making LR curves completely uninformative for debugging schedule issues. Fix: extract actual
-  LR from the optax state via `state.opt_state`. (Effort: S, Impact: diagnostic)
+- [x] **102. LR logged as constant peak LR** — Already fixed: `train.py:666` now uses
+  `current_lr = float(lr_schedule(total_train_steps))` to read the actual value from the
+  `optax.warmup_cosine_decay_schedule`. LR curves now correctly reflect warmup and cosine decay.
+  *(Mar 2026)*
 
 - [x] **103. TD targets not renormalized / lose_normal zero-gradient bug** — The original 5-dim
   equity representation (`[win_n, win_g, win_bg, lose_g, lose_bg]`) with implicit `lose_normal`
@@ -68,6 +68,27 @@ training quality and telemetry — address before committing to multi-hour TPU r
 
 - [x] **107. Stale `TrainingConfig` in `types.py`** — The duplicate `TrainingConfig` dataclass in
   `types.py` has been removed. The single authoritative `TrainingConfig` is in `train.py`. *(Mar 2026)*
+
+- [ ] **119. Stale test dimensions across test suite** — Code review (Mar 2026) found multiple
+  test files still using 5-dim equity targets (should be 6-dim) and hardcoded 1024 action space
+  (should be 4096). Fixed in `test_losses.py` and `test_integration.py`, but `TestTrainStep` tests
+  in `test_losses.py` still have `(4, 1024)` action masks/policies that crash with the 4096-output
+  network. A sweep of all test files for hardcoded 1024 and 5-dim shapes is needed. (Effort: S,
+  Impact: test reliability)
+
+### Notes & Ideas (Mar 2026 session)
+
+- **Equity accuracy as a metric has a known limitation**: for soft targets where the true
+  distribution is spread (e.g., 40% win_n, 35% lose_n), top-1 accuracy can be misleading.
+  Equity loss (cross-entropy) is the better convergence signal; equity accuracy is useful as a
+  coarse "is the network learning at all?" diagnostic. Both are now logged.
+- **Validation uses EMA state now** (was using raw training state before — inconsistent with
+  training eval). This is a subtle behavior change that may shift historical val_loss comparisons.
+- **Pre-existing: TestTrainStep tests crash** due to 1024→4096 action space mismatch. Not critical
+  (policy head is disabled by default) but should be fixed before enabling policy training.
+- **Idea (not on critical path)**: Consider a calibration metric like Expected Calibration Error (ECE)
+  on the 6-dim equity distribution — more informative than top-1 accuracy for soft distributions.
+  Low priority until after proof-of-concept training run succeeds.
 
 ---
 
@@ -305,7 +326,7 @@ training quality and telemetry — address before committing to multi-hour TPU r
 5. ~~**Items 19, 25-28** (exploration schedule + encoding improvements)~~ — DONE (encoder.py + train.py)
 6. ~~**Items 7-10** (doubling cube)~~ — DONE (core/cube.py + types + network cube head)
 7. ~~**Items 111-118, 66, 84** (architecture modernization)~~ — DONE (EMA, AdamW, RMSNorm, SwiGLU, pre-norm, muP, Stochastic MuZero, schedule-free optimizer, color-flip augmentation)
-8. ~~**Fix items 103, 105-107**~~ — DONE (Mar 2026). 6-dim equity, global features wired, dead code removed. **Item 104** (policy head hash collisions) worked around with `train_policy=False` default; root fix deferred to item 59
+8. ~~**Fix items 101-103, 105-107**~~ — DONE (Mar 2026). 6-dim equity, global features wired, dead code removed, training telemetry fixed (equity_accuracy + LR from schedule). **Item 104** (policy head hash collisions) worked around with `train_policy=False` default; root fix deferred to item 59
 9. **Longer training run** with the improved pipeline — use `scripts/train_run.py` with presets (poc-15k, full-50k, long-200k)
 10. **Items 17-18** (N-step bootstrapping + rollout targets) — even better training signal
 11. **Wire Stochastic MuZero into training** (item 117 architecture done, needs MCTS integration + training loop)
@@ -361,3 +382,5 @@ training quality and telemetry — address before committing to multi-hour TPU r
 - [x] **Schedule-free optimizer** — `optax.contrib.schedule_free_adamw` option for training-length-independent optimization. (Mar 2026)
 - [x] **Color-flip data augmentation** — Wired into replay buffer, doubling effective training data. (Mar 2026)
 - [x] **6-dim equity (fix item 103)** — Moved from 5-dim to explicit 6-dim equity `[win_n, win_g, win_bg, lose_n, lose_g, lose_bg]`. Fixed zero-gradient bug for lose_normal outcomes and TD target information loss. 17 files changed. (Mar 2026)
+- [x] **Fix train_acc (item 101)** — Added `equity_accuracy` metric (top-1 outcome match on 6-dim equity). `compute_metrics()` now called on training minibatch at eval checkpoints. Renamed `accuracy`→`policy_accuracy`. Fixed stale 5-dim and 1024-action test dimensions. (Mar 2026)
+- [x] **Fix LR logging (item 102)** — Already fixed: `lr_schedule(total_train_steps)` reads actual scheduled value. Marked done. (Mar 2026)

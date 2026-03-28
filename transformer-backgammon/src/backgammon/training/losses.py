@@ -295,13 +295,17 @@ def compute_metrics(
         'equity_loss': float(loss_metrics['equity_loss']),
     }
 
+    # Equity accuracy: does the network's top predicted outcome match the target?
+    # This is meaningful for both policy-on and policy-off modes.
+    equity_pred_top = jnp.argmax(equity_pred, axis=-1)
+    equity_target_top = jnp.argmax(batch['equity_target'], axis=-1)
+    metrics['equity_accuracy'] = float(jnp.mean(equity_pred_top == equity_target_top))
+
     # Add policy accuracy if policy head is enabled
     if policy_logits is not None:
         predictions = jnp.argmax(policy_logits, axis=-1)
         targets = jnp.argmax(batch['target_policy'], axis=-1)
         accuracy = jnp.mean(predictions == targets)
-        metrics['accuracy'] = float(accuracy)
-    else:
-        metrics['accuracy'] = 0.0  # Placeholder for equity-only mode
+        metrics['policy_accuracy'] = float(accuracy)
 
     return metrics
