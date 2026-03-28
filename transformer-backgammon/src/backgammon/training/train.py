@@ -407,18 +407,16 @@ def save_metrics(metrics: TrainingMetrics, config: TrainingConfig):
         f.write(json.dumps(asdict(metrics)) + '\n')
 
 
-def _check_param_shapes(expected, actual):
-    """Return True if all parameter shapes in the pytrees match."""
-    expected_flat = jax.tree_util.tree_leaves_with_path(expected)
-    actual_flat = {
-        jax.tree_util.keystr(path): leaf.shape
-        for path, leaf in jax.tree_util.tree_leaves_with_path(actual)
-    }
-    for path, leaf in expected_flat:
-        key = jax.tree_util.keystr(path)
-        if key in actual_flat and actual_flat[key] != leaf.shape:
-            return False
-    return True
+def _params_shapes_match(expected, actual):
+    """Return True if all parameter leaf shapes match between two pytrees."""
+    expected_leaves = jax.tree_util.tree_leaves(expected)
+    actual_leaves = jax.tree_util.tree_leaves(actual)
+    if len(expected_leaves) != len(actual_leaves):
+        return False
+    return all(
+        np.shape(e) == np.shape(a)
+        for e, a in zip(expected_leaves, actual_leaves)
+    )
 
 
 def train(config: Optional[TrainingConfig] = None):
@@ -442,22 +440,26 @@ def train(config: Optional[TrainingConfig] = None):
     checkpoint_dir = Path(config.checkpoint_dir)
     if checkpoint_dir.exists():
         fresh_params = state.params
-        state = checkpoints.restore_checkpoint(
-            ckpt_dir=str(checkpoint_dir),
-            target=state,
-        )
-        restored_step = int(state.step)
-        if restored_step > 0:
-            # Validate that restored param shapes match the current model
-            shape_ok = _check_param_shapes(fresh_params, state.params)
-            if shape_ok:
-                print(f"   Restored checkpoint at step {restored_step}")
+        try:
+            state = checkpoints.restore_checkpoint(
+                ckpt_dir=str(checkpoint_dir),
+                target=state,
+            )
+            restored_step = int(state.step)
+            if restored_step > 0:
+                # Validate that restored param shapes match the current model
+                if _params_shapes_match(fresh_params, state.params):
+                    print(f"   Restored checkpoint at step {restored_step}")
+                else:
+                    print(f"   ⚠️  Checkpoint at step {restored_step} incompatible "
+                          "(architecture changed), starting from scratch")
+                    state = state.replace(params=fresh_params, step=0)
             else:
-                print(f"   ⚠️  Checkpoint at step {restored_step} incompatible "
-                      "(architecture changed), starting from scratch")
-                state = state.replace(params=fresh_params, step=0)
-        else:
-            print("   No checkpoint found, starting from scratch")
+                print("   No checkpoint found, starting from scratch")
+        except Exception as e:
+            print(f"   ⚠️  Could not restore checkpoint: {e}")
+            print("   Starting from scratch with new architecture")
+            state = state.replace(params=fresh_params, step=0)
     else:
         print("   No checkpoint directory, starting from scratch")
 
