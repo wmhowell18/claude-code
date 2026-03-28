@@ -89,18 +89,18 @@ class TestComputeEquityLoss:
 
     def test_perfect_prediction(self):
         """Loss near zero when pred matches target."""
-        pred = jnp.array([[0.8, 0.1, 0.02, 0.05, 0.03]])
-        target = jnp.array([[0.8, 0.1, 0.02, 0.05, 0.03]])
+        pred = jnp.array([[0.8, 0.1, 0.02, 0.03, 0.03, 0.02]])
+        target = jnp.array([[0.8, 0.1, 0.02, 0.03, 0.03, 0.02]])
 
         loss = compute_equity_loss(pred, target)
-        assert loss < 0.5  # Cross-entropy, not MSE, so not exactly 0
+        assert loss < 1.0  # Cross-entropy of a non-degenerate distribution
 
     def test_wrong_prediction_higher_loss(self):
         """Wrong prediction should give higher loss than correct one."""
-        target = jnp.array([[1.0, 0.0, 0.0, 0.0, 0.0]])
+        target = jnp.array([[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]])
 
-        good_pred = jnp.array([[0.9, 0.05, 0.02, 0.02, 0.01]])
-        bad_pred = jnp.array([[0.1, 0.1, 0.1, 0.1, 0.6]])
+        good_pred = jnp.array([[0.9, 0.04, 0.01, 0.03, 0.01, 0.01]])
+        bad_pred = jnp.array([[0.1, 0.1, 0.1, 0.1, 0.1, 0.5]])
 
         loss_good = compute_equity_loss(good_pred, target)
         loss_bad = compute_equity_loss(bad_pred, target)
@@ -109,8 +109,8 @@ class TestComputeEquityLoss:
 
     def test_near_zero_prediction_stability(self):
         """Epsilon should prevent log(0) explosion."""
-        pred = jnp.array([[1e-15, 1e-15, 1e-15, 1e-15, 1.0]])
-        target = jnp.array([[1.0, 0.0, 0.0, 0.0, 0.0]])
+        pred = jnp.array([[1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1.0]])
+        target = jnp.array([[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]])
 
         loss = compute_equity_loss(pred, target)
         assert jnp.isfinite(loss)
@@ -275,6 +275,8 @@ class TestComputeMetrics:
 
     def test_metrics_with_policy_head(self):
         """compute_metrics should return accuracy when policy head is enabled."""
+        from backgammon.encoding.action_encoder import get_action_space_size
+        action_size = get_action_space_size()
         config = TrainingConfig(
             embed_dim=32, num_heads=2, num_layers=1, ff_dim=128,
             train_policy=True,
@@ -283,9 +285,9 @@ class TestComputeMetrics:
 
         batch = {
             'board_encoding': jnp.zeros((2, 26, 10)),
-            'target_policy': jnp.ones((2, 1024)) / 1024,
+            'target_policy': jnp.ones((2, action_size)) / action_size,
             'equity_target': jnp.ones((2, 6)) / 6,
-            'action_mask': jnp.ones((2, 1024)),
+            'action_mask': jnp.ones((2, action_size)),
         }
 
         metrics = compute_metrics(state, batch)
