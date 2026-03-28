@@ -407,6 +407,20 @@ def save_metrics(metrics: TrainingMetrics, config: TrainingConfig):
         f.write(json.dumps(asdict(metrics)) + '\n')
 
 
+def _check_param_shapes(expected, actual):
+    """Return True if all parameter shapes in the pytrees match."""
+    expected_flat = jax.tree_util.tree_leaves_with_path(expected)
+    actual_flat = {
+        jax.tree_util.keystr(path): leaf.shape
+        for path, leaf in jax.tree_util.tree_leaves_with_path(actual)
+    }
+    for path, leaf in expected_flat:
+        key = jax.tree_util.keystr(path)
+        if key in actual_flat and actual_flat[key] != leaf.shape:
+            return False
+    return True
+
+
 def train(config: Optional[TrainingConfig] = None):
     """Main training loop with curriculum learning and self-play.
 
@@ -427,13 +441,21 @@ def train(config: Optional[TrainingConfig] = None):
     # Attempt to restore from existing checkpoint
     checkpoint_dir = Path(config.checkpoint_dir)
     if checkpoint_dir.exists():
+        fresh_params = state.params
         state = checkpoints.restore_checkpoint(
             ckpt_dir=str(checkpoint_dir),
             target=state,
         )
         restored_step = int(state.step)
         if restored_step > 0:
-            print(f"   Restored checkpoint at step {restored_step}")
+            # Validate that restored param shapes match the current model
+            shape_ok = _check_param_shapes(fresh_params, state.params)
+            if shape_ok:
+                print(f"   Restored checkpoint at step {restored_step}")
+            else:
+                print(f"   ⚠️  Checkpoint at step {restored_step} incompatible "
+                      "(architecture changed), starting from scratch")
+                state = state.replace(params=fresh_params, step=0)
         else:
             print("   No checkpoint found, starting from scratch")
     else:
