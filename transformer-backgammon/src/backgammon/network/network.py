@@ -43,7 +43,7 @@ def small_transformer_config() -> TransformerConfig:
         num_heads=4,
         ff_dim=256,
         dropout_rate=0.1,
-        input_feature_dim=2,
+        input_feature_dim=10,  # 2 raw + 8 global features
     )
 
 
@@ -59,7 +59,7 @@ def medium_transformer_config() -> TransformerConfig:
         num_heads=8,
         ff_dim=512,
         dropout_rate=0.1,
-        input_feature_dim=2,
+        input_feature_dim=10,  # 2 raw + 8 global features
     )
 
 
@@ -75,7 +75,7 @@ def large_transformer_config() -> TransformerConfig:
         num_heads=16,
         ff_dim=1024,
         dropout_rate=0.1,
-        input_feature_dim=2,
+        input_feature_dim=10,  # 2 raw + 8 global features
     )
 
 

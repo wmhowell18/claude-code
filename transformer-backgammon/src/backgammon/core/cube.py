@@ -174,15 +174,11 @@ def apply_cube_action(
         return cube, None
 
     if action == CubeAction.PASS:
-        # Opponent declines the double. Current player wins at current cube value.
-        # Note: the "current cube value" is the value BEFORE doubling.
-        # When you pass a double, you lose the current stake.
+        # Opponent declines the double. The doubler wins at the PRE-double stake.
+        # By the time PASS is called, DOUBLE has already updated cube.value to 2x,
+        # so we must halve it to get the actual stake the dropper loses.
         winner = player.opponent() if cube.owner != CubeOwner.CENTERED else player
-        # The player who offered the double wins. In the flow:
-        # Player A doubles -> Player B passes -> Player A wins at the pre-double value.
-        # But since we track who is performing the action:
-        # If `player` is passing, the opponent (who doubled) wins.
-        points = cube.value  # Points at stake before the double
+        points = cube.value // 2  # Pre-double stake (cube was already doubled)
         return None, (player.opponent(), points)
 
     if action == CubeAction.BEAVER:

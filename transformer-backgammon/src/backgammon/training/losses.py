@@ -102,8 +102,9 @@ def compute_combined_loss(
             'total_loss': total_loss,
         }
     else:
-        # Equity-only training
-        total_loss = equity_weight * eq_loss
+        # Equity-only training — use full gradient (ignore equity_weight which
+        # is meant for balancing against policy loss in combined mode)
+        total_loss = eq_loss
 
         metrics = {
             'policy_loss': jnp.array(0.0),  # Placeholder

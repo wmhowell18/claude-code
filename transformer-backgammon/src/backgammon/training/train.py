@@ -96,6 +96,10 @@ class TrainingConfig:
     # EMA settings
     ema_decay: float = 0.999  # EMA decay rate for weight averaging
 
+    # Cosine decay total steps. Set to match your expected total gradient steps
+    # so the LR schedule spans the full run. Ignored if use_schedule_free=True.
+    decay_steps: int = 100000
+
     # Schedule-free optimizer (Meta, 2024). Eliminates the need to choose
     # decay_steps for cosine schedule. Set True to use schedule-free AdamW
     # instead of warmup + cosine decay.
@@ -177,9 +181,10 @@ def v6e_quick_training_config() -> TrainingConfig:
         # bfloat16 for ~2x speedup on v6e
         compute_dtype='bfloat16',
 
-        # Optimizer
+        # Optimizer (~80 gradient steps total: 2500 games / 128 per batch * 4 steps)
         learning_rate=3e-4,
-        warmup_steps=200,
+        warmup_steps=10,
+        decay_steps=80,
         max_grad_norm=1.0,
 
         # Replay buffer (smaller for quick run)
@@ -334,7 +339,7 @@ def create_train_state(config: TrainingConfig, rng: jax.random.PRNGKey) -> train
             init_value=0.0,
             peak_value=config.learning_rate,
             warmup_steps=config.warmup_steps,
-            decay_steps=100000,  # Total training steps
+            decay_steps=config.decay_steps,
         )
         # AdamW decouples weight decay from gradient update for better generalization
         optimizer = optax.chain(
@@ -419,12 +424,27 @@ def train(config: Optional[TrainingConfig] = None):
     print("🔧 Initializing model and optimizer...")
     state = create_train_state(config, jax_rng)
 
+    # Attempt to restore from existing checkpoint
+    checkpoint_dir = Path(config.checkpoint_dir)
+    if checkpoint_dir.exists():
+        state = checkpoints.restore_checkpoint(
+            ckpt_dir=str(checkpoint_dir),
+            target=state,
+        )
+        restored_step = int(state.step)
+        if restored_step > 0:
+            print(f"   Restored checkpoint at step {restored_step}")
+        else:
+            print("   No checkpoint found, starting from scratch")
+    else:
+        print("   No checkpoint directory, starting from scratch")
+
     # LR schedule (recreated here for logging; matches the one in create_train_state)
     lr_schedule = optax.warmup_cosine_decay_schedule(
         init_value=0.0,
         peak_value=config.learning_rate,
         warmup_steps=config.warmup_steps,
-        decay_steps=100000,
+        decay_steps=config.decay_steps,
     )
 
     # Create replay buffer (training)
@@ -481,7 +501,7 @@ def train(config: Optional[TrainingConfig] = None):
     pip_agent = pip_count_agent()  # Used for evaluation
 
     batch_num = 0
-    total_train_steps = 0
+    total_train_steps = int(state.step)
 
     # EMA (Exponential Moving Average) of weights for smoother evaluation
     ema_params = _init_ema_params(state.params)
