@@ -228,7 +228,15 @@ class TransformerBlock(nn.Module):
         """
         dtype = self.config.dtype
 
-        # Multi-head self-attention with residual connection
+        # Pre-norm architecture: normalize BEFORE attention/FFN, not after.
+        # More stable during training, used by GPT-2+, LLaMA, all modern transformers.
+
+        # Pre-norm → self-attention → residual
+        normed = nn.RMSNorm(
+            epsilon=self.config.layer_norm_epsilon, dtype=jnp.float32, name='ln1',
+        )(x)
+        if dtype is not None:
+            normed = normed.astype(dtype)
         attn_output, attn_weights = MultiHeadAttention(
             num_heads=self.config.num_heads,
             embed_dim=self.config.embed_dim,
@@ -236,32 +244,23 @@ class TransformerBlock(nn.Module):
             return_attention_weights=self.return_attention_weights,
             dtype=dtype,
             name='attention'
-        )(x, training=training)
-
+        )(normed, training=training)
         x = x + attn_output
-        # RMSNorm in float32 for numerical stability (simpler than LayerNorm,
-        # no mean subtraction — used by LLaMA, Mistral, Gemma)
-        x = nn.RMSNorm(
-            epsilon=self.config.layer_norm_epsilon, dtype=jnp.float32, name='ln1',
+
+        # Pre-norm → feed-forward → residual
+        normed = nn.RMSNorm(
+            epsilon=self.config.layer_norm_epsilon, dtype=jnp.float32, name='ln2',
         )(x)
         if dtype is not None:
-            x = x.astype(dtype)
-
-        # Feed-forward with residual connection
+            normed = normed.astype(dtype)
         ff_output = FeedForward(
             embed_dim=self.config.embed_dim,
             ff_dim=self.config.ff_dim,
             dropout_rate=self.config.dropout_rate,
             dtype=dtype,
             name='ff'
-        )(x, training=training)
-
+        )(normed, training=training)
         x = x + ff_output
-        x = nn.RMSNorm(
-            epsilon=self.config.layer_norm_epsilon, dtype=jnp.float32, name='ln2',
-        )(x)
-        if dtype is not None:
-            x = x.astype(dtype)
 
         return x, attn_weights
 
