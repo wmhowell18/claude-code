@@ -76,7 +76,9 @@ training quality and telemetry — address before committing to multi-hour TPU r
   `test_replay_buffer_augmentation.py` (all 5 TestFlipEquityTarget tests updated from 5-dim to
   6-dim equity format, batch shape assertion 5→6), and `test_self_play_helpers.py` (removed stale
   `[:5]` slice on 6-dim dirichlet equity). Only remaining `1024` in tests is `ff_dim=1024` in
-  `test_network.py` which is correct (feed-forward dim, not action space). *(Mar 2026)*
+  `test_network.py` which is correct (feed-forward dim, not action space). Code review also caught
+  8 additional stale 5-dim equity arrays in `test_self_play_helpers.py:TestEquityToValueNp` (pure
+  outcome tests and batch test were using old implicit-lose_normal format). All fixed. *(Mar 2026)*
 
 ### Notes & Ideas (Mar 2026 session)
 
