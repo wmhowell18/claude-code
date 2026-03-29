@@ -78,7 +78,10 @@ training quality and telemetry — address before committing to multi-hour TPU r
   `[:5]` slice on 6-dim dirichlet equity). Only remaining `1024` in tests is `ff_dim=1024` in
   `test_network.py` which is correct (feed-forward dim, not action space). Code review also caught
   8 additional stale 5-dim equity arrays in `test_self_play_helpers.py:TestEquityToValueNp` (pure
-  outcome tests and batch test were using old implicit-lose_normal format). All fixed. *(Mar 2026)*
+  outcome tests and batch test were using old implicit-lose_normal format). All fixed.
+  **Second pass (Mar 2026)**: Replaced remaining hardcoded `4096` in `test_losses.py`,
+  `test_integration.py`, and `test_replay_buffer.py` with dynamic `get_action_space_size()` calls
+  to prevent future staleness if action space changes again. *(Mar 2026)*
 
 ### Notes & Ideas (Mar 2026 session)
 
@@ -89,6 +92,16 @@ training quality and telemetry — address before committing to multi-hour TPU r
 - **Validation uses EMA state now** (was using raw training state before — inconsistent with
   training eval). This is a subtle behavior change that may shift historical val_loss comparisons.
 - ~~**Pre-existing: TestTrainStep tests crash** due to 1024→4096 action space mismatch.~~ **FIXED (Mar 2026)** — item 119 sweep updated all TestTrainStep tests to use 4096-dim policy arrays.
+- **Lesson from item 119 second pass**: Hardcoding magic numbers in tests leads to recurring
+  maintenance. Using `get_action_space_size()` (or `ACTION_SPACE_SIZE` constant) in tests means
+  dimensions stay correct automatically. Applied this pattern to all test files.
+- **Next priority for proof-of-concept training run**: All known issues (101-107, 119) are now
+  resolved. The path to step 9 ("Longer training run") is clear. Use `scripts/train_run.py` with
+  the `poc-15k` preset. The policy head remains disabled (`train_policy=False`) per item 104
+  workaround — value-only training is the right mode for the PoC.
+- **Idea (not on critical path)**: The test suite would benefit from a shared `conftest.py` fixture
+  that provides `action_size = get_action_space_size()` and common dummy batch factories. Would
+  eliminate repeated boilerplate across test files. Low priority — cosmetic, not a correctness issue.
 - **Idea (not on critical path)**: Consider a calibration metric like Expected Calibration Error (ECE)
   on the 6-dim equity distribution — more informative than top-1 accuracy for soft distributions.
   Low priority until after proof-of-concept training run succeeds.
