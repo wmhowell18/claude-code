@@ -1,5 +1,5 @@
 """Tests for self-play helper functions that had zero coverage:
-- _equity_to_value_np: 5-dim equity → scalar value conversion
+- _equity_to_value_np: 6-dim equity → scalar value conversion
 - _terminal_value_for_player: terminal board → value from player perspective
 
 Also tests EMA parameter utilities from train.py.
@@ -24,53 +24,51 @@ class TestEquityToValueNp:
 
     def test_pure_win_normal(self):
         """100% win_normal should give value +1."""
-        equity = np.array([1.0, 0.0, 0.0, 0.0, 0.0])
+        equity = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         value = _equity_to_value_np(equity)
         np.testing.assert_allclose(value, 1.0)
 
     def test_pure_lose_normal(self):
-        """100% lose_normal (all zeros) should give value -1."""
-        equity = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
+        """100% lose_normal should give value -1."""
+        equity = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0])
         value = _equity_to_value_np(equity)
-        # lose_normal = 1 - 0 = 1, so lose_value = 1.0
         np.testing.assert_allclose(value, -1.0)
 
     def test_pure_win_gammon(self):
         """100% win_gammon should give value +2."""
-        equity = np.array([0.0, 1.0, 0.0, 0.0, 0.0])
+        equity = np.array([0.0, 1.0, 0.0, 0.0, 0.0, 0.0])
         value = _equity_to_value_np(equity)
         np.testing.assert_allclose(value, 2.0)
 
     def test_pure_win_backgammon(self):
         """100% win_bg should give value +3."""
-        equity = np.array([0.0, 0.0, 1.0, 0.0, 0.0])
+        equity = np.array([0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
         value = _equity_to_value_np(equity)
         np.testing.assert_allclose(value, 3.0)
 
     def test_pure_lose_gammon(self):
         """100% lose_gammon should give value -2."""
-        equity = np.array([0.0, 0.0, 0.0, 1.0, 0.0])
+        equity = np.array([0.0, 0.0, 0.0, 0.0, 1.0, 0.0])
         value = _equity_to_value_np(equity)
         np.testing.assert_allclose(value, -2.0)
 
     def test_pure_lose_backgammon(self):
         """100% lose_bg should give value -3."""
-        equity = np.array([0.0, 0.0, 0.0, 0.0, 1.0])
+        equity = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
         value = _equity_to_value_np(equity)
         np.testing.assert_allclose(value, -3.0)
 
     def test_even_game(self):
         """50% win / 50% lose normal should give value ~0."""
-        equity = np.array([0.5, 0.0, 0.0, 0.0, 0.0])
-        # lose_normal = 0.5, so value = 0.5 - 0.5 = 0.0
+        equity = np.array([0.5, 0.0, 0.0, 0.5, 0.0, 0.0])
         value = _equity_to_value_np(equity)
         np.testing.assert_allclose(value, 0.0, atol=1e-6)
 
     def test_batch_input(self):
         """Should handle batch of equities."""
         equity = np.array([
-            [1.0, 0.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
         ])
         values = _equity_to_value_np(equity)
         assert values.shape == (2,)
