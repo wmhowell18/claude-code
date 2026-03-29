@@ -22,6 +22,7 @@ from backgammon.training.losses import (
     compute_metrics,
 )
 from backgammon.training.train import TrainingConfig, create_train_state
+from backgammon.encoding.action_encoder import get_action_space_size
 
 
 class TestComputePolicyLoss:
@@ -196,11 +197,12 @@ class TestTrainStep:
         rng = jax.random.PRNGKey(42)
         state = create_train_state(config, rng)
 
+        action_size = get_action_space_size()
         batch = {
             'board_encoding': jnp.zeros((4, 26, 10)),
-            'target_policy': jnp.ones((4, 4096)) / 4096,
+            'target_policy': jnp.ones((4, action_size)) / action_size,
             'equity_target': jnp.ones((4, 6)) / 6,
-            'action_mask': jnp.ones((4, 4096)),
+            'action_mask': jnp.ones((4, action_size)),
         }
         return state, batch
 
@@ -255,11 +257,12 @@ class TestTrainStep:
         )
         state = create_train_state(config, jax.random.PRNGKey(42))
 
+        action_size = get_action_space_size()
         batch = {
             'board_encoding': jnp.zeros((4, 26, 10)),
-            'target_policy': jnp.zeros((4, 4096)),
+            'target_policy': jnp.zeros((4, action_size)),
             'equity_target': jnp.ones((4, 6)) / 6,
-            'action_mask': jnp.ones((4, 4096)),
+            'action_mask': jnp.ones((4, action_size)),
         }
         rng = jax.random.PRNGKey(0)
 
@@ -275,7 +278,6 @@ class TestComputeMetrics:
 
     def test_metrics_with_policy_head(self):
         """compute_metrics should return accuracy when policy head is enabled."""
-        from backgammon.encoding.action_encoder import get_action_space_size
         action_size = get_action_space_size()
         config = TrainingConfig(
             embed_dim=32, num_heads=2, num_layers=1, ff_dim=128,
@@ -300,6 +302,7 @@ class TestComputeMetrics:
 
     def test_metrics_value_only(self):
         """compute_metrics should work in value-only mode."""
+        action_size = get_action_space_size()
         config = TrainingConfig(
             embed_dim=32, num_heads=2, num_layers=1, ff_dim=128,
             train_policy=False,
@@ -308,9 +311,9 @@ class TestComputeMetrics:
 
         batch = {
             'board_encoding': jnp.zeros((2, 26, 10)),
-            'target_policy': jnp.zeros((2, 4096)),
+            'target_policy': jnp.zeros((2, action_size)),
             'equity_target': jnp.ones((2, 6)) / 6,
-            'action_mask': jnp.ones((2, 4096)),
+            'action_mask': jnp.ones((2, action_size)),
         }
 
         metrics = compute_metrics(state, batch)

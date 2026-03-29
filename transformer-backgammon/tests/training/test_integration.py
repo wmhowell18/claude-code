@@ -26,6 +26,7 @@ from backgammon.training.losses import train_step
 from backgammon.core.board import get_early_training_variants
 from backgammon.evaluation.agents import pip_count_agent, random_agent
 from backgammon.evaluation.network_agent import create_neural_agent
+from backgammon.encoding.action_encoder import get_action_space_size
 from flax.training import checkpoints
 
 
@@ -109,7 +110,7 @@ class TestCreateTrainState:
         # Check outputs (network returns tuple of (equity, policy_logits, cube_decision, attention_weights))
         equity, policy_logits, _, _ = output
         assert equity.shape == (1, 6)  # Equity prediction (6 outcomes)
-        assert policy_logits.shape == (1, 4096)  # Action space size
+        assert policy_logits.shape == (1, get_action_space_size())  # Action space size
 
 
 class TestSelfPlayIntegration:
@@ -194,9 +195,9 @@ class TestReplayBufferIntegration:
 
         # Verify batch structure
         assert batch['board_encoding'].shape[0] == 16
-        assert batch['target_policy'].shape == (16, 4096)
+        assert batch['target_policy'].shape == (16, get_action_space_size())
         assert batch['equity_target'].shape == (16, 6)
-        assert batch['action_mask'].shape == (16, 4096)
+        assert batch['action_mask'].shape == (16, get_action_space_size())
 
 
 class TestEndToEndTraining:
@@ -534,11 +535,12 @@ class TestCheckpointRestore:
             assert _params_shapes_match(fresh_state.params, restored_state.params)
 
             # Now perform a gradient step — this is where mismatched opt_state would crash
+            action_size = get_action_space_size()
             dummy_batch = {
                 'board_encoding': jnp.zeros((4, 26, 10)),
-                'target_policy': jnp.ones((4, 4096)) / 4096,
+                'target_policy': jnp.ones((4, action_size)) / action_size,
                 'equity_target': jnp.ones((4, 6)) / 6,
-                'action_mask': jnp.ones((4, 4096)),
+                'action_mask': jnp.ones((4, action_size)),
             }
             step_rng = jax.random.PRNGKey(0)
             updated_state, metrics = train_step(restored_state, dummy_batch, step_rng)
@@ -664,4 +666,4 @@ class TestConfigurationVariations:
 
             equity, policy, _, _ = output
             assert equity.shape == (1, 6)  # Equity prediction
-            assert policy.shape == (1, 4096)  # Policy logits
+            assert policy.shape == (1, get_action_space_size())  # Policy logits
