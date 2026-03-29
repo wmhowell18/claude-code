@@ -198,9 +198,9 @@ class TestTrainStep:
 
         batch = {
             'board_encoding': jnp.zeros((4, 26, 10)),
-            'target_policy': jnp.ones((4, 1024)) / 1024,
+            'target_policy': jnp.ones((4, 4096)) / 4096,
             'equity_target': jnp.ones((4, 6)) / 6,
-            'action_mask': jnp.ones((4, 1024)),
+            'action_mask': jnp.ones((4, 4096)),
         }
         return state, batch
 
@@ -257,9 +257,9 @@ class TestTrainStep:
 
         batch = {
             'board_encoding': jnp.zeros((4, 26, 10)),
-            'target_policy': jnp.zeros((4, 1024)),
+            'target_policy': jnp.zeros((4, 4096)),
             'equity_target': jnp.ones((4, 6)) / 6,
-            'action_mask': jnp.ones((4, 1024)),
+            'action_mask': jnp.ones((4, 4096)),
         }
         rng = jax.random.PRNGKey(0)
 
@@ -308,9 +308,9 @@ class TestComputeMetrics:
 
         batch = {
             'board_encoding': jnp.zeros((2, 26, 10)),
-            'target_policy': jnp.zeros((2, 1024)),
+            'target_policy': jnp.zeros((2, 4096)),
             'equity_target': jnp.ones((2, 6)) / 6,
-            'action_mask': jnp.ones((2, 1024)),
+            'action_mask': jnp.ones((2, 4096)),
         }
 
         metrics = compute_metrics(state, batch)

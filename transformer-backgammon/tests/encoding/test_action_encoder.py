@@ -76,7 +76,7 @@ class TestMoveEncoding:
         """Test getting action space size."""
         size = get_action_space_size()
         assert size == ACTION_SPACE_SIZE
-        assert size == 1024
+        assert size == 4096
 
 
 class TestActionMask:

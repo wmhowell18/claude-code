@@ -142,9 +142,9 @@ class TestReplayBuffer:
         # Board encoding is (batch, 26 positions, 10 features)
         # Action space size is 4096 (from action_encoder.ACTION_SPACE_SIZE)
         assert batch['board_encoding'].shape == (32, 26, 10)
-        assert batch['target_policy'].shape == (32, 1024)
+        assert batch['target_policy'].shape == (32, 4096)
         assert batch['equity_target'].shape == (32, 6)
-        assert batch['action_mask'].shape == (32, 1024)
+        assert batch['action_mask'].shape == (32, 4096)
 
         # Check types
         assert batch['board_encoding'].dtype == jnp.float32

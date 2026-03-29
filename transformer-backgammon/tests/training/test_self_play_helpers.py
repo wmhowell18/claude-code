@@ -81,7 +81,7 @@ class TestEquityToValueNp:
         """Values should be in [-3, +3]."""
         rng = np.random.default_rng(42)
         for _ in range(100):
-            equity = rng.dirichlet(np.ones(6))[:5]  # Random valid equity
+            equity = rng.dirichlet(np.ones(6))  # Random valid 6-dim equity
             value = _equity_to_value_np(equity)
             assert -3.0 <= value <= 3.0, f"Value {value} out of range for equity {equity}"
 

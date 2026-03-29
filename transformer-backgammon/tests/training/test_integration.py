@@ -109,7 +109,7 @@ class TestCreateTrainState:
         # Check outputs (network returns tuple of (equity, policy_logits, cube_decision, attention_weights))
         equity, policy_logits, _, _ = output
         assert equity.shape == (1, 6)  # Equity prediction (6 outcomes)
-        assert policy_logits.shape == (1, 1024)  # Action space size
+        assert policy_logits.shape == (1, 4096)  # Action space size
 
 
 class TestSelfPlayIntegration:
@@ -194,9 +194,9 @@ class TestReplayBufferIntegration:
 
         # Verify batch structure
         assert batch['board_encoding'].shape[0] == 16
-        assert batch['target_policy'].shape == (16, 1024)
+        assert batch['target_policy'].shape == (16, 4096)
         assert batch['equity_target'].shape == (16, 6)
-        assert batch['action_mask'].shape == (16, 1024)
+        assert batch['action_mask'].shape == (16, 4096)
 
 
 class TestEndToEndTraining:
@@ -536,9 +536,9 @@ class TestCheckpointRestore:
             # Now perform a gradient step — this is where mismatched opt_state would crash
             dummy_batch = {
                 'board_encoding': jnp.zeros((4, 26, 10)),
-                'target_policy': jnp.ones((4, 1024)) / 1024,
+                'target_policy': jnp.ones((4, 4096)) / 4096,
                 'equity_target': jnp.ones((4, 6)) / 6,
-                'action_mask': jnp.ones((4, 1024)),
+                'action_mask': jnp.ones((4, 4096)),
             }
             step_rng = jax.random.PRNGKey(0)
             updated_state, metrics = train_step(restored_state, dummy_batch, step_rng)
@@ -664,4 +664,4 @@ class TestConfigurationVariations:
 
             equity, policy, _, _ = output
             assert equity.shape == (1, 6)  # Equity prediction
-            assert policy.shape == (1, 1024)  # Policy logits
+            assert policy.shape == (1, 4096)  # Policy logits
