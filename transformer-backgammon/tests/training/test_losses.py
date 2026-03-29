@@ -117,8 +117,8 @@ class TestComputeEquityLoss:
 
     def test_batch_averaging(self):
         """Loss is averaged over batch dimension."""
-        pred = jnp.array([[0.5, 0.2, 0.1, 0.1, 0.1], [0.5, 0.2, 0.1, 0.1, 0.1]])
-        target = jnp.array([[0.5, 0.2, 0.1, 0.1, 0.1], [0.5, 0.2, 0.1, 0.1, 0.1]])
+        pred = jnp.array([[0.4, 0.2, 0.1, 0.1, 0.1, 0.1], [0.4, 0.2, 0.1, 0.1, 0.1, 0.1]])
+        target = jnp.array([[0.4, 0.2, 0.1, 0.1, 0.1, 0.1], [0.4, 0.2, 0.1, 0.1, 0.1, 0.1]])
 
         loss = compute_equity_loss(pred, target)
         assert jnp.isfinite(loss)
