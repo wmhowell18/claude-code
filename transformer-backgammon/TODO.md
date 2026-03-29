@@ -69,12 +69,19 @@ training quality and telemetry — address before committing to multi-hour TPU r
 - [x] **107. Stale `TrainingConfig` in `types.py`** — The duplicate `TrainingConfig` dataclass in
   `types.py` has been removed. The single authoritative `TrainingConfig` is in `train.py`. *(Mar 2026)*
 
-- [ ] **119. Stale test dimensions across test suite** — Code review (Mar 2026) found multiple
-  test files still using 5-dim equity targets (should be 6-dim) and hardcoded 1024 action space
-  (should be 4096). Fixed in `test_losses.py` and `test_integration.py`, but `TestTrainStep` tests
-  in `test_losses.py` still have `(4, 1024)` action masks/policies that crash with the 4096-output
-  network. A sweep of all test files for hardcoded 1024 and 5-dim shapes is needed. (Effort: S,
-  Impact: test reliability)
+- [x] **119. Stale test dimensions across test suite** — Full sweep completed. Fixed 6 test files:
+  `test_action_encoder.py` (1024→4096 assertion), `test_integration.py` (6 occurrences of 1024→4096),
+  `test_losses.py` (6 occurrences: TestTrainStep and TestComputeMetrics policy arrays 1024→4096),
+  `test_replay_buffer.py` (2 shape assertions 1024→4096),
+  `test_replay_buffer_augmentation.py` (all 5 TestFlipEquityTarget tests updated from 5-dim to
+  6-dim equity format, batch shape assertion 5→6), and `test_self_play_helpers.py` (removed stale
+  `[:5]` slice on 6-dim dirichlet equity). Only remaining `1024` in tests is `ff_dim=1024` in
+  `test_network.py` which is correct (feed-forward dim, not action space). Code review also caught
+  8 additional stale 5-dim equity arrays in `test_self_play_helpers.py:TestEquityToValueNp` (pure
+  outcome tests and batch test were using old implicit-lose_normal format). All fixed.
+  **Second pass (Mar 2026)**: Replaced remaining hardcoded `4096` in `test_losses.py`,
+  `test_integration.py`, and `test_replay_buffer.py` with dynamic `get_action_space_size()` calls
+  to prevent future staleness if action space changes again. *(Mar 2026)*
 
 ### Notes & Ideas (Mar 2026 session)
 
@@ -84,11 +91,30 @@ training quality and telemetry — address before committing to multi-hour TPU r
   coarse "is the network learning at all?" diagnostic. Both are now logged.
 - **Validation uses EMA state now** (was using raw training state before — inconsistent with
   training eval). This is a subtle behavior change that may shift historical val_loss comparisons.
-- **Pre-existing: TestTrainStep tests crash** due to 1024→4096 action space mismatch. Not critical
-  (policy head is disabled by default) but should be fixed before enabling policy training.
+- ~~**Pre-existing: TestTrainStep tests crash** due to 1024→4096 action space mismatch.~~ **FIXED (Mar 2026)** — item 119 sweep updated all TestTrainStep tests to use 4096-dim policy arrays.
+- **Lesson from item 119 second pass**: Hardcoding magic numbers in tests leads to recurring
+  maintenance. Using `get_action_space_size()` (or `ACTION_SPACE_SIZE` constant) in tests means
+  dimensions stay correct automatically. Applied this pattern to all test files.
+- **Next priority for proof-of-concept training run**: All known issues (101-107, 119) are now
+  resolved. The path to step 9 ("Longer training run") is clear. Use `scripts/train_run.py` with
+  the `poc-15k` preset. The policy head remains disabled (`train_policy=False`) per item 104
+  workaround — value-only training is the right mode for the PoC.
+- **Idea (not on critical path)**: The test suite would benefit from a shared `conftest.py` fixture
+  that provides `action_size = get_action_space_size()` and common dummy batch factories. Would
+  eliminate repeated boilerplate across test files. Low priority — cosmetic, not a correctness issue.
 - **Idea (not on critical path)**: Consider a calibration metric like Expected Calibration Error (ECE)
   on the 6-dim equity distribution — more informative than top-1 accuracy for soft distributions.
   Low priority until after proof-of-concept training run succeeds.
+- **All known issues are now resolved** except item 104 (policy head, worked around with
+  `train_policy=False`). The test suite should pass cleanly. Next step is the poc-15k proof-of-concept
+  training run.
+- **Idea (potentially on critical path)**: The test suite imports from the production codebase but
+  doesn't use `ACTION_SPACE_SIZE` consistently — most tests hardcode `4096` instead of importing
+  the constant. Consider adding a shared test fixture or importing the constant to prevent future
+  drift. Low priority — the current fix is correct and the constant is unlikely to change again.
+- **Idea (not on critical path)**: The `_flip_equity_target` function could be simplified to
+  `np.roll(target, 3)` or `np.concatenate([target[3:], target[:3]])` since it's just swapping
+  the first 3 and last 3 elements. Readable but not a priority.
 
 ---
 
@@ -326,8 +352,8 @@ training quality and telemetry — address before committing to multi-hour TPU r
 5. ~~**Items 19, 25-28** (exploration schedule + encoding improvements)~~ — DONE (encoder.py + train.py)
 6. ~~**Items 7-10** (doubling cube)~~ — DONE (core/cube.py + types + network cube head)
 7. ~~**Items 111-118, 66, 84** (architecture modernization)~~ — DONE (EMA, AdamW, RMSNorm, SwiGLU, pre-norm, muP, Stochastic MuZero, schedule-free optimizer, color-flip augmentation)
-8. ~~**Fix items 101-103, 105-107**~~ — DONE (Mar 2026). 6-dim equity, global features wired, dead code removed, training telemetry fixed (equity_accuracy + LR from schedule). **Item 104** (policy head hash collisions) worked around with `train_policy=False` default; root fix deferred to item 59
-9. **Longer training run** with the improved pipeline — use `scripts/train_run.py` with presets (poc-15k, full-50k, long-200k)
+8. ~~**Fix items 101-103, 105-107, 119**~~ — DONE (Mar 2026). 6-dim equity, global features wired, dead code removed, training telemetry fixed (equity_accuracy + LR from schedule), stale test dimensions swept (1024→4096, 5→6-dim). **Item 104** (policy head hash collisions) worked around with `train_policy=False` default; root fix deferred to item 59
+9. **Longer training run** with the improved pipeline — use `scripts/train_run.py` with presets (poc-15k, full-50k, long-200k) ← **NEXT**
 10. **Items 17-18** (N-step bootstrapping + rollout targets) — even better training signal
 11. **Wire Stochastic MuZero into training** (item 117 architecture done, needs MCTS integration + training loop)
 12. **Items 45-46** (MCTS) — sophisticated search for strongest play
@@ -384,3 +410,4 @@ training quality and telemetry — address before committing to multi-hour TPU r
 - [x] **6-dim equity (fix item 103)** — Moved from 5-dim to explicit 6-dim equity `[win_n, win_g, win_bg, lose_n, lose_g, lose_bg]`. Fixed zero-gradient bug for lose_normal outcomes and TD target information loss. 17 files changed. (Mar 2026)
 - [x] **Fix train_acc (item 101)** — Added `equity_accuracy` metric (top-1 outcome match on 6-dim equity). `compute_metrics()` now called on training minibatch at eval checkpoints. Renamed `accuracy`→`policy_accuracy`. Fixed stale 5-dim and 1024-action test dimensions. (Mar 2026)
 - [x] **Fix LR logging (item 102)** — Already fixed: `lr_schedule(total_train_steps)` reads actual scheduled value. Marked done. (Mar 2026)
+- [x] **Stale test dimensions sweep (item 119)** — Fixed all 6 test files with hardcoded 1024 action space (→4096) and 5-dim equity (→6-dim). TestTrainStep, TestComputeMetrics, TestFlipEquityTarget, replay buffer shape assertions, and self-play helper equity slicing all updated. (Mar 2026)

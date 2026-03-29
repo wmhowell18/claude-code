@@ -11,6 +11,7 @@ from backgammon.training.replay_buffer import (
 from backgammon.training.self_play import GameResult, GameStep
 from backgammon.core.board import initial_board
 from backgammon.core.types import Player, GameOutcome
+from backgammon.encoding.action_encoder import get_action_space_size
 
 
 def create_dummy_game(num_steps: int = 10, winner: Player = Player.WHITE, points: int = 1) -> GameResult:
@@ -140,11 +141,11 @@ class TestReplayBuffer:
 
         # Check shapes (enhanced encoding: 2 raw + 8 global features = 10)
         # Board encoding is (batch, 26 positions, 10 features)
-        # Action space size is 4096 (from action_encoder.ACTION_SPACE_SIZE)
+        action_size = get_action_space_size()
         assert batch['board_encoding'].shape == (32, 26, 10)
-        assert batch['target_policy'].shape == (32, 1024)
+        assert batch['target_policy'].shape == (32, action_size)
         assert batch['equity_target'].shape == (32, 6)
-        assert batch['action_mask'].shape == (32, 1024)
+        assert batch['action_mask'].shape == (32, action_size)
 
         # Check types
         assert batch['board_encoding'].dtype == jnp.float32

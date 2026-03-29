@@ -43,55 +43,55 @@ class TestFlipEquityTarget:
     """Test _flip_equity_target correctness."""
 
     def test_flip_preserves_probability_sum(self):
-        """Flipped target should still sum to a valid distribution with lose_normal."""
-        target = np.array([0.5, 0.1, 0.02, 0.08, 0.03], dtype=np.float32)
+        """Flipped target should still sum to 1.0 (valid 6-dim distribution)."""
+        target = np.array([0.5, 0.1, 0.02, 0.27, 0.08, 0.03], dtype=np.float32)
         flipped = _flip_equity_target(target)
 
-        # Original: sum + lose_normal = 1.0
-        orig_sum = target.sum() + (1.0 - target.sum())
-        # Flipped: sum + new_lose_normal = 1.0
-        flipped_sum = flipped.sum() + (1.0 - flipped.sum())
-
-        np.testing.assert_allclose(orig_sum, 1.0, atol=1e-6)
-        np.testing.assert_allclose(flipped_sum, 1.0, atol=1e-6)
+        np.testing.assert_allclose(target.sum(), 1.0, atol=1e-6)
+        np.testing.assert_allclose(flipped.sum(), 1.0, atol=1e-6)
 
     def test_flip_swaps_win_lose(self):
-        """Win gammon/bg should swap with lose gammon/bg."""
-        target = np.array([0.5, 0.2, 0.05, 0.1, 0.03], dtype=np.float32)
+        """Win/lose categories should swap: [w_n,w_g,w_bg,l_n,l_g,l_bg] -> [l_n,l_g,l_bg,w_n,w_g,w_bg]."""
+        target = np.array([0.5, 0.2, 0.05, 0.12, 0.1, 0.03], dtype=np.float32)
         flipped = _flip_equity_target(target)
 
+        # new win_normal = old lose_normal
+        assert flipped[0] == target[3]
         # new win_gammon = old lose_gammon
-        assert flipped[1] == target[3]
+        assert flipped[1] == target[4]
         # new win_bg = old lose_bg
-        assert flipped[2] == target[4]
+        assert flipped[2] == target[5]
+        # new lose_normal = old win_normal
+        assert flipped[3] == target[0]
         # new lose_gammon = old win_gammon
-        assert flipped[3] == target[1]
+        assert flipped[4] == target[1]
         # new lose_bg = old win_bg
-        assert flipped[4] == target[2]
+        assert flipped[5] == target[2]
 
     def test_flip_win_normal_becomes_lose_normal(self):
-        """New win_normal should equal old lose_normal."""
-        target = np.array([0.4, 0.1, 0.02, 0.08, 0.03], dtype=np.float32)
+        """New win_normal should equal old lose_normal and vice versa."""
+        target = np.array([0.4, 0.1, 0.02, 0.37, 0.08, 0.03], dtype=np.float32)
         flipped = _flip_equity_target(target)
 
-        old_lose_normal = 1.0 - target.sum()
-        np.testing.assert_allclose(flipped[0], old_lose_normal, atol=1e-6)
+        np.testing.assert_allclose(flipped[0], target[3], atol=1e-6)  # new win_n = old lose_n
+        np.testing.assert_allclose(flipped[3], target[0], atol=1e-6)  # new lose_n = old win_n
 
     def test_double_flip_is_identity(self):
         """Flipping twice should return the original."""
-        target = np.array([0.5, 0.15, 0.05, 0.1, 0.03], dtype=np.float32)
+        target = np.array([0.5, 0.15, 0.05, 0.17, 0.1, 0.03], dtype=np.float32)
         double_flipped = _flip_equity_target(_flip_equity_target(target))
         np.testing.assert_allclose(double_flipped, target, atol=1e-6)
 
     def test_flip_pure_win(self):
-        """Target with 100% win_normal should flip to 0% win."""
-        target = np.array([1.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        """Target with 100% win_normal should flip to 100% lose_normal."""
+        target = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
         flipped = _flip_equity_target(target)
 
         # Old lose_normal = 0.0, so new win_normal = 0.0
         assert flipped[0] == 0.0
-        # No gammons/bgs
-        assert flipped.sum() == 0.0  # All probability is in lose_normal
+        # All probability moves to lose_normal
+        assert flipped[3] == 1.0
+        np.testing.assert_allclose(flipped.sum(), 1.0, atol=1e-6)
 
 
 class TestEncodeBoardFastSingle:
@@ -152,7 +152,7 @@ class TestColorFlipAugmentation:
 
         batch = buffer.sample_batch(4)
         assert batch['board_encoding'].shape == (4, 26, 10)
-        assert batch['equity_target'].shape == (4, 5)
+        assert batch['equity_target'].shape == (4, 6)
 
 
 class TestWeightedSampling:
