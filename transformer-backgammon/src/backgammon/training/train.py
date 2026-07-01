@@ -450,6 +450,39 @@ def _params_shapes_match(expected, actual):
     )
 
 
+def _state_dicts_match(expected, actual) -> bool:
+    """Recursively compare two flax state dicts by keys and leaf shapes."""
+    if isinstance(expected, dict) or isinstance(actual, dict):
+        if not (isinstance(expected, dict) and isinstance(actual, dict)):
+            return False
+        if set(expected.keys()) != set(actual.keys()):
+            return False
+        return all(_state_dicts_match(expected[k], actual[k]) for k in expected)
+    return np.shape(expected) == np.shape(actual)
+
+
+def checkpoint_matches_architecture(checkpoint_dir, fresh_state) -> Optional[bool]:
+    """Check whether the latest checkpoint matches the current architecture.
+
+    Restoring a checkpoint INTO a target silently adapts to the target's
+    tree structure (e.g. a 2-layer checkpoint restored into a 1-layer model
+    just drops the extra block), so shape comparison after a targeted
+    restore cannot detect structural changes. This inspects the RAW
+    checkpoint instead and compares key structure + leaf shapes.
+
+    Returns:
+        True if compatible, False if the architecture changed,
+        None if no checkpoint exists.
+    """
+    from flax import serialization
+
+    raw = checkpoints.restore_checkpoint(ckpt_dir=str(checkpoint_dir), target=None)
+    if raw is None:
+        return None
+    expected_params = serialization.to_state_dict(fresh_state.params)
+    return _state_dicts_match(expected_params, raw.get('params', {}))
+
+
 def train(config: Optional[TrainingConfig] = None):
     """Main training loop with curriculum learning and self-play.
 
@@ -484,23 +517,26 @@ def train(config: Optional[TrainingConfig] = None):
     if checkpoint_dir.exists():
         fresh_state = state
         try:
-            state = checkpoints.restore_checkpoint(
-                ckpt_dir=str(checkpoint_dir),
-                target=state,
-            )
-            restored_step = int(state.step)
-            if restored_step > 0:
-                # Validate that restored param shapes match the current model.
-                # If not, discard the entire restored state (params + optimizer)
-                # since optimizer momentum buffers also have stale shapes.
-                if _params_shapes_match(fresh_state.params, state.params):
+            # Inspect the raw checkpoint FIRST: restoring into a target
+            # silently adapts to the target's structure, so structural
+            # changes (e.g. different num_layers) are undetectable after
+            # the fact. Compare key structure + shapes on the raw dict.
+            compatible = checkpoint_matches_architecture(checkpoint_dir, fresh_state)
+            if compatible is None:
+                print("   No checkpoint found, starting from scratch")
+            elif not compatible:
+                print("   ⚠️  Existing checkpoint incompatible "
+                      "(architecture changed), starting from scratch")
+            else:
+                state = checkpoints.restore_checkpoint(
+                    ckpt_dir=str(checkpoint_dir),
+                    target=state,
+                )
+                restored_step = int(state.step)
+                if restored_step > 0:
                     print(f"   Restored checkpoint at step {restored_step}")
                 else:
-                    print(f"   ⚠️  Checkpoint at step {restored_step} incompatible "
-                          "(architecture changed), starting from scratch")
-                    state = fresh_state
-            else:
-                print("   No checkpoint found, starting from scratch")
+                    print("   Restored checkpoint (step 0)")
         except Exception as e:
             print(f"   ⚠️  Could not restore checkpoint: {e}")
             print("   Starting from scratch with new architecture")

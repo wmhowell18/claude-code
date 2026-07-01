@@ -193,6 +193,11 @@ class TestTrainStep:
             num_layers=1,
             ff_dim=128,
             train_policy=True,
+            # Short warmup: the default (1000 steps starting from LR=0)
+            # means the first gradient steps have LR~0 and params don't
+            # move, which breaks single-step assertions below.
+            warmup_steps=1,
+            decay_steps=1000,
         )
         rng = jax.random.PRNGKey(42)
         state = create_train_state(config, rng)
@@ -218,11 +223,17 @@ class TestTrainStep:
         assert 'grad_norm' in metrics
 
     def test_params_change_after_step(self, state_and_batch):
-        """Parameters should change after a gradient step."""
+        """Parameters should change after gradient steps.
+
+        Two steps are needed: the warmup schedule starts at LR=0, so the
+        very first optimizer update is a no-op by construction.
+        """
         state, batch = state_and_batch
         rng = jax.random.PRNGKey(0)
 
         new_state, _ = train_step(state, batch, rng)
+        rng, step_rng = jax.random.split(rng)
+        new_state, _ = train_step(new_state, batch, step_rng)
 
         old_leaves = jax.tree_util.tree_leaves(state.params)
         new_leaves = jax.tree_util.tree_leaves(new_state.params)

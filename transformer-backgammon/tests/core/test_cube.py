@@ -198,7 +198,9 @@ class TestApplyCubeAction:
         assert game_over is not None
         winner, points = game_over
         assert winner == Player.WHITE  # Opponent of the passer wins
-        assert points == 2  # At current cube value
+        # A dropped double loses at the PRE-double stake: the cube already
+        # shows 2 (the offered value), so the passer concedes 1 point.
+        assert points == 1
 
     def test_illegal_double_raises(self):
         """Doubling when not allowed raises ValueError."""
@@ -803,7 +805,8 @@ class TestCubeIntegration:
         assert game_over is not None
         winner, points = game_over
         assert winner == Player.WHITE
-        assert points == 2  # Cube value at time of pass
+        # Dropping the initial double concedes the pre-double stake (1 point)
+        assert points == 1
 
     def test_match_play_game_sequence(self):
         """Test a sequence of games in a match."""

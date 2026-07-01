@@ -50,7 +50,10 @@ def small_state():
 
 @pytest.fixture
 def encoding_config():
-    return raw_encoding_config()
+    # Must match the network's input_feature_dim=10 (create_train_state
+    # always builds a 10-feature network); raw_encoding_config (2 features)
+    # would fail the forward pass with a shape mismatch.
+    return enhanced_encoding_config()
 
 
 def _bearoff_board(white_pts, black_pts):
