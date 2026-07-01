@@ -49,14 +49,16 @@ A Stochastic MuZero architecture (`network/muzero.py`) is also included for MCTS
 
 The board is a sequence of 26 tokens: `[bar] + [points 1-24] + [off]`. Each token carries a 10-dimensional feature vector (2 raw checker counts + 8 global features broadcast to every position). Self-attention learns strategic relationships between positions.
 
+**Canonical mover perspective (July 2026):** every board is encoded from the perspective of the player to move — channel 0 is the mover's checkers, and the point axis is mirrored for Black so the mover always moves toward index 1. This makes White/Black symmetry structural (a position and its color-flipped mirror encode identically), and fixes a fundamental ambiguity where the network couldn't tell which direction the mover was traveling.
+
 ### Training Pipeline
 
 - **Curriculum learning**: warmstart (pip count opponent) -> early -> mid -> late (full self-play)
 - **TD(lambda)** targets with renormalization and Monte Carlo fallback
 - **Experience replay** with position weighting and FIFO eviction
-- **EMA** weight averaging for smoother evaluation
+- **EMA** weight averaging (warmed-up decay) for smoother evaluation
 - **AdamW** with warmup + cosine decay (or schedule-free optimizer)
-- **Color-flip augmentation** for 2x effective data
+- **Color symmetry** built into the canonical encoding (the previous color-flip augmentation was removed: it stored win/lose-swapped targets for mover-identical positions, corrupting half the training labels)
 
 ## Current Status
 

@@ -10,9 +10,13 @@ from backgammon.encoding.encoder import (
     # Main encoding functions
     encode_board,
     encode_boards,
+    encode_board_canonical,
+    encode_boards_canonical,
     decode_board,
     extract_position_features,
     feature_dimension,
+    canonical_point,
+    MIRROR_POINTS,
 
     # Encoding variants
     encode_raw,
@@ -65,9 +69,13 @@ __all__ = [
     # Main encoding functions
     "encode_board",
     "encode_boards",
+    "encode_board_canonical",
+    "encode_boards_canonical",
     "decode_board",
     "extract_position_features",
     "feature_dimension",
+    "canonical_point",
+    "MIRROR_POINTS",
 
     # Encoding variants
     "encode_raw",

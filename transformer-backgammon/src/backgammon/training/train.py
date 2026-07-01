@@ -54,6 +54,19 @@ def _init_ema_params(params):
     return jax.tree.map(lambda p: p.copy(), params)
 
 
+def _ema_decay_for_step(target_decay: float, step: int) -> float:
+    """Effective EMA decay with warmup.
+
+    A fixed decay of 0.999 makes the EMA lag ~1000 steps behind the raw
+    params. Since the EMA starts at the random init and is used for
+    self-play and evaluation, short runs would generate all their games
+    with (essentially) the initial random network. Warming the decay up
+    as min(target, (1+step)/(10+step)) keeps the EMA tracking the params
+    closely early on, converging to the target decay as training proceeds.
+    """
+    return min(target_decay, (1.0 + step) / (10.0 + step))
+
+
 def _update_ema_params(ema_params, params, decay: float):
     """Update EMA parameters: ema = decay * ema + (1 - decay) * params."""
     return jax.tree.map(
@@ -115,10 +128,13 @@ class TrainingConfig:
     training_batch_size: int = 256  # Neural network training batch size
     train_steps_per_game_batch: int = 4  # Training steps per game batch
 
-    # Agent settings
+    # Agent settings. Dice already provide substantial natural exploration
+    # (TD-Gammon trained greedily); high temperatures over equity values
+    # (range ~[-3,3]) make early self-play near-random and waste the
+    # expensive 1-ply lookahead signal, so keep temperatures modest.
     neural_agent_temperature: float = 0.3  # Exploration during self-play
-    temperature_start: float = 1.0  # Starting temperature for exploration schedule
-    temperature_end: float = 0.1  # Final temperature for exploration schedule
+    temperature_start: float = 0.5  # Starting temperature for exploration schedule
+    temperature_end: float = 0.05  # Final temperature for exploration schedule
     use_temperature_schedule: bool = True  # Enable temperature decay over training
 
     # TD(lambda) settings
@@ -127,9 +143,6 @@ class TrainingConfig:
 
     # Position weighting
     use_position_weighting: bool = True  # Weight positions by importance for sampling
-
-    # Data augmentation
-    use_color_flip_augmentation: bool = True  # Double data via color flipping
 
     # Validation and early stopping
     validation_fraction: float = 0.1  # Fraction of games used for validation
@@ -447,6 +460,14 @@ def train(config: Optional[TrainingConfig] = None):
     if config is None:
         config = TrainingConfig()
 
+    if config.train_policy:
+        raise ValueError(
+            "train_policy=True is not supported: the policy head is "
+            "non-functional (action-hash collisions, no real policy targets "
+            "— see TODO.md item 104) and the replay buffer no longer emits "
+            "policy targets. Use value-only training (train_policy=False)."
+        )
+
     # Generate a unique run ID so log entries from different runs can be separated
     _current_run_id = uuid.uuid4().hex[:8]
 
@@ -502,7 +523,6 @@ def train(config: Optional[TrainingConfig] = None):
         min_size=config.replay_buffer_min_size,
         eviction_policy='fifo',
         use_position_weighting=config.use_position_weighting,
-        use_color_flip_augmentation=config.use_color_flip_augmentation,
     )
 
     # Create validation buffer (for early stopping)
@@ -651,9 +671,11 @@ def train(config: Optional[TrainingConfig] = None):
                     # Training step (gradient update)
                     state, step_metrics = train_step(state, train_batch, step_rng)
 
-                    # Update EMA weights
+                    # Update EMA weights (warmed-up decay so the EMA tracks
+                    # the params early instead of lagging at the random init)
                     ema_params = _update_ema_params(
-                        ema_params, state.params, config.ema_decay
+                        ema_params, state.params,
+                        _ema_decay_for_step(config.ema_decay, total_train_steps),
                     )
 
                     # Accumulate metrics

@@ -110,8 +110,8 @@ class TestWeightedReplayBuffer:
         game = _make_dummy_game(num_steps=5)
         buf.add_game(game)
 
-        assert len(buf._weights) == len(buf._steps)
-        assert all(w >= 1.0 for w in buf._weights)
+        assert len(buf) == 5
+        assert all(w >= 1.0 for w in buf._weights[:len(buf)])
 
     def test_unweighted_buffer_uniform_weights(self):
         """Buffer without weighting should have all weights = 1.0."""
@@ -122,7 +122,7 @@ class TestWeightedReplayBuffer:
         game = _make_dummy_game(num_steps=5)
         buf.add_game(game)
 
-        assert all(w == 1.0 for w in buf._weights)
+        assert all(w == 1.0 for w in buf._weights[:len(buf)])
 
     def test_weighted_sampling_runs(self):
         """Weighted sampling should produce valid batches."""
@@ -145,10 +145,10 @@ class TestWeightedReplayBuffer:
         )
         game = _make_dummy_game(num_steps=5)
         buf.add_game(game)
-        assert len(buf._weights) > 0
+        assert len(buf) > 0
 
         buf.clear()
-        assert len(buf._weights) == 0
+        assert len(buf) == 0
 
     def test_eviction_updates_weights(self):
         """When buffer is full, evicted entries should have updated weights."""
@@ -159,12 +159,12 @@ class TestWeightedReplayBuffer:
         # Fill buffer
         game1 = _make_dummy_game(num_steps=5)
         buf.add_game(game1)
-        assert len(buf._weights) == 5
+        assert len(buf) == 5
 
         # Add more (triggers eviction)
         game2 = _make_dummy_game(num_steps=3)
         buf.add_game(game2)
-        assert len(buf._weights) == 5  # Still max_size
+        assert len(buf) == 5  # Still max_size
 
 
 # ==============================================================================

@@ -193,11 +193,12 @@ class TestReplayBufferIntegration:
         # Sample batch
         batch = buffer.sample_batch(16)
 
-        # Verify batch structure
+        # Verify batch structure (policy targets/masks are placeholders
+        # in value-only training)
         assert batch['board_encoding'].shape[0] == 16
-        assert batch['target_policy'].shape == (16, get_action_space_size())
+        assert batch['target_policy'].shape == (1,)
         assert batch['equity_target'].shape == (16, 6)
-        assert batch['action_mask'].shape == (16, get_action_space_size())
+        assert batch['action_mask'].shape == (1,)
 
 
 class TestEndToEndTraining:
@@ -232,8 +233,8 @@ class TestEndToEndTraining:
                 num_layers=2,
                 ff_dim=256,
 
-                # Enable policy for neural self-play
-                train_policy=True,
+                # Value-only training (policy head is non-functional)
+                train_policy=False,
 
                 # Replay buffer
                 replay_buffer_size=100,
@@ -301,8 +302,8 @@ class TestEndToEndTraining:
                 num_layers=2,
                 ff_dim=256,
 
-                # Enable policy for neural self-play
-                train_policy=True,
+                # Value-only training (policy head is non-functional)
+                train_policy=False,
 
                 replay_buffer_size=100,
                 replay_buffer_min_size=5,

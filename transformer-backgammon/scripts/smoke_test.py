@@ -61,7 +61,7 @@ def main():
         num_layers=2,
         ff_dim=256,
         dropout_rate=0.1,
-        train_policy=True,
+        train_policy=False,  # Policy head is non-functional (TODO item 104)
         learning_rate=3e-4,
         warmup_steps=50,
         replay_buffer_size=10000,

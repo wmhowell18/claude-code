@@ -896,6 +896,24 @@ def apply_move(board: Board, player: Player, move: Move) -> Board:
     return new_board
 
 
+def pass_turn(board: Board) -> Board:
+    """Return a copy of the board with the turn passed to the other player.
+
+    Used when the player to move has no legal moves (dances): the checkers
+    stay where they are but the opponent moves next. Evaluating the returned
+    board gives a value from the correct (next mover's) perspective.
+
+    Args:
+        board: Current board
+
+    Returns:
+        New board, identical checkers, player_to_move flipped
+    """
+    new_board = board.copy()
+    new_board.player_to_move = board.player_to_move.opponent()
+    return new_board
+
+
 def _apply_move_step(board: Board, player: Player, step: MoveStep) -> None:
     """Apply a single move step to a board (mutates board).
 
