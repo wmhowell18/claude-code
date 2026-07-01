@@ -6,7 +6,7 @@
 >
 > **Known Issues (Feb 2026, updated Mar 2026)**: Code review identified several correctness bugs requiring attention before long training runs: policy head is non-functional (hash collisions + dummy targets — workaround: `train_policy=False` default), ~~global features are implemented but not wired into training~~ **(FIXED Mar 2026 — `input_feature_dim=10` with 8 global features)**, ~~TD targets are not renormalized before cross-entropy loss~~ **(FIXED Mar 2026 — moved to 6-dim equity, fixing zero-gradient bug for lose_normal outcomes)**, ~~dead code and stale configs~~ **(FIXED Mar 2026 — removed dead `train_step` from network.py and stale `TrainingConfig` from types.py)**, ~~and training telemetry is misleading (train_acc always 0.0, LR logged as constant peak)~~ **(FIXED Mar 2026 — equity_accuracy metric added, LR reads from schedule)**. See "KNOWN ISSUES" section below.
 >
-> **Root-cause review (July 2026)**: Training runs had never beaten random play. A full pipeline audit found and fixed two catastrophic bugs — color-flip augmentation corrupting 50% of training labels (item 120) and a direction-ambiguous board encoding (item 121) — plus a lagging-EMA self-play bug (item 122), a stale 5-dim value formula in the agent (item 123), and sign errors in the "opponent dances" branches of 1-ply/2-ply search (item 124). Search encoding was also vectorized (item 108). The pipeline is now expected to actually learn; see items 120-125 below.
+> **Root-cause review (July 2026)**: Training runs had never beaten random play. A full pipeline audit found and fixed two catastrophic bugs — color-flip augmentation corrupting 50% of training labels (item 120) and a direction-ambiguous board encoding (item 121) — plus a lagging-EMA self-play bug (item 122), a stale 5-dim value formula in the agent (item 123), sign errors in the "opponent dances" branches of 1-ply/2-ply search (item 124), a bar↔off swap in `flip_board` (item 126), and White's borne-off checkers scored at 25 pips each in `pip_count` (item 127). Search encoding was also vectorized (item 108), and the test suite — un-runnable since Mar 2026 — is green again (item 128). **Verified: smoke test now shows 0-ply win rate vs random jumping from ~70% (untrained) to ~94% after 480 warmstart games** — the pipeline learns.
 
 ---
 
@@ -131,6 +131,31 @@ training quality and telemetry — address before committing to multi-hour TPU r
   weights in preallocated numpy arrays (item 110 fixed too: vectorized gather instead of Python
   list comprehension), and returns (1,)-shaped policy placeholders. `train()` now raises on
   `train_policy=True` (see item 104). *(July 2026)*
+
+- [x] **126. `flip_board` swapped bar and off** — it mirrored all 26 indices (i → 25-i), so
+  checkers on the bar became borne-off checkers in the flipped board and vice versa. Both players
+  keep bar=0/off=25 in their own arrays; only points 1-24 mirror. Found via property testing
+  (canonical-encoding flip invariance over full random games). The old color-flip augmentation was
+  feeding these corrupted boards into training on top of its label inversion (item 120).
+  (Impact: large for any flip_board consumer) *(July 2026)*
+
+- [x] **127. `pip_count` scored White's borne-off checkers at 25 pips each** — `point * count`
+  with point=25, while Black's off contributed 0 (25-25). Bearing off as White INCREASED the pip
+  count, so the greedy pip-count warmstart agent actively avoided bearing off as White, and
+  pip-based global features / race equity were color-asymmetric. Two downstream compensation
+  hacks were papering over it (race.py subtracted 25/off for White only; board.py
+  race_equity_estimate subtracted 25/off for BOTH players, driving Black's race pips negative).
+  Borne-off checkers now contribute 0 for both players and the hacks are removed.
+  (Impact: large — corrupted warmstart data and race features) *(July 2026)*
+
+- [x] **128. Test suite un-runnable since Mar 2026 + 18 pre-existing failures** — test_network.py
+  imported helpers deleted in item 106, breaking collection of the entire suite (which is how items
+  120-127 went unnoticed). Rewrote it against the authoritative losses.py train_step. Fixed 18
+  pre-existing test failures (wrong cube-pass expectations, EMA convergence math, LR-warmup-zero
+  fixtures, 2-dim encoding config paired with 10-dim networks, checkpoint step/index confusion).
+  Added `checkpoint_matches_architecture()`: train() now inspects the RAW checkpoint structure
+  before restoring, catching layer-count changes the old post-restore shape check couldn't see.
+  **Suite now: 533 passed, 0 failed.** *(July 2026)*
 
 ### Notes (July 2026 session — root-cause audit)
 
