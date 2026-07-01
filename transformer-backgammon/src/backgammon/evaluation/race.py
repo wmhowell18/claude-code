@@ -45,16 +45,12 @@ def effective_pip_count(board: Board, player: Player) -> float:
     Returns:
         Effective pip count (higher is worse for the player).
     """
+    # pip_count correctly excludes borne-off checkers for both players
     raw_pips = pip_count(board, player)
 
     # Count checkers on the board (not borne off)
     checkers_off = board.get_checkers(player, 25)
     checkers_remaining = 15 - checkers_off
-
-    # pip_count includes point 25 (borne off) which contributes 25*count for
-    # White but 0 for Black. Borne-off checkers should not count any pips.
-    if player == Player.WHITE:
-        raw_pips -= 25 * checkers_off
 
     if checkers_remaining == 0:
         return 0.0
