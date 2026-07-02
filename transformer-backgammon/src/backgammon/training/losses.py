@@ -200,10 +200,7 @@ def prepare_training_batch(
     Returns:
         Training batch dictionary
     """
-    from backgammon.encoding.encoder import encode_board, raw_encoding_config, outcome_to_equity
-    from backgammon.encoding.action_encoder import encode_move_to_one_hot, create_action_mask
-
-    encoding_config = raw_encoding_config()
+    from backgammon.encoding.encoder import encode_boards_canonical, outcome_to_equity
 
     # Extract all (step, game) pairs so we can access the outcome
     all_items = []
@@ -219,44 +216,30 @@ def prepare_training_batch(
         all_items = random.sample(all_items, max_batch_size)
 
     if not all_items:
-        # Return minimal valid batch
-        from backgammon.encoding.action_encoder import get_action_space_size
-        action_size = get_action_space_size()
+        # Return minimal valid batch (canonical encoding: 10 features)
         return {
-            'board_encoding': jnp.zeros((1, 26, encoding_config.feature_dim)),
-            'target_policy': jnp.zeros((1, action_size)),
+            'board_encoding': jnp.zeros((1, 26, 10)),
+            'target_policy': jnp.zeros((1,), dtype=jnp.float32),
             'equity_target': jnp.zeros((1, 6)),
-            'action_mask': jnp.ones((1, action_size)),
+            'action_mask': jnp.ones((1,), dtype=jnp.bool_),
         }
 
-    # Prepare batch data
-    board_encodings = []
-    target_policies = []
+    # Encode boards (canonical mover perspective) and equity targets
+    boards = [step.board for step, _ in all_items]
+    board_encodings = encode_boards_canonical(boards)
+
     equity_targets = []
-    action_masks = []
-
     for step, outcome in all_items:
-        # Encode board state
-        encoded = encode_board(encoding_config, step.board)
-        board_encodings.append(encoded.position_features[0])
-
-        # Create target policy from move played
-        target_policy = encode_move_to_one_hot(step.move_taken, step.legal_moves)
-        target_policies.append(target_policy)
-
-        # Compute equity target from game outcome
         equity = outcome_to_equity(outcome, step.player)
         equity_targets.append(equity.to_array())
 
-        # Create action mask
-        mask = create_action_mask(step.legal_moves)
-        action_masks.append(mask)
-
+    # Value-only training: policy targets/masks are placeholders (the
+    # policy head is non-functional; see TODO item 104)
     return {
-        'board_encoding': jnp.array(board_encodings, dtype=jnp.float32),
-        'target_policy': jnp.array(target_policies, dtype=jnp.float32),
+        'board_encoding': jnp.asarray(board_encodings),
+        'target_policy': jnp.zeros((1,), dtype=jnp.float32),
         'equity_target': jnp.array(equity_targets, dtype=jnp.float32),
-        'action_mask': jnp.array(action_masks, dtype=jnp.bool_),
+        'action_mask': jnp.ones((1,), dtype=jnp.bool_),
     }
 
 

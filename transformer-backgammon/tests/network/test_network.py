@@ -25,18 +25,36 @@ from backgammon.network.network import (
     # Forward pass
     forward,
     forward_batch,
-
-    # Loss functions
-    equity_loss,
-    mse_equity_loss,
-    policy_loss,
-    total_loss,
-
-    # Training
-    create_train_state,
-    train_step,
-    eval_step,
 )
+
+# The authoritative loss functions and train_step live in training/losses.py
+# (the duplicates that used to live in network.py were dead code, removed
+# Mar 2026 — TODO item 106).
+import optax
+from flax.training import train_state as flax_train_state
+from backgammon.training.losses import (
+    train_step as losses_train_step,
+    compute_metrics,
+)
+
+
+def _make_train_state(model, variables, learning_rate=1e-4):
+    """Build a minimal TrainState around an initialized model."""
+    return flax_train_state.TrainState.create(
+        apply_fn=model.apply,
+        params=variables['params'],
+        tx=optax.adam(learning_rate),
+    )
+
+
+def _make_batch(features, targets):
+    """Build a value-only training batch dict for losses.train_step."""
+    return {
+        'board_encoding': features,
+        'equity_target': targets,
+        'target_policy': jnp.zeros((1,), dtype=jnp.float32),
+        'action_mask': jnp.ones((1,), dtype=jnp.bool_),
+    }
 
 
 class TestTransformerConfig:
@@ -219,86 +237,8 @@ class TestForwardPass:
         assert attn_weights.shape == (1, config.num_layers, config.num_heads, 26, 26)
 
 
-class TestLossFunctions:
-    """Tests for loss functions."""
-
-    def test_equity_loss(self):
-        """Test equity loss computation."""
-        # Perfect prediction
-        predicted = jnp.array([[0.2, 0.3, 0.1, 0.2, 0.2]], dtype=jnp.float32)
-        target = jnp.array([[0.2, 0.3, 0.1, 0.2, 0.2]], dtype=jnp.float32)
-
-        loss = equity_loss(predicted, target)
-
-        # Loss should be finite for identical distributions
-        assert jnp.isfinite(loss)
-        assert float(loss) > 0.0
-        assert float(loss) < 5.0
-
-    def test_equity_loss_wrong_prediction(self):
-        """Test equity loss with wrong prediction."""
-        predicted = jnp.array([[1.0, 0.0, 0.0, 0.0, 0.0]], dtype=jnp.float32)
-        target = jnp.array([[0.0, 0.0, 0.0, 0.0, 1.0]], dtype=jnp.float32)
-
-        loss = equity_loss(predicted, target)
-
-        # Loss should be large for completely wrong prediction
-        assert loss > 1.0
-
-    def test_mse_equity_loss(self):
-        """Test MSE equity loss."""
-        predicted = jnp.array([[0.2, 0.3, 0.1, 0.2, 0.2]], dtype=jnp.float32)
-        target = jnp.array([[0.2, 0.3, 0.1, 0.2, 0.2]], dtype=jnp.float32)
-
-        loss = mse_equity_loss(predicted, target)
-
-        # Loss should be very small for perfect prediction
-        assert loss < 0.01
-
-    def test_policy_loss(self):
-        """Test policy loss computation."""
-        predicted_logits = jnp.array([[1.0, 2.0, 0.5]], dtype=jnp.float32)
-        target_probs = jnp.array([[0.2, 0.6, 0.2]], dtype=jnp.float32)
-
-        loss = policy_loss(predicted_logits, target_probs)
-
-        # Loss should be finite and positive
-        assert jnp.isfinite(loss)
-        assert loss > 0.0
-
-    def test_total_loss(self):
-        """Test combined loss."""
-        equity_pred = jnp.array([[0.2, 0.2, 0.1, 0.2, 0.2, 0.1]], dtype=jnp.float32)
-        equity_target = jnp.array([[0.2, 0.2, 0.1, 0.2, 0.2, 0.1]], dtype=jnp.float32)
-
-        loss = total_loss(equity_pred, equity_target)
-
-        # Should equal equity loss when no policy
-        assert jnp.isfinite(loss)
-        assert float(loss) > 0.0
-        assert float(loss) < 5.0
-
-    def test_total_loss_with_policy(self):
-        """Test combined loss with policy."""
-        equity_pred = jnp.array([[0.2, 0.2, 0.1, 0.2, 0.2, 0.1]], dtype=jnp.float32)
-        equity_target = jnp.array([[0.2, 0.2, 0.1, 0.2, 0.2, 0.1]], dtype=jnp.float32)
-        policy_pred = jnp.array([[1.0, 2.0, 0.5]], dtype=jnp.float32)
-        policy_target = jnp.array([[0.2, 0.6, 0.2]], dtype=jnp.float32)
-
-        loss = total_loss(
-            equity_pred, equity_target,
-            policy_pred, policy_target,
-            equity_weight=1.0,
-            policy_weight=0.5
-        )
-
-        # Should be combination of equity and policy loss
-        assert loss > 0.0
-        assert jnp.isfinite(loss)
-
-
 class TestTraining:
-    """Tests for training functionality."""
+    """Tests for training via the authoritative losses.train_step."""
 
     @pytest.fixture
     def setup_training(self):
@@ -307,8 +247,8 @@ class TestTraining:
         config.input_feature_dim = 2
         rng_key = jax.random.PRNGKey(42)
 
-        model, params = init_network(config, rng_key)
-        state = create_train_state(model, params, learning_rate=1e-4)
+        model, variables = init_network(config, rng_key)
+        state = _make_train_state(model, variables, learning_rate=1e-4)
 
         # Create training data
         encoding_config = raw_encoding_config()
@@ -335,17 +275,19 @@ class TestTraining:
         state, features, targets, rng_key = setup_training
 
         # Perform training step
-        new_state, loss_value = train_step(state, features, targets, rng_key)
+        new_state, metrics = losses_train_step(
+            state, _make_batch(features, targets), rng_key
+        )
 
         # State should be updated
         assert new_state.step == state.step + 1
 
         # Loss should be finite
+        loss_value = metrics['total_loss']
         assert jnp.isfinite(loss_value)
         assert loss_value > 0.0
 
         # Parameters should change
-        # (check first param to verify update)
         old_params_flat = jax.tree_util.tree_leaves(state.params)
         new_params_flat = jax.tree_util.tree_leaves(new_state.params)
 
@@ -356,36 +298,36 @@ class TestTraining:
         )
         assert changed, "Parameters should change after training step"
 
-    def test_eval_step(self, setup_training):
-        """Test evaluation step."""
+    def test_eval_metrics(self, setup_training):
+        """Test evaluation metrics computation."""
         state, features, targets, _ = setup_training
 
-        # Perform eval step
-        loss_value = eval_step(state, features, targets)
+        metrics = compute_metrics(state, _make_batch(features, targets))
 
         # Loss should be finite
-        assert jnp.isfinite(loss_value)
-        assert loss_value > 0.0
+        assert np.isfinite(metrics['loss'])
+        assert metrics['loss'] > 0.0
+        assert 'equity_accuracy' in metrics
 
     def test_multiple_train_steps(self, setup_training):
-        """Test multiple training steps reduce loss."""
+        """Test multiple training steps keep the loss finite."""
         state, features, targets, rng_key = setup_training
+        batch = _make_batch(features, targets)
 
-        # Get initial loss
-        initial_loss = eval_step(state, features, targets)
+        initial_loss = compute_metrics(state, batch)['loss']
 
         # Train for several steps
         for i in range(10):
             rng_key, step_key = jax.random.split(rng_key)
-            state, _ = train_step(state, features, targets, step_key)
+            state, _ = losses_train_step(state, batch, step_key)
 
-        # Get final loss
-        final_loss = eval_step(state, features, targets)
+        final_loss = compute_metrics(state, batch)['loss']
 
         # Loss should decrease (or at least not increase significantly)
         # Note: With random initialization and few steps, might not always decrease
         # So we just check it's still finite and reasonable
-        assert jnp.isfinite(final_loss)
+        assert np.isfinite(initial_loss)
+        assert np.isfinite(final_loss)
 
 
 class TestModelComponents:
@@ -495,14 +437,16 @@ class TestBFloat16:
         config.dtype = jnp.bfloat16
         rng_key = jax.random.PRNGKey(42)
 
-        model, params = init_network(config, rng_key)
-        state = create_train_state(model, params, learning_rate=1e-4)
+        model, variables = init_network(config, rng_key)
+        state = _make_train_state(model, variables, learning_rate=1e-4)
 
         features = jnp.ones((8, 26, 2), dtype=jnp.float32)
         targets = jnp.ones((8, 6), dtype=jnp.float32) / 6.0
 
-        new_state, loss = train_step(state, features, targets, rng_key)
-        assert jnp.isfinite(loss)
+        new_state, metrics = losses_train_step(
+            state, _make_batch(features, targets), rng_key
+        )
+        assert jnp.isfinite(metrics['total_loss'])
         assert new_state.step == state.step + 1
 
     def test_float32_backward_compat(self):

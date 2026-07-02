@@ -14,7 +14,9 @@ from flax.training import train_state
 
 from backgammon.core.board import Board
 from backgammon.core.types import Player, Move, Dice, LegalMoves
-from backgammon.encoding.encoder import encode_board, enhanced_encoding_config
+from backgammon.encoding.encoder import (
+    enhanced_encoding_config, encode_boards_canonical,
+)
 from backgammon.encoding.action_encoder import encode_move_to_action
 from backgammon.evaluation.agents import Agent
 from backgammon.evaluation.search import select_move as search_select_move
@@ -84,9 +86,8 @@ class NeuralNetworkAgent:
             return best_move
 
         # 0-ply: use policy head for move selection
-        # Encode board state
-        encoded = encode_board(self.encoding_config, board)
-        encoded_board = encoded.position_features  # Shape: (1, 26, feature_dim)
+        # Encode board state (canonical fast path, shape (1, 26, 10))
+        encoded_board = encode_boards_canonical([board])
 
         # Run network inference
         policy_logits, value = self._forward(encoded_board)
@@ -133,20 +134,17 @@ class NeuralNetworkAgent:
         jit_fn = get_jit_inference(self.state.apply_fn)
         equity, policy_logits, _, _ = jit_fn(self.state.params, encoded_board)
 
-        # Compute expected value from equity distribution using proper formula.
-        # Equity outputs: [win_normal, win_gammon, win_bg, lose_gammon, lose_bg]
-        # P(lose_normal) = 1 - sum(all 5 components)
-        # Expected value = sum(win_probs * points) - sum(lose_probs * points)
+        # Expected value from the explicit 6-dim equity distribution:
+        # [win_n, win_g, win_bg, lose_n, lose_g, lose_bg]
         win_value = (
             equity[:, 0] * 1.0 +   # win normal
             equity[:, 1] * 2.0 +   # win gammon
             equity[:, 2] * 3.0     # win backgammon
         )
-        lose_normal = 1.0 - jnp.sum(equity, axis=-1)
         lose_value = (
-            lose_normal * 1.0 +     # lose normal
-            equity[:, 3] * 2.0 +   # lose gammon
-            equity[:, 4] * 3.0     # lose backgammon
+            equity[:, 3] * 1.0 +   # lose normal
+            equity[:, 4] * 2.0 +   # lose gammon
+            equity[:, 5] * 3.0     # lose backgammon
         )
         value = win_value - lose_value
 
@@ -195,9 +193,8 @@ class NeuralNetworkAgent:
         Returns:
             Value estimate (higher is better for player)
         """
-        # Encode board
-        encoded = encode_board(self.encoding_config, board)
-        encoded_board = encoded.position_features
+        # Encode board (canonical fast path)
+        encoded_board = encode_boards_canonical([board])
 
         # Run forward pass
         _, value = self._forward(encoded_board)
@@ -218,8 +215,7 @@ class NeuralNetworkAgent:
             Array of shape (6,) with [win_n, win_g, win_bg, lose_n,
             lose_g, lose_bg] from board.player_to_move's perspective.
         """
-        encoded = encode_board(self.encoding_config, board)
-        encoded_board = encoded.position_features
+        encoded_board = encode_boards_canonical([board])
 
         jit_fn = get_jit_inference(self.state.apply_fn)
         equity, _, _, _ = jit_fn(self.state.params, encoded_board)

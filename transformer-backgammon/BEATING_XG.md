@@ -25,9 +25,9 @@ After the bug fixes just landed:
 |-----------|--------|------------|
 | Game engine | Complete | Yes |
 | Neural network | Modern transformer (RMSNorm, SwiGLU, pre-norm, muP) | Comparable architecture |
-| Training pipeline | TD(lambda) + curriculum + EMA + AdamW + color-flip aug | Comparable approach |
+| Training pipeline | TD(lambda) + curriculum + EMA + AdamW (label-corrupting flip augmentation removed July 2026) | Comparable approach |
 | Search | 0/1/2-ply with batching | Behind (XG uses 3-ply + rollouts) |
-| Board encoding | 10-dim enhanced | Reasonable |
+| Board encoding | 10-dim enhanced, canonical mover perspective (mirrored for Black, July 2026) | Reasonable |
 | World model | Stochastic MuZero architecture (not yet trained) | Ahead (XG has none) |
 | Bearoff database | None | Major gap |
 | Opening book | None | Minor gap |

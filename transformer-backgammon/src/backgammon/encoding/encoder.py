@@ -4,6 +4,18 @@ This module implements various encoding strategies for converting board states
 into neural network input features. Following the philosophy of letting the
 transformer learn representations, we provide both minimal (raw) encodings
 and richer encodings with hand-crafted features.
+
+Canonical mover perspective
+---------------------------
+All encodings are canonicalized to the perspective of the player to move:
+channel 0 is always the mover's checkers, channel 1 the opponent's, and the
+point axis is mirrored for Black so that the mover ALWAYS moves from high
+indices toward index 1 (bar stays at 0, borne-off at 25). Without the mirror,
+a White-to-move position and its color-swapped Black-to-move counterpart
+would produce identical spatial features despite having opposite equities —
+the network could never learn direction-dependent structure (primes, home
+boards, blots). With the mirror, index i always means "i pips from bearing
+off" for the mover, and White/Black symmetry is built into the input itself.
 """
 
 from typing import List, Optional, Tuple
@@ -177,6 +189,74 @@ def feature_dimension(config: EncodingConfig) -> int:
 
 
 # ==============================================================================
+# CANONICAL MOVER-PERSPECTIVE ENCODING
+# ==============================================================================
+
+# Index map that mirrors the point axis: bar (0) and off (25) stay in place,
+# points 1-24 are reversed. Used to canonicalize Black-to-move boards so the
+# mover always moves from high indices toward index 1.
+MIRROR_POINTS = np.concatenate(
+    ([0], np.arange(24, 0, -1), [25])
+).astype(np.intp)
+
+
+def canonical_point(board: Board, point: Point) -> Point:
+    """Map a canonical point index to the physical point for this board.
+
+    For White to move the mapping is the identity. For Black to move the
+    point axis is mirrored (point p -> 25-p, bar and off unchanged) so that
+    canonical index i always means "i pips from bearing off" for the mover.
+
+    Args:
+        board: Current board state
+        point: Canonical point index (0=bar, 1-24=points, 25=off)
+
+    Returns:
+        Physical point index on the board
+    """
+    if board.player_to_move == Player.WHITE:
+        return point
+    return int(MIRROR_POINTS[point])
+
+
+def encode_boards_canonical(boards: List[Board]) -> NDArray[np.float32]:
+    """Fast vectorized canonical encoding with global features (dim=10).
+
+    This is THE encoding used by training, self-play, and search. It slices
+    numpy checker arrays directly (no per-point Python loops) and appends
+    the 8 global features broadcast to every position.
+
+    Channel 0 = mover's checkers, channel 1 = opponent's, point axis
+    mirrored for Black so the mover always moves toward index 1.
+
+    Args:
+        boards: List of Board objects.
+
+    Returns:
+        Array of shape (len(boards), 26, 10).
+    """
+    n = len(boards)
+    features = np.zeros((n, 26, 10), dtype=np.float32)
+    inv15 = np.float32(1.0 / 15.0)
+    for i, board in enumerate(boards):
+        if board.player_to_move == Player.WHITE:
+            features[i, :, 0] = board.white_checkers * inv15
+            features[i, :, 1] = board.black_checkers * inv15
+        else:
+            # Mirror the point axis so the mover moves toward index 1
+            features[i, :, 0] = board.black_checkers[MIRROR_POINTS] * inv15
+            features[i, :, 1] = board.white_checkers[MIRROR_POINTS] * inv15
+        # Global features are mover-relative already (invariant to mirroring)
+        features[i, :, 2:10] = compute_global_features(board)[np.newaxis, :]
+    return features
+
+
+def encode_board_canonical(board: Board) -> NDArray[np.float32]:
+    """Canonical encoding of a single board. Shape (26, 10)."""
+    return encode_boards_canonical([board])[0]
+
+
+# ==============================================================================
 # RAW ENCODING
 # ==============================================================================
 
@@ -185,18 +265,22 @@ def encode_raw(board: Board, point: Point) -> NDArray[np.float32]:
     """Encode a single position with just checker counts.
 
     This is the most general encoding - let the transformer learn everything.
+    The point index is canonical (mover-relative): for Black to move it is
+    mirrored onto the physical board, so index i always means "i pips from
+    bearing off" for the mover.
 
     Args:
         board: Current board state
-        point: Which position to encode (0=bar, 1-24=points, 25=off)
+        point: Canonical position to encode (0=bar, 1-24=points, 25=off)
 
     Returns:
         Array of shape (2,) containing [our_checkers, opp_checkers]
     """
     player = board.player_to_move
+    phys = canonical_point(board, point)
 
-    our_checkers = board.get_checkers(player, point)
-    opp_checkers = board.get_checkers(player.opponent(), point)
+    our_checkers = board.get_checkers(player, phys)
+    opp_checkers = board.get_checkers(player.opponent(), phys)
 
     # Normalize to [0, 1] range (max 15 checkers on a point)
     return np.array([our_checkers / 15.0, opp_checkers / 15.0], dtype=np.float32)
@@ -221,9 +305,10 @@ def encode_one_hot(board: Board, point: Point) -> NDArray[np.float32]:
         [our_checkers_onehot (16), opp_checkers_onehot (16)]
     """
     player = board.player_to_move
+    phys = canonical_point(board, point)
 
-    our_checkers = board.get_checkers(player, point)
-    opp_checkers = board.get_checkers(player.opponent(), point)
+    our_checkers = board.get_checkers(player, phys)
+    opp_checkers = board.get_checkers(player.opponent(), phys)
 
     # One-hot encode counts (0-15)
     our_onehot = np.zeros(16, dtype=np.float32)
@@ -253,12 +338,12 @@ def encode_geometric(board: Board, point: Point) -> NDArray[np.float32]:
         Array of shape (5,) containing:
         [our_checkers, opp_checkers, distance_to_home, is_home_board, is_opp_home]
     """
-    player = board.player_to_move
-
-    # Start with raw encoding
+    # Start with raw encoding (already canonical / mover-relative)
     raw = encode_raw(board, point)
 
-    # Calculate geometric features
+    # Calculate geometric features in canonical coordinates: the mover
+    # always moves toward index 1, so home is 1-6 and opponent home 19-24
+    # regardless of which color is to move.
     if point == 0:  # Bar
         distance_to_home = 1.0  # Normalized: furthest from home
         is_home_board = 0.0
@@ -268,16 +353,9 @@ def encode_geometric(board: Board, point: Point) -> NDArray[np.float32]:
         is_home_board = 0.0
         is_opp_home = 0.0
     else:
-        # For White: home is 1-6, opponent home is 19-24
-        # For Black: home is 19-24, opponent home is 1-6
-        if player == Player.WHITE:
-            distance_to_home = point / 24.0  # Normalize to [0, 1]
-            is_home_board = 1.0 if point <= 6 else 0.0
-            is_opp_home = 1.0 if point >= 19 else 0.0
-        else:  # Black
-            distance_to_home = (25 - point) / 24.0
-            is_home_board = 1.0 if point >= 19 else 0.0
-            is_opp_home = 1.0 if point <= 6 else 0.0
+        distance_to_home = point / 24.0  # Normalize to [0, 1]
+        is_home_board = 1.0 if point <= 6 else 0.0
+        is_opp_home = 1.0 if point >= 19 else 0.0
 
     return np.concatenate([raw, [distance_to_home, is_home_board, is_opp_home]])
 
@@ -300,29 +378,30 @@ def encode_strategic(board: Board, point: Point) -> NDArray[np.float32]:
         Array of shape (~15,) containing geometric + strategic features
     """
     player = board.player_to_move
+    phys = canonical_point(board, point)
 
-    # Start with geometric encoding
+    # Start with geometric encoding (canonical)
     geometric = encode_geometric(board, point)
 
-    # Calculate strategic features
-    our_checkers = board.get_checkers(player, point)
-    opp_checkers = board.get_checkers(player.opponent(), point)
+    # Calculate strategic features. Checker counts are read at the physical
+    # point; positional predicates use canonical coordinates (mover moves
+    # toward index 1, so opponent home is 19-24).
+    our_checkers = board.get_checkers(player, phys)
+    opp_checkers = board.get_checkers(player.opponent(), phys)
 
     # Is this a blot? (single checker vulnerable to hit)
     is_blot = 1.0 if our_checkers == 1 else 0.0
 
     # Is this an anchor? (2+ checkers in opponent's home board)
-    if player == Player.WHITE:
-        is_anchor = 1.0 if our_checkers >= 2 and point >= 19 else 0.0
-    else:
-        is_anchor = 1.0 if our_checkers >= 2 and point <= 6 else 0.0
+    is_anchor = 1.0 if our_checkers >= 2 and point >= 19 else 0.0
 
     # Is this part of a prime? (consecutive made points)
     is_prime = 0.0
     if our_checkers >= 2 and 1 <= point <= 24:
-        # Check if adjacent points are also made
+        # Check if adjacent points are also made (adjacency is preserved
+        # under mirroring, so check physical neighbors)
         adjacent_made = 0
-        for adj in [point - 1, point + 1]:
+        for adj in [phys - 1, phys + 1]:
             if 1 <= adj <= 24 and board.get_checkers(player, adj) >= 2:
                 adjacent_made += 1
         is_prime = adjacent_made / 2.0
@@ -334,12 +413,7 @@ def encode_strategic(board: Board, point: Point) -> NDArray[np.float32]:
     is_made = 1.0 if our_checkers >= 2 else 0.0
 
     # Advanced anchor? (made point in opponent territory)
-    is_advanced_anchor = 0.0
-    if our_checkers >= 2:
-        if player == Player.WHITE and point >= 13:
-            is_advanced_anchor = 1.0
-        elif player == Player.BLACK and point <= 12:
-            is_advanced_anchor = 1.0
+    is_advanced_anchor = 1.0 if our_checkers >= 2 and point >= 13 else 0.0
 
     # Stack height (normalized)
     stack_height = our_checkers / 15.0

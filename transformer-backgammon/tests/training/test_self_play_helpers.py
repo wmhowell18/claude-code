@@ -162,11 +162,16 @@ class TestEMAParams:
         np.testing.assert_allclose(updated['w'], [100.0])
 
     def test_ema_convergence(self):
-        """Repeated updates should converge to the target."""
+        """Repeated updates should converge to the target.
+
+        With decay d over n steps the remaining gap is d^n:
+        0.9^100 ~ 2.7e-5, comfortably within tolerance. (The previous
+        version used 0.99^100 ~ 0.366, which can never satisfy atol=0.1.)
+        """
         ema_params = {'w': jnp.array([0.0])}
         params = {'w': jnp.array([1.0])}
 
         for _ in range(100):
-            ema_params = _update_ema_params(ema_params, params, decay=0.99)
+            ema_params = _update_ema_params(ema_params, params, decay=0.9)
 
         np.testing.assert_allclose(ema_params['w'], [1.0], atol=0.1)

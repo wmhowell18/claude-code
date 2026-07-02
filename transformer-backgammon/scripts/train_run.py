@@ -308,9 +308,9 @@ def build_config(preset_name, dtype="bfloat16", checkpoint_dir=None, log_dir=Non
         use_1ply_selfplay=True,
         lookahead_top_k=8,
 
-        # Data augmentation
+        # Position weighting (color symmetry is built into the canonical
+        # mover-perspective encoding; no flip augmentation needed)
         use_position_weighting=True,
-        use_color_flip_augmentation=True,
 
         # Evaluation & checkpointing
         checkpoint_every_n_batches=e["checkpoint_every_n_batches"],

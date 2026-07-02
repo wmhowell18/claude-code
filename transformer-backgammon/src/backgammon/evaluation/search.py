@@ -31,10 +31,16 @@ from backgammon.core.board import (
     is_game_over,
     winner,
     pip_count,
+    pass_turn,
 )
 from backgammon.core.types import Player, Move, MoveStep, Dice, LegalMoves, GameOutcome
 from backgammon.core.dice import ALL_DICE_ROLLS, DICE_PROBABILITIES
-from backgammon.encoding.encoder import raw_encoding_config, enhanced_encoding_config, EncodingConfig, compute_global_features
+from backgammon.encoding.encoder import (
+    raw_encoding_config,
+    enhanced_encoding_config,
+    EncodingConfig,
+    encode_boards_canonical,
+)
 from backgammon.utils.jit_cache import get_jit_inference
 
 
@@ -212,11 +218,29 @@ class TranspositionTable:
         return f"TranspositionTable: {len(self._table)} entries"
 
 
+# Batch sizes to pad to, minimizing JIT recompilations. Each unique batch
+# size triggers a fresh XLA compile; padding to these common sizes keeps
+# the number of compilations small during search.
+_BATCH_PAD_SIZES = [1, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+
+
+def _pad_batch_size(n: int) -> int:
+    """Find smallest padded batch size >= n."""
+    for s in _BATCH_PAD_SIZES:
+        if n <= s:
+            return s
+    return ((n + 255) // 256) * 256
+
+
 def _encode_boards_batch(
     boards: List[Board],
     encoding_config: EncodingConfig,
 ) -> np.ndarray:
     """Encode multiple boards into a batch array for network evaluation.
+
+    Uses the shared vectorized canonical encoder for the standard
+    10-feature encoding (numpy slicing, no per-point Python loops).
+    Falls back to the generic per-point path for exotic configs.
 
     Args:
         boards: List of board states to encode.
@@ -225,23 +249,15 @@ def _encode_boards_batch(
     Returns:
         Array of shape (len(boards), 26, feature_dim).
     """
-    from backgammon.encoding.encoder import extract_position_features
+    if (encoding_config.feature_dim == 10
+            and encoding_config.include_global_features
+            and not encoding_config.use_one_hot_counts
+            and not encoding_config.include_geometric_features
+            and not encoding_config.include_strategic_features):
+        return encode_boards_canonical(boards)
 
-    batch_size = len(boards)
-    features = np.zeros(
-        (batch_size, 26, encoding_config.feature_dim), dtype=np.float32
-    )
-    for i, board in enumerate(boards):
-        global_feats = compute_global_features(board) if encoding_config.include_global_features else None
-        for point in range(26):
-            per_pos = extract_position_features(
-                encoding_config, board, point
-            )
-            if global_feats is not None:
-                features[i, point] = np.concatenate([per_pos, global_feats])
-            else:
-                features[i, point] = per_pos
-    return features
+    from backgammon.encoding.encoder import encode_boards
+    return encode_boards(encoding_config, boards).position_features
 
 
 def _equity_to_value(equity: jnp.ndarray) -> jnp.ndarray:
@@ -289,12 +305,21 @@ def _batch_evaluate(
     if not boards:
         return np.array([], dtype=np.float32)
 
+    n = len(boards)
     encoded = _encode_boards_batch(boards, encoding_config)
+
+    # Pad to a common batch size to minimize JIT recompilations
+    padded_n = _pad_batch_size(n)
+    if padded_n > n:
+        padded = np.zeros((padded_n,) + encoded.shape[1:], dtype=np.float32)
+        padded[:n] = encoded
+        encoded = padded
+
     encoded_jax = jnp.array(encoded)
 
     jit_fn = get_jit_inference(state.apply_fn)
     equity, _, _, _ = jit_fn(state.params, encoded_jax)
-    values = _equity_to_value(equity)
+    values = _equity_to_value(equity[:n])
     return np.array(values, dtype=np.float32)
 
 
@@ -484,9 +509,11 @@ def evaluate_move_1ply(
         opp_moves = generate_legal_moves(new_board, opponent, dice_roll)
 
         if not opp_moves:
-            # Opponent has no legal moves — position stays the same.
-            # Evaluate from our perspective (it's our turn again).
-            all_boards.append(new_board)
+            # Opponent dances — checkers unchanged, our turn again.
+            # pass_turn(new_board) has player_to_move = us, so the network
+            # value is OUR value and the standard negate-for-opponent
+            # aggregation below stays sign-consistent.
+            all_boards.append(pass_turn(new_board))
             dice_move_map.append((dice_idx, 1, False, 0.0))
             continue
 
@@ -618,8 +645,10 @@ def select_move_1ply(
             opp_moves = generate_legal_moves(new_board, opponent, dice_roll)
 
             if not opp_moves:
-                # Opponent can't move — board unchanged, our turn again
-                all_boards.append(new_board)
+                # Opponent dances — checkers unchanged, our turn again.
+                # pass_turn makes player_to_move = us so the aggregation's
+                # perspective handling stays consistent.
+                all_boards.append(pass_turn(new_board))
                 dice_info.append((1, False, 0.0))
                 continue
 
@@ -729,9 +758,12 @@ def evaluate_move_2ply(
         opp_moves = generate_legal_moves(new_board, opponent, dice_roll)
 
         if not opp_moves:
-            # Opponent has no legal moves — position stays the same.
-            # Evaluate from our perspective with 0-ply (no further search).
-            values = _batch_evaluate(state, [new_board], encoding_config)
+            # Opponent dances — checkers unchanged, our turn again.
+            # pass_turn makes player_to_move = us so the network value
+            # really is from our perspective.
+            values = _batch_evaluate(
+                state, [pass_turn(new_board)], encoding_config
+            )
             our_val = float(values[0])
             weighted_value += prob * our_val
             continue
@@ -770,33 +802,35 @@ def _evaluate_position_1ply(
 ) -> float:
     """Evaluate a position at 1-ply from a given player's perspective.
 
-    For each of 21 dice rolls for the OTHER player, that player picks
-    their best 0-ply move, and we average the resulting values.
-
-    This is the "inner loop" of 2-ply search: it tells the opponent
-    how good a position is for them after they've moved.
+    The player to move on `board` (board.player_to_move — in 2-ply search
+    this is perspective's opponent responding to their move) picks their
+    best 0-ply move for each of the 21 dice rolls; the results are
+    averaged by dice probability and returned from `perspective`'s
+    point of view.
 
     Args:
         state: Network training state.
-        board: Board state to evaluate (it's perspective's "turn").
-        perspective: Player whose perspective we evaluate from.
+        board: Board state to evaluate.
+        perspective: Player whose perspective the returned value is from.
         encoding_config: Encoding configuration.
 
     Returns:
         Value from perspective's point of view.
     """
-    other = perspective.opponent()
+    mover = board.player_to_move
 
     # Collect all boards we need to evaluate in one batch
     all_boards = []
     dice_info = []  # (n_network, has_terminal, terminal_val)
 
     for dice_roll in ALL_DICE_ROLLS:
-        moves = generate_legal_moves(board, perspective, dice_roll)
+        moves = generate_legal_moves(board, mover, dice_roll)
 
         if not moves:
-            # No legal moves — use current board value
-            all_boards.append(board)
+            # Mover dances — turn passes without moving. pass_turn makes
+            # player_to_move = mover's opponent, matching the post-move
+            # boards below, so the same negation applies in aggregation.
+            all_boards.append(pass_turn(board))
             dice_info.append((1, False, 0.0))
             continue
 
@@ -805,9 +839,9 @@ def _evaluate_position_1ply(
         n_network = 0
 
         for m in moves:
-            after = apply_move(board, perspective, m)
+            after = apply_move(board, mover, m)
             if is_game_over(after):
-                v = _terminal_value(after, perspective)
+                v = _terminal_value(after, mover)
                 if v > terminal_val:
                     terminal_val = v
                     terminal_found = True
@@ -823,14 +857,14 @@ def _evaluate_position_1ply(
     else:
         all_values = np.array([])
 
-    # Compute dice-averaged value
+    # Compute dice-averaged value from the MOVER's perspective
     board_cursor = 0
     weighted_value = 0.0
 
     for dice_idx, (n_network, has_terminal, terminal_val) in enumerate(dice_info):
         prob = DICE_PROBABILITIES[ALL_DICE_ROLLS[dice_idx]]
 
-        # Perspective picks the best move for this dice roll
+        # Mover picks the best move for this dice roll
         best_val = -np.inf
 
         if has_terminal:
@@ -838,11 +872,10 @@ def _evaluate_position_1ply(
 
         for _ in range(n_network):
             # Value is from the board's next player_to_move perspective,
-            # which is the OTHER player after perspective moves.
-            # Negate to get perspective's value.
-            other_val = float(all_values[board_cursor])
-            our_val = -other_val
-            best_val = max(best_val, our_val)
+            # i.e. the mover's opponent. Negate to get the mover's value.
+            opp_val = float(all_values[board_cursor])
+            mover_val = -opp_val
+            best_val = max(best_val, mover_val)
             board_cursor += 1
 
         if best_val == -np.inf:
@@ -850,7 +883,10 @@ def _evaluate_position_1ply(
 
         weighted_value += prob * best_val
 
-    return weighted_value
+    # Convert from the mover's perspective to the requested perspective
+    if mover == perspective:
+        return weighted_value
+    return -weighted_value
 
 
 def select_move_2ply(

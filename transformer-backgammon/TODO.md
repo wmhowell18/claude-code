@@ -5,6 +5,8 @@
 > **Current Maturity**: ~8/10 for competitive play. Solid game engine + neural training + search + benchmarking + TD(lambda) + exploration schedule + global encoding features + race evaluation + training infrastructure (position weighting, validation, early stopping) + doubling cube + match play + modern transformer architecture (RMSNorm, SwiGLU, pre-norm) + EMA weights + AdamW + muP + Stochastic MuZero network + schedule-free optimizer option + color-flip data augmentation. Missing GnuBG interface, MCTS integration with MuZero, and rollout-based training.
 >
 > **Known Issues (Feb 2026, updated Mar 2026)**: Code review identified several correctness bugs requiring attention before long training runs: policy head is non-functional (hash collisions + dummy targets — workaround: `train_policy=False` default), ~~global features are implemented but not wired into training~~ **(FIXED Mar 2026 — `input_feature_dim=10` with 8 global features)**, ~~TD targets are not renormalized before cross-entropy loss~~ **(FIXED Mar 2026 — moved to 6-dim equity, fixing zero-gradient bug for lose_normal outcomes)**, ~~dead code and stale configs~~ **(FIXED Mar 2026 — removed dead `train_step` from network.py and stale `TrainingConfig` from types.py)**, ~~and training telemetry is misleading (train_acc always 0.0, LR logged as constant peak)~~ **(FIXED Mar 2026 — equity_accuracy metric added, LR reads from schedule)**. See "KNOWN ISSUES" section below.
+>
+> **Root-cause review (July 2026)**: Training runs had never beaten random play. A full pipeline audit found and fixed two catastrophic bugs — color-flip augmentation corrupting 50% of training labels (item 120) and a direction-ambiguous board encoding (item 121) — plus a lagging-EMA self-play bug (item 122), a stale 5-dim value formula in the agent (item 123), sign errors in the "opponent dances" branches of 1-ply/2-ply search (item 124), a bar↔off swap in `flip_board` (item 126), and White's borne-off checkers scored at 25 pips each in `pip_count` (item 127). Search encoding was also vectorized (item 108), and the test suite — un-runnable since Mar 2026 — is green again (item 128). **Verified: smoke test now shows 0-ply win rate vs random jumping from ~70% (untrained) to ~94% after 480 warmstart games** — the pipeline learns.
 
 ---
 
@@ -82,6 +84,96 @@ training quality and telemetry — address before committing to multi-hour TPU r
   **Second pass (Mar 2026)**: Replaced remaining hardcoded `4096` in `test_losses.py`,
   `test_integration.py`, and `test_replay_buffer.py` with dynamic `get_action_space_size()` calls
   to prevent future staleness if action space changes again. *(Mar 2026)*
+
+- [x] **120. Color-flip augmentation corrupted 50% of training labels** — `flip_board()` produces a
+  position that is strategically IDENTICAL from the mover's perspective (colors renamed, points
+  mirrored, mover role preserved), so the mover-relative equity target must be unchanged. The
+  augmentation stored the win/lose-SWAPPED target instead, so every position entered the buffer
+  twice with contradictory labels; the optimal fit was base-rate mush and the network could never
+  beat random play. Removed the augmentation entirely (`use_color_flip_augmentation` flag deleted):
+  with the canonical encoding (item 121), a board and its color-flip encode identically, so
+  White/Black symmetry is structural and the augmentation would only add exact duplicates.
+  (Impact: catastrophic — primary cause of training failure) *(July 2026)*
+
+- [x] **121. Encoding was direction-ambiguous (no mirroring for Black)** — White moves 24→1 and
+  Black moves 1→24, but the encoding read the same point index for both players. A White-to-move
+  position and its color-swapped Black-to-move counterpart produced identical spatial features
+  despite having opposite equities; nothing told the network which direction "we" move, so it could
+  not learn spatial structure (primes, home boards, blots). Fixed with canonical mover-perspective
+  encoding: channel 0 = mover, channel 1 = opponent, point axis mirrored for Black so the mover
+  always moves toward index 1 (`encode_boards_canonical` in encoder.py, used by training, self-play,
+  search, and evaluation; per-point encoders `encode_raw`/`encode_one_hot`/`encode_geometric`/
+  `encode_strategic` also canonicalized). (Impact: catastrophic) *(July 2026)*
+
+- [x] **122. EMA weights lagged ~1000 steps behind and drove all self-play/eval** — EMA (decay
+  0.999) was initialized at the random init and used for self-play and evaluation from step 0, so
+  short runs generated all their games with an essentially random network. Fixed with warmed-up
+  decay `min(0.999, (1+t)/(10+t))` so the EMA tracks params closely early and converges to 0.999.
+  (Impact: large, especially for short validation runs) *(July 2026)*
+
+- [x] **123. Stale 5-dim equity value formula in `network_agent._forward`** — computed
+  `lose_normal = 1 - sum(equity)` (always 0 for 6-dim softmax output) and misread indices 3/4 as
+  gammon/backgammon losses while ignoring index 5. Fixed to the explicit 6-dim formula shared with
+  search. (Impact: moderate — wrong values in `get_value_estimate` and policy-head paths) *(July 2026)*
+
+- [x] **124. Sign errors in "opponent dances" branches of search and self-play** — when a player
+  had no legal moves, the unchanged board (whose `player_to_move` is still the pre-dance mover) was
+  evaluated and its value attributed to the wrong player in `evaluate_move_1ply`,
+  `select_move_1ply`, `evaluate_move_2ply`, and the batched 1-ply self-play path. Also,
+  `_evaluate_position_1ply` moved the WRONG player entirely (the opponent moved twice in a row in
+  2-ply search). Fixed with a new `pass_turn()` helper and by making `_evaluate_position_1ply` move
+  `board.player_to_move`. (Impact: moderate — systematically undervalued hitting/priming plays,
+  broke 2-ply search) *(July 2026)*
+
+- [x] **125. Replay buffer storage/transfer overhead** — buffer retained full `GameStep` objects
+  (Board copies) and shipped 512×4096 dummy policy/mask arrays to the device on every batch
+  (~10MB/batch of pure waste in value-only mode). Now stores only pre-encoded features + targets +
+  weights in preallocated numpy arrays (item 110 fixed too: vectorized gather instead of Python
+  list comprehension), and returns (1,)-shaped policy placeholders. `train()` now raises on
+  `train_policy=True` (see item 104). *(July 2026)*
+
+- [x] **126. `flip_board` swapped bar and off** — it mirrored all 26 indices (i → 25-i), so
+  checkers on the bar became borne-off checkers in the flipped board and vice versa. Both players
+  keep bar=0/off=25 in their own arrays; only points 1-24 mirror. Found via property testing
+  (canonical-encoding flip invariance over full random games). The old color-flip augmentation was
+  feeding these corrupted boards into training on top of its label inversion (item 120).
+  (Impact: large for any flip_board consumer) *(July 2026)*
+
+- [x] **127. `pip_count` scored White's borne-off checkers at 25 pips each** — `point * count`
+  with point=25, while Black's off contributed 0 (25-25). Bearing off as White INCREASED the pip
+  count, so the greedy pip-count warmstart agent actively avoided bearing off as White, and
+  pip-based global features / race equity were color-asymmetric. Two downstream compensation
+  hacks were papering over it (race.py subtracted 25/off for White only; board.py
+  race_equity_estimate subtracted 25/off for BOTH players, driving Black's race pips negative).
+  Borne-off checkers now contribute 0 for both players and the hacks are removed.
+  (Impact: large — corrupted warmstart data and race features) *(July 2026)*
+
+- [x] **128. Test suite un-runnable since Mar 2026 + 18 pre-existing failures** — test_network.py
+  imported helpers deleted in item 106, breaking collection of the entire suite (which is how items
+  120-127 went unnoticed). Rewrote it against the authoritative losses.py train_step. Fixed 18
+  pre-existing test failures (wrong cube-pass expectations, EMA convergence math, LR-warmup-zero
+  fixtures, 2-dim encoding config paired with 10-dim networks, checkpoint step/index confusion).
+  Added `checkpoint_matches_architecture()`: train() now inspects the RAW checkpoint structure
+  before restoring, catching layer-count changes the old post-restore shape check couldn't see.
+  **Suite now: 533 passed, 0 failed.** *(July 2026)*
+
+### Notes (July 2026 session — root-cause audit)
+
+- **Why training never beat random**: items 120 (inverted labels on half the data) and 121
+  (direction-ambiguous inputs) together guaranteed failure regardless of model size, LR, or game
+  count. Item 122 (lagging EMA) additionally meant short validation runs played and evaluated with
+  the random init. All three compounded silently — loss still "decreased" because the network
+  learned the label base rates.
+- **Exploration defaults changed**: `temperature_start` 1.0 → 0.5, `temperature_end` 0.1 → 0.05.
+  Softmax over equity values (range ~[-3,3]) at T=1.0 is near-uniform random play; dice already
+  provide natural exploration (TD-Gammon trained greedily).
+- **`train_policy=True` now raises** in `train()` — the replay buffer no longer fabricates policy
+  targets (item 104 root fix still deferred to item 59).
+- **Colab notebook fixed**: the "Test Trained Model" cell referenced APIs that never existed
+  (`GameEngine`, `NeuralAgent`, `PipCountAgent`); now uses `create_neural_agent` +
+  `evaluate_vs_opponent`. Config cell updated for removed flag + 1-ply self-play.
+- **Verification suggestion for the first run**: after ~500 games the win rate vs random at 0-ply
+  should clearly exceed 60%; if not, re-audit before scaling.
 
 ### Notes & Ideas (Mar 2026 session)
 
@@ -251,12 +343,10 @@ training quality and telemetry — address before committing to multi-hour TPU r
 ### Speed & Efficiency
 
 - [ ] **56. JIT compile evaluation pipeline** — Not just train_step, also inference and search. (Effort: S, Impact: moderate)
-- [ ] **108. Search encoding path not vectorized** — `search.py:_encode_boards_batch` uses a
-  double Python loop: 26 `extract_position_features` calls per board. The fast vectorized path
-  used in `self_play.py` directly slices numpy arrays without Python-level iteration. Every 1-ply
-  or 2-ply evaluation checkpoint call is ~26× slower than necessary for encoding alone. Fix:
-  replace `_encode_boards_batch` with vectorized numpy slicing matching the `_encode_boards_fast()`
-  pattern in `self_play.py`. (Effort: S, Impact: moderate — significant if eval_ply >= 1)
+- [x] **108. Search encoding path not vectorized** — `search.py:_encode_boards_batch` now routes
+  the standard 10-feature config through the shared vectorized `encode_boards_canonical()` (numpy
+  slicing, no per-point Python loops) and pads batches to common sizes to avoid JIT recompiles.
+  Exotic configs fall back to the generic path. *(July 2026)*
 - [ ] **109. 2-ply search makes k×21 separate network calls** — `select_move_2ply` evaluates each
   legal move sequentially via `evaluate_move_2ply()`, which internally calls
   `_evaluate_position_1ply` for each of 21 opponent dice outcomes individually. For k=20 legal
@@ -265,12 +355,10 @@ training quality and telemetry — address before committing to multi-hour TPU r
   checkpoints is therefore 20-50× slower than it should be. Fix: restructure 2-ply outer loop to
   collect all (move, dice_roll) result boards first, run one batched call, then assign values. More
   fundamental than item 56. (Effort: M, Impact: large)
-- [ ] **110. Replay buffer sampling via Python list comprehension** — `replay_buffer.py:
-  sample_batch` gathers encoded boards with `[self._encoded_boards[i] for i in indices]`.
-  `_encoded_boards` is a Python list, not a numpy array, so vectorized indexing is unavailable.
-  For batch_size=512, this is 512 individual Python list lookups. Fix: convert `_encoded_boards`
-  to a pre-allocated numpy array at init, enabling `self._encoded_boards_arr[indices]` with a
-  single vectorized op. (Effort: S, Impact: small-moderate at buffer sizes >50K)
+- [x] **110. Replay buffer sampling via Python list comprehension** — Buffer now stores encoded
+  boards, targets, and weights in pre-allocated numpy arrays (grown in chunks, circular FIFO
+  eviction), so `sample_batch` is a single vectorized `arr[indices]` gather. Board/GameStep
+  objects are no longer retained. See item 125. *(July 2026)*
 - [ ] **57. Optimize move generation** — Currently pure Python loops. Could use numpy vectorization or Cython. (Effort: M, Impact: moderate)
 - [ ] **58. Legal move caching within a turn** — Don't regenerate legal moves for same board+dice. (Effort: S, Impact: small)
 - [ ] **59. Precomputed action-to-move lookup** — Replace hash-based encoding with direct lookup table. (Effort: S, Impact: small)
@@ -353,7 +441,8 @@ training quality and telemetry — address before committing to multi-hour TPU r
 6. ~~**Items 7-10** (doubling cube)~~ — DONE (core/cube.py + types + network cube head)
 7. ~~**Items 111-118, 66, 84** (architecture modernization)~~ — DONE (EMA, AdamW, RMSNorm, SwiGLU, pre-norm, muP, Stochastic MuZero, schedule-free optimizer, color-flip augmentation)
 8. ~~**Fix items 101-103, 105-107, 119**~~ — DONE (Mar 2026). 6-dim equity, global features wired, dead code removed, training telemetry fixed (equity_accuracy + LR from schedule), stale test dimensions swept (1024→4096, 5→6-dim). **Item 104** (policy head hash collisions) worked around with `train_policy=False` default; root fix deferred to item 59
-9. **Longer training run** with the improved pipeline — use `scripts/train_run.py` with presets (poc-15k, full-50k, long-200k) ← **NEXT**
+8b. ~~**Fix items 120-125 + 108 + 110** (root-cause audit)~~ — DONE (July 2026). Removed label-corrupting color-flip augmentation, canonical mover-perspective encoding with Black mirroring, EMA decay warmup, 6-dim value formula in agent, dance sign fixes + 2-ply wrong-mover fix, vectorized search encoding + batch padding, numpy replay buffer
+9. **Longer training run** with the fixed pipeline — use `scripts/train_run.py` with presets (poc-15k, full-50k, long-200k), or `colab_tpu_training.ipynb` on a Colab TPU ← **NEXT**
 10. **Items 17-18** (N-step bootstrapping + rollout targets) — even better training signal
 11. **Wire Stochastic MuZero into training** (item 117 architecture done, needs MCTS integration + training loop)
 12. **Items 45-46** (MCTS) — sophisticated search for strongest play

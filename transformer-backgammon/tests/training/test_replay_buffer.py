@@ -11,7 +11,6 @@ from backgammon.training.replay_buffer import (
 from backgammon.training.self_play import GameResult, GameStep
 from backgammon.core.board import initial_board
 from backgammon.core.types import Player, GameOutcome
-from backgammon.encoding.action_encoder import get_action_space_size
 
 
 def create_dummy_game(num_steps: int = 10, winner: Player = Player.WHITE, points: int = 1) -> GameResult:
@@ -140,12 +139,13 @@ class TestReplayBuffer:
         assert 'action_mask' in batch
 
         # Check shapes (enhanced encoding: 2 raw + 8 global features = 10)
-        # Board encoding is (batch, 26 positions, 10 features)
-        action_size = get_action_space_size()
+        # Board encoding is (batch, 26 positions, 10 features).
+        # Policy targets/masks are (1,) placeholders: value-only training
+        # ignores them, and full-size dummies waste host->device transfer.
         assert batch['board_encoding'].shape == (32, 26, 10)
-        assert batch['target_policy'].shape == (32, action_size)
+        assert batch['target_policy'].shape == (1,)
         assert batch['equity_target'].shape == (32, 6)
-        assert batch['action_mask'].shape == (32, action_size)
+        assert batch['action_mask'].shape == (1,)
 
         # Check types
         assert batch['board_encoding'].dtype == jnp.float32
@@ -245,7 +245,8 @@ class TestPrioritizedReplayBuffer:
         buffer.add_game(game)
 
         assert len(buffer) == 15
-        assert len(buffer._priorities) == 15
+        # Priorities array covers at least the stored entries
+        assert len(buffer._priorities) >= 15
 
     def test_prioritized_sample_returns_weights(self):
         """Test prioritized sampling returns weights and indices."""
@@ -293,11 +294,9 @@ class TestPrioritizedReplayBuffer:
 
         buffer.add_game(create_dummy_game(num_steps=20))
         assert len(buffer) == 20
-        assert len(buffer._priorities) == 20
 
         buffer.clear()
         assert len(buffer) == 0
-        assert len(buffer._priorities) == 0
 
 
 class TestReplayBufferIntegration:

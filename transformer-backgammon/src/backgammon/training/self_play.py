@@ -16,10 +16,12 @@ from typing import Tuple, List, Optional, NamedTuple
 from dataclasses import dataclass, field
 from flax.training import train_state
 
-from backgammon.core.board import Board, apply_move, generate_legal_moves, is_game_over, winner
+from backgammon.core.board import (
+    Board, apply_move, generate_legal_moves, is_game_over, winner, pass_turn,
+)
 from backgammon.core.types import Player, Move, GameOutcome
 from backgammon.core.dice import roll_dice, ALL_DICE_ROLLS, DICE_PROBABILITIES, StratifiedDiceSampler
-from backgammon.encoding.encoder import compute_global_features
+from backgammon.encoding.encoder import encode_boards_canonical
 from backgammon.evaluation.agents import Agent, pip_count_agent, random_agent
 
 
@@ -286,12 +288,11 @@ def _pad_batch_size(n: int) -> int:
 
 
 def _encode_boards_fast(boards: List[Board]) -> np.ndarray:
-    """Fast vectorized board encoding with global features (feature_dim=10).
+    """Fast vectorized canonical board encoding (feature_dim=10).
 
-    Directly slices numpy arrays instead of calling per-point Python
-    functions 26 times per board. ~10x faster than the generic path.
-    Appends 8 global features (pip counts, contact, primes, bearoff)
-    broadcast to every position.
+    Delegates to the shared canonical encoder: channel 0 = mover's checkers,
+    channel 1 = opponent's, point axis mirrored for Black, plus 8 global
+    features broadcast to every position.
 
     Args:
         boards: List of Board objects.
@@ -299,20 +300,7 @@ def _encode_boards_fast(boards: List[Board]) -> np.ndarray:
     Returns:
         Array of shape (len(boards), 26, 10) with raw + global features.
     """
-    n = len(boards)
-    features = np.zeros((n, 26, 10), dtype=np.float32)
-    inv15 = np.float32(1.0 / 15.0)
-    for i, board in enumerate(boards):
-        if board.player_to_move == Player.WHITE:
-            features[i, :, 0] = board.white_checkers * inv15
-            features[i, :, 1] = board.black_checkers * inv15
-        else:
-            features[i, :, 0] = board.black_checkers * inv15
-            features[i, :, 1] = board.white_checkers * inv15
-        # Compute global features and broadcast to all 26 positions
-        global_feats = compute_global_features(board)
-        features[i, :, 2:10] = global_feats[np.newaxis, :]
-    return features
+    return encode_boards_canonical(boards)
 
 
 def _batched_inference(
@@ -337,20 +325,10 @@ def _batched_inference(
     if n == 0:
         return np.zeros((0, 6), dtype=np.float32)
 
-    # Pre-allocate padded array directly (avoids separate encode + concat)
+    # Encode, then pad the batch to a common size to minimize JIT recompiles
     padded_n = _pad_batch_size(n)
     encoded = np.zeros((padded_n, 26, 10), dtype=np.float32)
-    inv15 = np.float32(1.0 / 15.0)
-    for i, board in enumerate(boards):
-        if board.player_to_move == Player.WHITE:
-            encoded[i, :, 0] = board.white_checkers * inv15
-            encoded[i, :, 1] = board.black_checkers * inv15
-        else:
-            encoded[i, :, 0] = board.black_checkers * inv15
-            encoded[i, :, 1] = board.white_checkers * inv15
-        # Compute global features and broadcast to all 26 positions
-        global_feats = compute_global_features(board)
-        encoded[i, :, 2:10] = global_feats[np.newaxis, :]
+    encoded[:n] = encode_boards_canonical(boards)
 
     encoded_jax = jnp.array(encoded)
     equity, _, _, _ = jit_fn(params, encoded_jax)
@@ -566,11 +544,11 @@ def play_games_batched(
                     roll_move_info = []
                     for move in moves:
                         if not move:  # Empty move (blocked)
-                            # Turn passes; board unchanged, still current player's
-                            # perspective. Mark as 'network_noflip' so Phase 4b
-                            # doesn't flip the equity.
-                            roll_move_info.append(('network_noflip', len(dice_avg_boards)))
-                            dice_avg_boards.append(g.board)
+                            # Turn passes: checkers unchanged, opponent to move.
+                            # pass_turn gives a board whose player_to_move is the
+                            # opponent, so the normal 'network' flip applies.
+                            roll_move_info.append(('network', len(dice_avg_boards)))
+                            dice_avg_boards.append(pass_turn(g.board))
                         else:
                             new_board = apply_move(g.board, player, move)
                             our_off = (new_board.white_checkers[25] if player == Player.WHITE
@@ -667,11 +645,6 @@ def play_games_batched(
                                     eq[4] = 1.0  # lose_gammon
                                 else:
                                     eq[3] = 1.0  # lose_normal
-                        elif mtype == 'network_noflip':
-                            # Blocked position: board is still from current player's
-                            # perspective, no flip needed.
-                            eq = dice_avg_equity_raw[mval].copy()
-                            val = _equity_to_value_np(eq.reshape(1, -1))[0]
                         else:
                             # Network equity is from board's player_to_move perspective.
                             # After apply_move, that's the opponent. Flip to our perspective.
@@ -776,14 +749,13 @@ def play_games_batched(
                         opp_moves = generate_legal_moves(new_board, opponent, dice_roll)
 
                         if not opp_moves:
-                            # Opponent can't move — board unchanged, our turn again.
-                            # Value from network is from player_to_move's perspective
-                            # which is still opponent (turn didn't change if no legal moves,
-                            # but player_to_move flipped in apply_move... actually the board
-                            # after our move has opponent as player_to_move, and if they
-                            # can't move it stays as-is). We need to evaluate new_board.
+                            # Opponent dances — checkers unchanged, our turn again.
+                            # pass_turn(new_board) has player_to_move = us, so the
+                            # network value is OUR value; the aggregation below
+                            # treats network entries that way, so this stays
+                            # sign-consistent with normal opponent responses.
                             dice_entries.append([('network', len(oneply_boards))])
-                            oneply_boards.append(new_board)
+                            oneply_boards.append(pass_turn(new_board))
                             continue
 
                         responses = []

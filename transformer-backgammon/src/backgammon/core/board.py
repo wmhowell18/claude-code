@@ -105,12 +105,21 @@ def flip_board(board: Board) -> Board:
     """
     flipped = Board()
 
-    # Swap colors and mirror points
-    # Point i for white becomes point (25-i) for black
-    for i in range(26):
+    # Swap colors and mirror points 1-24 (point i becomes point 25-i).
+    # Bar (0) and off (25) are role slots, not spatial points — BOTH
+    # players use index 0 for their own bar and 25 for their own off —
+    # so they must map to themselves. (A previous version mirrored all
+    # 26 indices, silently turning checkers on the bar into borne-off
+    # checkers and vice versa.)
+    for i in range(1, 25):
         mirror_i = 25 - i
         flipped.white_checkers[mirror_i] = board.black_checkers[i]
         flipped.black_checkers[mirror_i] = board.white_checkers[i]
+
+    flipped.white_checkers[0] = board.black_checkers[0]
+    flipped.black_checkers[0] = board.white_checkers[0]
+    flipped.white_checkers[25] = board.black_checkers[25]
+    flipped.black_checkers[25] = board.white_checkers[25]
 
     # Flip player
     flipped.player_to_move = board.player_to_move.opponent()
@@ -139,8 +148,12 @@ def pip_count(board: Board, player: Player) -> int:
 
     # For white, distance is point number (24 is far, 1 is close)
     # For black, distance is 25 - point number (1 is far, 24 is close)
+    # Borne-off checkers (point 25) contribute 0 pips for BOTH players.
+    # (A previous version scored White's borne-off checkers as 25 pips
+    # each — point * count with point=25 — grossly inflating White's pip
+    # count during bearoff.)
     total = 0
-    for point in range(26):
+    for point in range(25):
         count = checkers[point]
         if count > 0:
             if player == Player.WHITE:
@@ -269,15 +282,12 @@ def race_equity_estimate(board: Board, player: Player) -> float:
     Returns:
         Estimated equity in [-1, 1] range (positive = player favored)
     """
-    our_pips_raw = pip_count(board, player)
-    opp_pips_raw = pip_count(board, player.opponent())
-
-    # Subtract borne-off checkers from pip count (pip_count counts
-    # them at 25 each, but borne-off checkers have 0 pip distance)
-    our_off = checkers_borne_off(board, player)
-    opp_off = checkers_borne_off(board, player.opponent())
-    our_pips = our_pips_raw - our_off * 25
-    opp_pips = opp_pips_raw - opp_off * 25
+    # pip_count correctly excludes borne-off checkers for both players.
+    # (An earlier version subtracted 25 per borne-off checker here to
+    # compensate for a pip_count bug that only affected White — which
+    # drove Black's race pips negative during bearoff.)
+    our_pips = pip_count(board, player)
+    opp_pips = pip_count(board, player.opponent())
 
     # Adjustments for Keith count
     # Penalty for checkers on bar
@@ -893,6 +903,24 @@ def apply_move(board: Board, player: Player, move: Move) -> Board:
     # Switch player
     new_board.player_to_move = player.opponent()
 
+    return new_board
+
+
+def pass_turn(board: Board) -> Board:
+    """Return a copy of the board with the turn passed to the other player.
+
+    Used when the player to move has no legal moves (dances): the checkers
+    stay where they are but the opponent moves next. Evaluating the returned
+    board gives a value from the correct (next mover's) perspective.
+
+    Args:
+        board: Current board
+
+    Returns:
+        New board, identical checkers, player_to_move flipped
+    """
+    new_board = board.copy()
+    new_board.player_to_move = board.player_to_move.opponent()
     return new_board
 
 

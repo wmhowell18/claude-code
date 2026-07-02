@@ -18,6 +18,7 @@ from backgammon.training.train import (
     create_train_state,
     save_checkpoint,
     _params_shapes_match,
+    checkpoint_matches_architecture,
     train,
 )
 from backgammon.training.replay_buffer import ReplayBuffer
@@ -193,11 +194,12 @@ class TestReplayBufferIntegration:
         # Sample batch
         batch = buffer.sample_batch(16)
 
-        # Verify batch structure
+        # Verify batch structure (policy targets/masks are placeholders
+        # in value-only training)
         assert batch['board_encoding'].shape[0] == 16
-        assert batch['target_policy'].shape == (16, get_action_space_size())
+        assert batch['target_policy'].shape == (1,)
         assert batch['equity_target'].shape == (16, 6)
-        assert batch['action_mask'].shape == (16, get_action_space_size())
+        assert batch['action_mask'].shape == (1,)
 
 
 class TestEndToEndTraining:
@@ -232,8 +234,8 @@ class TestEndToEndTraining:
                 num_layers=2,
                 ff_dim=256,
 
-                # Enable policy for neural self-play
-                train_policy=True,
+                # Value-only training (policy head is non-functional)
+                train_policy=False,
 
                 # Replay buffer
                 replay_buffer_size=100,
@@ -301,8 +303,8 @@ class TestEndToEndTraining:
                 num_layers=2,
                 ff_dim=256,
 
-                # Enable policy for neural self-play
-                train_policy=True,
+                # Value-only training (policy head is non-functional)
+                train_policy=False,
 
                 replay_buffer_size=100,
                 replay_buffer_min_size=5,
@@ -442,8 +444,10 @@ class TestCheckpointRestore:
             for orig, restored in zip(orig_leaves, restored_leaves):
                 np.testing.assert_array_equal(orig, restored)
 
-            # Verify step was restored
-            assert int(restored_state.step) == 100
+            # Verify step was restored. Note: the `step` argument to
+            # save_checkpoint is the checkpoint FILE index; the restored
+            # state.step is whatever the saved TrainState carried.
+            assert int(restored_state.step) == int(state.step)
 
         finally:
             shutil.rmtree(temp_dir)
@@ -495,12 +499,11 @@ class TestCheckpointRestore:
             config_v2 = self._small_config(checkpoint_dir, log_dir, num_layers=1)
             state_v2 = create_train_state(config_v2, jax.random.PRNGKey(99))
 
-            restored = checkpoints.restore_checkpoint(
-                ckpt_dir=str(checkpoint_dir),
-                target=state_v2,
-            )
-
-            assert not _params_shapes_match(state_v2.params, restored.params)
+            # Restoring INTO a target silently adapts to the target's tree
+            # structure (extra blocks are dropped), so post-restore shape
+            # comparison can't catch this. The raw-checkpoint structure
+            # check must detect the mismatch instead.
+            assert checkpoint_matches_architecture(checkpoint_dir, state_v2) is False
 
         finally:
             shutil.rmtree(temp_dir)

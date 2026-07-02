@@ -54,6 +54,19 @@ def _init_ema_params(params):
     return jax.tree.map(lambda p: p.copy(), params)
 
 
+def _ema_decay_for_step(target_decay: float, step: int) -> float:
+    """Effective EMA decay with warmup.
+
+    A fixed decay of 0.999 makes the EMA lag ~1000 steps behind the raw
+    params. Since the EMA starts at the random init and is used for
+    self-play and evaluation, short runs would generate all their games
+    with (essentially) the initial random network. Warming the decay up
+    as min(target, (1+step)/(10+step)) keeps the EMA tracking the params
+    closely early on, converging to the target decay as training proceeds.
+    """
+    return min(target_decay, (1.0 + step) / (10.0 + step))
+
+
 def _update_ema_params(ema_params, params, decay: float):
     """Update EMA parameters: ema = decay * ema + (1 - decay) * params."""
     return jax.tree.map(
@@ -115,10 +128,13 @@ class TrainingConfig:
     training_batch_size: int = 256  # Neural network training batch size
     train_steps_per_game_batch: int = 4  # Training steps per game batch
 
-    # Agent settings
+    # Agent settings. Dice already provide substantial natural exploration
+    # (TD-Gammon trained greedily); high temperatures over equity values
+    # (range ~[-3,3]) make early self-play near-random and waste the
+    # expensive 1-ply lookahead signal, so keep temperatures modest.
     neural_agent_temperature: float = 0.3  # Exploration during self-play
-    temperature_start: float = 1.0  # Starting temperature for exploration schedule
-    temperature_end: float = 0.1  # Final temperature for exploration schedule
+    temperature_start: float = 0.5  # Starting temperature for exploration schedule
+    temperature_end: float = 0.05  # Final temperature for exploration schedule
     use_temperature_schedule: bool = True  # Enable temperature decay over training
 
     # TD(lambda) settings
@@ -127,9 +143,6 @@ class TrainingConfig:
 
     # Position weighting
     use_position_weighting: bool = True  # Weight positions by importance for sampling
-
-    # Data augmentation
-    use_color_flip_augmentation: bool = True  # Double data via color flipping
 
     # Validation and early stopping
     validation_fraction: float = 0.1  # Fraction of games used for validation
@@ -437,6 +450,39 @@ def _params_shapes_match(expected, actual):
     )
 
 
+def _state_dicts_match(expected, actual) -> bool:
+    """Recursively compare two flax state dicts by keys and leaf shapes."""
+    if isinstance(expected, dict) or isinstance(actual, dict):
+        if not (isinstance(expected, dict) and isinstance(actual, dict)):
+            return False
+        if set(expected.keys()) != set(actual.keys()):
+            return False
+        return all(_state_dicts_match(expected[k], actual[k]) for k in expected)
+    return np.shape(expected) == np.shape(actual)
+
+
+def checkpoint_matches_architecture(checkpoint_dir, fresh_state) -> Optional[bool]:
+    """Check whether the latest checkpoint matches the current architecture.
+
+    Restoring a checkpoint INTO a target silently adapts to the target's
+    tree structure (e.g. a 2-layer checkpoint restored into a 1-layer model
+    just drops the extra block), so shape comparison after a targeted
+    restore cannot detect structural changes. This inspects the RAW
+    checkpoint instead and compares key structure + leaf shapes.
+
+    Returns:
+        True if compatible, False if the architecture changed,
+        None if no checkpoint exists.
+    """
+    from flax import serialization
+
+    raw = checkpoints.restore_checkpoint(ckpt_dir=str(checkpoint_dir), target=None)
+    if raw is None:
+        return None
+    expected_params = serialization.to_state_dict(fresh_state.params)
+    return _state_dicts_match(expected_params, raw.get('params', {}))
+
+
 def train(config: Optional[TrainingConfig] = None):
     """Main training loop with curriculum learning and self-play.
 
@@ -446,6 +492,14 @@ def train(config: Optional[TrainingConfig] = None):
     global _current_run_id
     if config is None:
         config = TrainingConfig()
+
+    if config.train_policy:
+        raise ValueError(
+            "train_policy=True is not supported: the policy head is "
+            "non-functional (action-hash collisions, no real policy targets "
+            "— see TODO.md item 104) and the replay buffer no longer emits "
+            "policy targets. Use value-only training (train_policy=False)."
+        )
 
     # Generate a unique run ID so log entries from different runs can be separated
     _current_run_id = uuid.uuid4().hex[:8]
@@ -463,23 +517,26 @@ def train(config: Optional[TrainingConfig] = None):
     if checkpoint_dir.exists():
         fresh_state = state
         try:
-            state = checkpoints.restore_checkpoint(
-                ckpt_dir=str(checkpoint_dir),
-                target=state,
-            )
-            restored_step = int(state.step)
-            if restored_step > 0:
-                # Validate that restored param shapes match the current model.
-                # If not, discard the entire restored state (params + optimizer)
-                # since optimizer momentum buffers also have stale shapes.
-                if _params_shapes_match(fresh_state.params, state.params):
+            # Inspect the raw checkpoint FIRST: restoring into a target
+            # silently adapts to the target's structure, so structural
+            # changes (e.g. different num_layers) are undetectable after
+            # the fact. Compare key structure + shapes on the raw dict.
+            compatible = checkpoint_matches_architecture(checkpoint_dir, fresh_state)
+            if compatible is None:
+                print("   No checkpoint found, starting from scratch")
+            elif not compatible:
+                print("   ⚠️  Existing checkpoint incompatible "
+                      "(architecture changed), starting from scratch")
+            else:
+                state = checkpoints.restore_checkpoint(
+                    ckpt_dir=str(checkpoint_dir),
+                    target=state,
+                )
+                restored_step = int(state.step)
+                if restored_step > 0:
                     print(f"   Restored checkpoint at step {restored_step}")
                 else:
-                    print(f"   ⚠️  Checkpoint at step {restored_step} incompatible "
-                          "(architecture changed), starting from scratch")
-                    state = fresh_state
-            else:
-                print("   No checkpoint found, starting from scratch")
+                    print("   Restored checkpoint (step 0)")
         except Exception as e:
             print(f"   ⚠️  Could not restore checkpoint: {e}")
             print("   Starting from scratch with new architecture")
@@ -502,7 +559,6 @@ def train(config: Optional[TrainingConfig] = None):
         min_size=config.replay_buffer_min_size,
         eviction_policy='fifo',
         use_position_weighting=config.use_position_weighting,
-        use_color_flip_augmentation=config.use_color_flip_augmentation,
     )
 
     # Create validation buffer (for early stopping)
@@ -651,9 +707,11 @@ def train(config: Optional[TrainingConfig] = None):
                     # Training step (gradient update)
                     state, step_metrics = train_step(state, train_batch, step_rng)
 
-                    # Update EMA weights
+                    # Update EMA weights (warmed-up decay so the EMA tracks
+                    # the params early instead of lagging at the random init)
                     ema_params = _update_ema_params(
-                        ema_params, state.params, config.ema_decay
+                        ema_params, state.params,
+                        _ema_decay_for_step(config.ema_decay, total_train_steps),
                     )
 
                     # Accumulate metrics

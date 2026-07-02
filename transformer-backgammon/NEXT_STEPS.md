@@ -2,7 +2,24 @@
 
 Granular, ordered steps to validate the training pipeline and get a small model working before committing to a large run.
 
-> **Architecture update (Mar 2026)**: The transformer now uses modern best practices: RMSNorm (not LayerNorm), SwiGLU activation (not GELU), pre-norm (not post-norm), AdamW (not Adam), EMA weight averaging for evaluation, and color-flip data augmentation. muP and schedule-free optimizer are available as options. A Stochastic MuZero network architecture is also available in `network/muzero.py` but not yet wired into training.
+> **Pipeline fixes (July 2026)**: A root-cause audit found why no previous run ever beat random play, and fixed it. (1) Color-flip augmentation was storing win/lose-swapped equity targets for mover-identical positions — half the training labels were inverted; the augmentation is removed and color symmetry is now built into the encoding. (2) The board encoding didn't mirror the point axis for Black, so the network couldn't tell which direction the mover was traveling; all encodings are now canonical mover-perspective (mover always moves toward index 1). (3) EMA weights (used for all self-play/evaluation) lagged ~1000 steps behind and were effectively the random init for short runs; the decay now warms up. Also fixed: a stale 5-dim value formula in the network agent, sign errors in the "opponent dances" search branches, a wrong-mover bug in 2-ply search, and slow search-path encoding. Earlier runs' results (loss curves, win rates) are not comparable to post-fix runs.
+>
+> **Architecture update (Mar 2026)**: The transformer now uses modern best practices: RMSNorm (not LayerNorm), SwiGLU activation (not GELU), pre-norm (not post-norm), AdamW (not Adam), EMA weight averaging for evaluation. muP and schedule-free optimizer are available as options. A Stochastic MuZero network architecture is also available in `network/muzero.py` but not yet wired into training.
+
+## Running on Google TPUs
+
+Two supported paths:
+
+1. **Colab TPU** (easiest): open `colab_tpu_training.ipynb` in Colab, select a TPU runtime, and run the cells top to bottom. It installs TPU JAX wheels, mounts Drive for checkpoints, and trains with bfloat16.
+2. **Cloud TPU VM (e.g. v6e-1)**: on the TPU VM,
+   ```bash
+   pip install "jax[tpu]" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+   pip install -e transformer-backgammon
+   python transformer-backgammon/scripts/train_run.py --preset poc-15k
+   ```
+   `train_run.py` verifies the TPU backend and bfloat16 before starting. Presets default to bfloat16 compute with float32 params. Training is single-chip (plain `jit`); multi-chip data parallelism is future work (TODO item 50).
+
+> **Important**: `train()` auto-resumes from an existing checkpoint directory. Before the first post-fix run, delete (or point away from) any checkpoint dirs written by pre-July-2026 runs — those weights were trained on corrupted labels and must not be resumed.
 
 ---
 
