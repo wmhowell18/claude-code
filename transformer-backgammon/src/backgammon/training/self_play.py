@@ -23,6 +23,10 @@ from backgammon.core.types import Player, Move, GameOutcome
 from backgammon.core.dice import roll_dice, ALL_DICE_ROLLS, DICE_PROBABILITIES, StratifiedDiceSampler
 from backgammon.encoding.encoder import encode_boards_canonical
 from backgammon.evaluation.agents import Agent, pip_count_agent, random_agent
+from backgammon.evaluation.bearoff import (
+    get_exact_bearoff_db,
+    exact_bearoff_equity6,
+)
 
 
 class GameStep(NamedTuple):
@@ -311,7 +315,16 @@ def _batched_inference(
     """Run JIT-compiled batched inference on a list of boards.
 
     Handles encoding, batch padding (to minimize JIT recompilations),
-    and returns raw 6-dim equity arrays.
+    and returns raw 6-dim equity arrays, each from that board's
+    player_to_move perspective.
+
+    When the shared bearoff database is enabled (see
+    backgammon.evaluation.bearoff.enable_exact_bearoff), mutual-bearoff
+    positions with gammons impossible get their EXACT equity from the
+    database instead of the network. Because this function is the single
+    evaluation funnel for batched self-play, that makes endgame move
+    selection database-perfect and — via the recorded value estimates —
+    feeds exact values into the TD(lambda) training targets.
 
     Args:
         jit_fn: JIT-compiled inference function.
@@ -321,6 +334,37 @@ def _batched_inference(
     Returns:
         Array of shape (len(boards), 6) with raw equity distributions.
     """
+    n = len(boards)
+    if n == 0:
+        return np.zeros((0, 6), dtype=np.float32)
+
+    db = get_exact_bearoff_db()
+    if db is not None:
+        equity = np.empty((n, 6), dtype=np.float32)
+        network_boards = []
+        network_indices = []
+        for i, b in enumerate(boards):
+            eq = exact_bearoff_equity6(db, b)
+            if eq is None:
+                network_indices.append(i)
+                network_boards.append(b)
+            else:
+                equity[i] = eq
+        if network_boards:
+            equity[network_indices] = _batched_inference_network(
+                jit_fn, params, network_boards
+            )
+        return equity
+
+    return _batched_inference_network(jit_fn, params, boards)
+
+
+def _batched_inference_network(
+    jit_fn,
+    params,
+    boards: List[Board],
+) -> np.ndarray:
+    """Network-only batched inference (no exact bearoff fast-path)."""
     n = len(boards)
     if n == 0:
         return np.zeros((0, 6), dtype=np.float32)

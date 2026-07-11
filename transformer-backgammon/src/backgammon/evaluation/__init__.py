@@ -30,6 +30,11 @@ from backgammon.evaluation.bearoff import (
     bearoff_equity,
     select_bearoff_move,
     bearoff_agent,
+    enable_exact_bearoff,
+    disable_exact_bearoff,
+    get_exact_bearoff_db,
+    exact_bearoff_value,
+    exact_bearoff_equity6,
 )
 
 __all__ = [
@@ -57,4 +62,10 @@ __all__ = [
     "bearoff_equity",
     "select_bearoff_move",
     "bearoff_agent",
+    # Exact endgame evaluation (shared database)
+    "enable_exact_bearoff",
+    "disable_exact_bearoff",
+    "get_exact_bearoff_db",
+    "exact_bearoff_value",
+    "exact_bearoff_equity6",
 ]

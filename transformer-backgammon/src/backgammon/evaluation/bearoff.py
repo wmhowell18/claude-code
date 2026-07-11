@@ -492,6 +492,123 @@ def select_bearoff_move(
     return best_move
 
 
+# ==============================================================================
+# SHARED DATABASE FOR EXACT ENDGAME EVALUATION
+# ==============================================================================
+#
+# Search (evaluation/search.py), batched self-play (training/self_play.py),
+# and the neural agent's equity estimates consult a process-wide shared
+# database to replace network evaluation with exact values in mutual-bearoff
+# positions — the same trick gnubg uses. Exact endgame values sharpen both
+# play and the TD training targets for everything upstream of the bearoff.
+#
+# Opt-in: nothing is loaded or built until enable_exact_bearoff() is called
+# (train() does this when TrainingConfig.use_exact_bearoff is set), so unit
+# tests and network-only experiments pay no cost.
+
+_shared_db: Optional[BearoffDatabase] = None
+
+
+def enable_exact_bearoff(
+    db: Optional[BearoffDatabase] = None,
+    path: Optional[str] = None,
+    max_checkers: int = MAX_CHECKERS,
+) -> BearoffDatabase:
+    """Enable exact bearoff evaluation in search and self-play.
+
+    Args:
+        db: Database to share. If None, load_or_build() is used (first
+            call on a machine builds the full database in ~1 minute and
+            caches it; later calls load the cache in milliseconds).
+        path: Cache file path forwarded to load_or_build() when db is None.
+        max_checkers: Build limit forwarded to load_or_build() when db is
+            None. Positions with more checkers per side fall back to the
+            network.
+
+    Returns:
+        The now-shared database.
+    """
+    global _shared_db
+    if db is None:
+        db = BearoffDatabase.load_or_build(path=path, max_checkers=max_checkers)
+    _shared_db = db
+    return db
+
+
+def disable_exact_bearoff() -> None:
+    """Disable exact bearoff evaluation (revert to pure network)."""
+    global _shared_db
+    _shared_db = None
+
+
+def get_exact_bearoff_db() -> Optional[BearoffDatabase]:
+    """The shared bearoff database, or None when exact evaluation is off."""
+    return _shared_db
+
+
+def _exact_bearoff_counts(
+    db: BearoffDatabase, board: Board
+) -> Optional[Tuple[Tuple[int, ...], Tuple[int, ...]]]:
+    """Home-board counts (mover's, opponent's) when the position is
+    EXACTLY evaluable from the one-sided database, else None.
+
+    Exactness requires:
+    - Both players bearing off (in this engine the home boards are
+      disjoint, so mutual bearoff implies a pure race).
+    - Both players have borne off at least one checker, so gammons and
+      backgammons are impossible and the win probability fully
+      determines the equity (the database ignores gammons).
+    - Both sides within db.max_checkers (only relevant for partial
+      builds; the full database covers every mutual-bearoff position).
+    """
+    # Cheap pre-filter: rejects everything outside the late endgame
+    # with two scalar reads before the per-point can_bear_off scans.
+    if board.white_checkers[25] < 1 or board.black_checkers[25] < 1:
+        return None
+
+    mover = board.player_to_move
+    ours = home_board_counts(board, mover)
+    if ours is None or sum(ours) > db.max_checkers:
+        return None
+    theirs = home_board_counts(board, mover.opponent())
+    if theirs is None or sum(theirs) > db.max_checkers:
+        return None
+    return ours, theirs
+
+
+def exact_bearoff_value(db: BearoffDatabase, board: Board) -> Optional[float]:
+    """Exact scalar value for board.player_to_move, or None.
+
+    Returns 2p - 1 in [-1, 1] (expected points: gammons are impossible
+    under the exactness gate, so win/loss probability is the whole
+    story), or None when the position is not exactly evaluable and the
+    caller should fall back to the network.
+    """
+    counts = _exact_bearoff_counts(db, board)
+    if counts is None:
+        return None
+    return 2.0 * db.win_probability(*counts) - 1.0
+
+
+def exact_bearoff_equity6(
+    db: BearoffDatabase, board: Board
+) -> Optional[np.ndarray]:
+    """Exact 6-dim equity distribution for board.player_to_move, or None.
+
+    Returns [win_n, win_g, win_bg, lose_n, lose_g, lose_bg] with the
+    gammon/backgammon slots exactly zero (impossible under the exactness
+    gate), or None when the caller should fall back to the network.
+    """
+    counts = _exact_bearoff_counts(db, board)
+    if counts is None:
+        return None
+    p = db.win_probability(*counts)
+    equity = np.zeros(6, dtype=np.float32)
+    equity[0] = p
+    equity[3] = 1.0 - p
+    return equity
+
+
 def bearoff_agent(
     db: BearoffDatabase,
     fallback=None,

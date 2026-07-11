@@ -19,6 +19,10 @@ from backgammon.encoding.encoder import (
 )
 from backgammon.encoding.action_encoder import encode_move_to_action
 from backgammon.evaluation.agents import Agent
+from backgammon.evaluation.bearoff import (
+    get_exact_bearoff_db,
+    exact_bearoff_equity6,
+)
 from backgammon.evaluation.search import select_move as search_select_move
 from backgammon.utils.jit_cache import get_jit_inference
 
@@ -215,6 +219,16 @@ class NeuralNetworkAgent:
             Array of shape (6,) with [win_n, win_g, win_bg, lose_n,
             lose_g, lose_bg] from board.player_to_move's perspective.
         """
+        # Exact equity from the shared bearoff database when enabled and
+        # the position qualifies (mutual bearoff, gammons impossible) —
+        # keeps sequential-play TD targets consistent with the batched
+        # self-play path.
+        db = get_exact_bearoff_db()
+        if db is not None:
+            exact = exact_bearoff_equity6(db, board)
+            if exact is not None:
+                return exact
+
         encoded_board = encode_boards_canonical([board])
 
         jit_fn = get_jit_inference(self.state.apply_fn)
