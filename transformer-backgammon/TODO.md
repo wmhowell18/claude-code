@@ -6,6 +6,8 @@
 >
 > **Known Issues (Feb 2026, updated Mar 2026)**: Code review identified several correctness bugs requiring attention before long training runs: policy head is non-functional (hash collisions + dummy targets — workaround: `train_policy=False` default), ~~global features are implemented but not wired into training~~ **(FIXED Mar 2026 — `input_feature_dim=10` with 8 global features)**, ~~TD targets are not renormalized before cross-entropy loss~~ **(FIXED Mar 2026 — moved to 6-dim equity, fixing zero-gradient bug for lose_normal outcomes)**, ~~dead code and stale configs~~ **(FIXED Mar 2026 — removed dead `train_step` from network.py and stale `TrainingConfig` from types.py)**, ~~and training telemetry is misleading (train_acc always 0.0, LR logged as constant peak)~~ **(FIXED Mar 2026 — equity_accuracy metric added, LR reads from schedule)**. See "KNOWN ISSUES" section below.
 >
+> **Search & endgame upgrades (July 2026, session 2)**: 2-ply search rebuilt with full batching and gnubg-style move filters — ~29× fewer network calls, all in fixed 4096-board chunks (item 109). One-sided bearoff database added (item 43): exact roll distributions for all 54,264 home-board positions, exact race win probabilities, perfect bearoff move selection, `bearoff_agent()`.
+>
 > **Root-cause review (July 2026)**: Training runs had never beaten random play. A full pipeline audit found and fixed two catastrophic bugs — color-flip augmentation corrupting 50% of training labels (item 120) and a direction-ambiguous board encoding (item 121) — plus a lagging-EMA self-play bug (item 122), a stale 5-dim value formula in the agent (item 123), sign errors in the "opponent dances" branches of 1-ply/2-ply search (item 124), a bar↔off swap in `flip_board` (item 126), and White's borne-off checkers scored at 25 pips each in `pip_count` (item 127). Search encoding was also vectorized (item 108), and the test suite — un-runnable since Mar 2026 — is green again (item 128). **Verified: smoke test now shows 0-ply win rate vs random jumping from ~70% (untrained) to ~94% after 480 warmstart games** — the pipeline learns.
 
 ---
@@ -156,6 +158,22 @@ training quality and telemetry — address before committing to multi-hour TPU r
   Added `checkpoint_matches_architecture()`: train() now inspects the RAW checkpoint structure
   before restoring, catching layer-count changes the old post-restore shape check couldn't see.
   **Suite now: 533 passed, 0 failed.** *(July 2026)*
+
+### Notes (July 2026 session 2 — search batching + bearoff DB)
+
+- **Item 109 done**: 2-ply search is now fully batched with gnubg-style move filters
+  (`opp_top_k=5`, `opp_threshold=0.25` defaults on `select_move_2ply`/`select_move`). All existing
+  call sites keep working; new keyword args control the filters. Full-width behavior is available
+  with `opp_top_k=None, opp_threshold=None`.
+- **Item 43 done**: one-sided bearoff database in `evaluation/bearoff.py` + `bearoff_agent()`.
+  Build once with `python scripts/build_bearoff_db.py` (cached in ~/.cache/backgammon).
+- **New follow-up (item 129)**: wire `bearoff_equity()` into search/self-play as an exact
+  terminal-ish evaluator for mutual-bearoff positions — replaces network evaluation with exact
+  values in the endgame, sharpening both play and TD training targets (gnubg does exactly this).
+- **Measured**: bearoff_agent (pip fallback) vs pip_count_agent: 53.3% over 300 games; perfect
+  bearoff alone ≈ +3%. Opening-position 2-ply: 124 batched network calls vs ~3,600 sequential.
+- **Testing note**: the full test suite (incl. jax/flax) now runs fine in the Claude remote
+  environment after `pip install -e . && pip install pytest pytest-cov pytest-xdist`; 576 tests.
 
 ### Notes (July 2026 session — root-cause audit)
 
@@ -312,10 +330,25 @@ training quality and telemetry — address before committing to multi-hour TPU r
 
 ### Endgame
 
-- [ ] **41. Bearoff database (<=6 checkers)** — Precomputed perfect play for simplified endgame positions. (Effort: L, Impact: large for endgame)
+- [ ] **41. Bearoff database (<=6 checkers)** — Precomputed perfect play for simplified endgame positions. Largely superseded by item 43's one-sided 15-checker DB (July 2026); a TWO-sided DB (exact vs-opponent play including gammon accounting) remains open. (Effort: L, Impact: small residual after item 43)
 - [x] **42. Race equity formula** — Effective Pip Count / Keith count for pure race evaluation. Implemented in `evaluation/race.py` and `core/board.py` with EPC corrections and sigmoid equity mapping. (Effort: S, Impact: moderate) *(Feb 2026)*
-- [ ] **43. One-sided bearoff database** — No contact, just bear off optimally. (Effort: M, Impact: moderate)
+- [x] **43. One-sided bearoff database** — `evaluation/bearoff.py`: exact roll-count distributions
+  for all C(21,6) = 54,264 positions of ≤15 checkers on the 6 home points, computed by DP over the
+  21 dice rolls with expected-rolls-minimizing play (same convention as gnubg's one-sided DB).
+  Full build ~30s, cached to ~/.cache/backgammon (~2.5 MB, `scripts/build_bearoff_db.py`).
+  Provides: exact race win probability by convolution (on-roll wins iff X ≤ Y),
+  `bearoff_equity()`, `select_bearoff_move()` (max win prob vs opponent distribution, tie-break
+  min E[rolls]), and `bearoff_agent()` with configurable non-bearoff fallback. Head-to-head:
+  bearoff_agent(pip fallback) beat pip_count_agent 53.3% over 300 games — perfect bearoff alone is
+  worth ~3% vs a heuristic. 32 tests incl. Monte-Carlo agreement with the exact win probability.
+  Known limitations (documented): one-sided policy, gammons ignored in equity. (Effort: M,
+  Impact: moderate) *(July 2026)*
 - [ ] **44. Contact endgame tablebases** — Perfect play for simple contact positions. (Effort: L, Impact: moderate)
+- [ ] **129. Wire bearoff DB into search & self-play** — Use `bearoff_equity()` (exact, item 43)
+  instead of the network wherever both players can bear off: search leaf evaluation
+  (`_batch_evaluate` fast-path), self-play move selection, and TD training targets. Exact endgame
+  values sharpen the training signal for everything upstream of bearoff (gnubg does this).
+  (Effort: S-M, Impact: moderate)
 
 ### MCTS / Advanced Search
 
@@ -347,14 +380,19 @@ training quality and telemetry — address before committing to multi-hour TPU r
   the standard 10-feature config through the shared vectorized `encode_boards_canonical()` (numpy
   slicing, no per-point Python loops) and pads batches to common sizes to avoid JIT recompiles.
   Exotic configs fall back to the generic path. *(July 2026)*
-- [ ] **109. 2-ply search makes k×21 separate network calls** — `select_move_2ply` evaluates each
-  legal move sequentially via `evaluate_move_2ply()`, which internally calls
-  `_evaluate_position_1ply` for each of 21 opponent dice outcomes individually. For k=20 legal
-  moves that is 420 separate network calls. By contrast, `select_move_1ply` correctly batches all
-  boards from all moves and all dice into a single call. 2-ply evaluation during training
-  checkpoints is therefore 20-50× slower than it should be. Fix: restructure 2-ply outer loop to
-  collect all (move, dice_roll) result boards first, run one batched call, then assign values. More
-  fundamental than item 56. (Effort: M, Impact: large)
+- [x] **109. 2-ply search makes k×21 separate network calls** — Fully rebuilt with gnubg-style
+  staged batching + move filters (`_evaluate_moves_2ply_batched` in search.py): (1) all candidate
+  moves screened at 0-ply in one call, top-k kept; (2) all opponent responses across all
+  (candidate, dice) pairs screened at 0-ply in ONE batched call; (3) only the best `opp_top_k`
+  responses per (candidate, dice) that are within `opp_threshold` equity of the best response
+  (gnubg move-filter rule) are refined at 1-ply, with leaves from the ENTIRE expansion evaluated
+  in shared fixed-size chunks (`_MAX_EVAL_BATCH=4096`, one compiled XLA shape). Measured on the
+  opening position: 124 batched calls vs ~3,600 sequential calls before (~29× fewer; each call now
+  a full 4096 batch, ideal for TPU). Bonus: `_batch_evaluate` now chunks oversized batches, the
+  opponent-dance branch is evaluated at 1-ply (was inconsistently 0-ply), and `evaluate_move_2ply`
+  / `_evaluate_position_1ply` are thin wrappers over the batched machinery so all paths agree.
+  Note: with an untrained network the threshold filter prunes nothing (all equities identical);
+  it kicks in once the network is trained. (Effort: M, Impact: large) *(July 2026)*
 - [x] **110. Replay buffer sampling via Python list comprehension** — Buffer now stores encoded
   boards, targets, and weights in pre-allocated numpy arrays (grown in chunks, circular FIFO
   eviction), so `sample_batch` is a single vectorized `arr[indices]` gather. Board/GameStep
@@ -371,7 +409,7 @@ training quality and telemetry — address before committing to multi-hour TPU r
 - [ ] **63. Opening book** — Pre-computed best moves for first 3-4 moves from gnubg/XtremeGammon. (Effort: S, Impact: moderate)
 - [ ] **64. Pre-training on expert games** — Train on gnubg rollout data or master-level human games before self-play. (Effort: M, Impact: large)
 - [ ] **65. Synthetic position generation** — Generate underrepresented board states for training diversity. (Effort: M, Impact: moderate)
-- [x] **66. Data augmentation via board flipping** — Color-flip augmentation wired into replay buffer. Every position also gets its flipped version stored, doubling effective training data. Equity targets properly flipped (win↔lose). Enabled by default via `use_color_flip_augmentation=True`. (Effort: S, Impact: small) *(Mar 2026)*
+- [-] **66. Data augmentation via board flipping** — ~~Color-flip augmentation wired into replay buffer (Mar 2026)~~ **REMOVED July 2026 (item 120)**: the augmentation stored win/lose-swapped targets for mover-identical positions, corrupting 50% of training labels. With the canonical mover-perspective encoding (item 121), a board and its color-flip encode identically, so the symmetry is structural and augmentation would only add exact duplicates. Do not re-add.
 - [ ] **67. Position classification labels** — Label positions as race/contact/holding/back game/blitz/prime. Useful for per-category evaluation. (Effort: M, Impact: informational)
 - [ ] **68. Disagreement training** — Find positions where network and gnubg disagree, train harder on those. (Effort: M, Impact: moderate)
 
@@ -401,7 +439,7 @@ training quality and telemetry — address before committing to multi-hour TPU r
 - [ ] **81. Knowledge distillation** — Train smaller "fast" network from large "slow" one for real-time play. (Effort: M, Impact: moderate)
 - [ ] **82. Dirichlet noise injection** — Add noise to prior during self-play (AlphaZero technique) for exploration. (Effort: S, Impact: small)
 - [ ] **83. Resign detection** — Network knows when position is hopeless, saves training time on decided games. (Effort: S, Impact: small)
-- [x] **84. Symmetry exploitation** — Color-flip augmentation in replay buffer ensures the network treats White and Black symmetrically. See item 66. (Effort: S, Impact: small) *(Mar 2026)*
+- [x] **84. Symmetry exploitation** — White/Black symmetry is structural since July 2026: the canonical mover-perspective encoding (item 121) makes a board and its color-flip encode identically, so the network is exactly color-symmetric by construction. (The earlier color-flip augmentation approach was removed — see items 66/120.) (Effort: S, Impact: small) *(Mar–July 2026)*
 
 ### Competitive Play
 
@@ -442,6 +480,7 @@ training quality and telemetry — address before committing to multi-hour TPU r
 7. ~~**Items 111-118, 66, 84** (architecture modernization)~~ — DONE (EMA, AdamW, RMSNorm, SwiGLU, pre-norm, muP, Stochastic MuZero, schedule-free optimizer, color-flip augmentation)
 8. ~~**Fix items 101-103, 105-107, 119**~~ — DONE (Mar 2026). 6-dim equity, global features wired, dead code removed, training telemetry fixed (equity_accuracy + LR from schedule), stale test dimensions swept (1024→4096, 5→6-dim). **Item 104** (policy head hash collisions) worked around with `train_policy=False` default; root fix deferred to item 59
 8b. ~~**Fix items 120-125 + 108 + 110** (root-cause audit)~~ — DONE (July 2026). Removed label-corrupting color-flip augmentation, canonical mover-perspective encoding with Black mirroring, EMA decay warmup, 6-dim value formula in agent, dance sign fixes + 2-ply wrong-mover fix, vectorized search encoding + batch padding, numpy replay buffer
+8c. ~~**Items 109 + 43** (batched 2-ply with move filters + one-sided bearoff DB)~~ — DONE (July 2026). 2-ply now ~29× fewer network calls, all fixed-shape 4096 batches; exact bearoff race probabilities + perfect bearoff agent
 9. **Longer training run** with the fixed pipeline — use `scripts/train_run.py` with presets (poc-15k, full-50k, long-200k), or `colab_tpu_training.ipynb` on a Colab TPU ← **NEXT**
 10. **Items 17-18** (N-step bootstrapping + rollout targets) — even better training signal
 11. **Wire Stochastic MuZero into training** (item 117 architecture done, needs MCTS integration + training loop)
@@ -495,7 +534,7 @@ training quality and telemetry — address before committing to multi-hour TPU r
 - [x] **muP support** — Maximal Update Parameterization for width-transferable hyperparameters. (Mar 2026)
 - [x] **Stochastic MuZero network** — Complete world model architecture in `network/muzero.py`. (Mar 2026)
 - [x] **Schedule-free optimizer** — `optax.contrib.schedule_free_adamw` option for training-length-independent optimization. (Mar 2026)
-- [x] **Color-flip data augmentation** — Wired into replay buffer, doubling effective training data. (Mar 2026)
+- [x] **Color-flip data augmentation** — Wired into replay buffer, doubling effective training data. (Mar 2026) **[Removed July 2026 — corrupted labels; see items 66/120]**
 - [x] **6-dim equity (fix item 103)** — Moved from 5-dim to explicit 6-dim equity `[win_n, win_g, win_bg, lose_n, lose_g, lose_bg]`. Fixed zero-gradient bug for lose_normal outcomes and TD target information loss. 17 files changed. (Mar 2026)
 - [x] **Fix train_acc (item 101)** — Added `equity_accuracy` metric (top-1 outcome match on 6-dim equity). `compute_metrics()` now called on training minibatch at eval checkpoints. Renamed `accuracy`→`policy_accuracy`. Fixed stale 5-dim and 1024-action test dimensions. (Mar 2026)
 - [x] **Fix LR logging (item 102)** — Already fixed: `lr_schedule(total_train_steps)` reads actual scheduled value. Marked done. (Mar 2026)

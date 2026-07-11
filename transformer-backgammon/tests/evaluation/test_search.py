@@ -25,6 +25,10 @@ from backgammon.evaluation.search import (
     _equity_to_value,
     _batch_evaluate,
     _terminal_value,
+    _evaluate_position_1ply,
+    _evaluate_positions_1ply_batched,
+    _evaluate_moves_2ply_batched,
+    evaluate_move_2ply,
     select_move_0ply,
     select_move_1ply,
     select_move_2ply,
@@ -288,6 +292,199 @@ class TestSelectMoveDispatch:
         moves = generate_legal_moves(board, Player.WHITE, (3, 1))
         move, _ = select_move(small_state, board, Player.WHITE, (3, 1), moves, ply=0)
         assert move in moves
+
+
+def _race_board(white_pts, black_pts):
+    """Create a small pure-race board (spare checkers borne OFF, not on bar).
+
+    Unlike _bearoff_board, the remaining checkers go to point 25 (off) for
+    both players, so terminal outcomes are normal wins, not backgammons.
+    """
+    board = empty_board()
+    for pt, cnt in white_pts.items():
+        board.set_checkers(Player.WHITE, pt, cnt)
+    board.set_checkers(Player.WHITE, 25, 15 - sum(white_pts.values()))
+    for pt, cnt in black_pts.items():
+        board.set_checkers(Player.BLACK, pt, cnt)
+    board.set_checkers(Player.BLACK, 25, 15 - sum(black_pts.values()))
+    return board
+
+
+class TestEvaluatePositions1PlyBatched:
+    """Batched 1-ply position evaluation must match the single-board path."""
+
+    def test_empty(self, small_state, encoding_config):
+        vals = _evaluate_positions_1ply_batched(small_state, [], encoding_config)
+        assert len(vals) == 0
+
+    def test_matches_single_board_wrapper(self, small_state, encoding_config):
+        boards = [
+            _race_board({1: 1, 2: 1}, {23: 1, 24: 1}),
+            _race_board({3: 2}, {22: 2}),
+        ]
+        batched = _evaluate_positions_1ply_batched(
+            small_state, boards, encoding_config
+        )
+        for b, batched_val in zip(boards, batched):
+            single = _evaluate_position_1ply(
+                small_state, b, b.player_to_move, encoding_config
+            )
+            assert float(batched_val) == pytest.approx(single, abs=1e-5)
+
+    def test_perspective_negates(self, small_state, encoding_config):
+        board = _race_board({1: 1, 2: 1}, {23: 1, 24: 1})
+        v_white = _evaluate_position_1ply(
+            small_state, board, Player.WHITE, encoding_config
+        )
+        v_black = _evaluate_position_1ply(
+            small_state, board, Player.BLACK, encoding_config
+        )
+        assert v_white == pytest.approx(-v_black, abs=1e-5)
+
+
+class TestBatched2Ply:
+    """Tests for the batched 2-ply evaluation (item 109)."""
+
+    def test_terminal_move_is_exact(self, small_state, encoding_config):
+        """Bearing off the last checker gives the exact game value."""
+        board = _race_board({1: 1}, {24: 1})
+        moves = generate_legal_moves(board, Player.WHITE, (3, 1))
+        # Any move bears off white's last checker -> normal win, value 1.0
+        val = evaluate_move_2ply(
+            small_state, board, Player.WHITE, moves[0], encoding_config
+        )
+        assert val == pytest.approx(1.0, abs=1e-6)
+
+        move, best_val = select_move_2ply(
+            small_state, board, Player.WHITE, moves, encoding_config
+        )
+        assert move in moves
+        assert best_val == pytest.approx(1.0, abs=1e-6)
+
+    def test_single_move_matches_batch(self, small_state, encoding_config):
+        """Evaluating moves together or one-by-one gives identical values."""
+        board = _race_board({2: 1, 4: 1}, {21: 1, 23: 1})
+        moves = generate_legal_moves(board, Player.WHITE, (2, 1))
+        assert len(moves) >= 2
+
+        batched = _evaluate_moves_2ply_batched(
+            small_state, board, Player.WHITE, moves, encoding_config, None
+        )
+        for move, batched_val in zip(moves, batched):
+            single = evaluate_move_2ply(
+                small_state, board, Player.WHITE, move, encoding_config
+            )
+            assert float(batched_val) == pytest.approx(single, abs=1e-5)
+
+    def test_filter_matches_full_width_when_not_pruning(
+        self, small_state, encoding_config
+    ):
+        """opp_top_k larger than the number of responses == no filter."""
+        board = _race_board({2: 1, 4: 1}, {21: 1, 23: 1})
+        moves = generate_legal_moves(board, Player.WHITE, (2, 1))
+
+        full = _evaluate_moves_2ply_batched(
+            small_state, board, Player.WHITE, moves, encoding_config, None
+        )
+        filtered = _evaluate_moves_2ply_batched(
+            small_state, board, Player.WHITE, moves, encoding_config, 100
+        )
+        np.testing.assert_allclose(full, filtered, atol=1e-6)
+
+    def test_select_is_argmax_of_evaluate(self, small_state, encoding_config):
+        """select_move_2ply (no pruning) picks the argmax of evaluate_move_2ply."""
+        board = _race_board({2: 1, 4: 1}, {21: 1, 23: 1})
+        moves = generate_legal_moves(board, Player.WHITE, (2, 1))
+
+        vals = [
+            evaluate_move_2ply(
+                small_state, board, Player.WHITE, m, encoding_config,
+                opp_top_k=100,
+            )
+            for m in moves
+        ]
+        best_by_eval = moves[int(np.argmax(vals))]
+
+        move, val = select_move_2ply(
+            small_state, board, Player.WHITE, moves, encoding_config,
+            top_k=len(moves), opp_top_k=100, opp_threshold=None,
+        )
+        assert move == best_by_eval
+        assert val == pytest.approx(max(vals), abs=1e-5)
+
+    def test_huge_threshold_matches_no_threshold(
+        self, small_state, encoding_config
+    ):
+        """A threshold too large to prune anything == threshold disabled."""
+        board = _race_board({2: 1, 4: 1}, {21: 1, 23: 1})
+        moves = generate_legal_moves(board, Player.WHITE, (2, 1))
+
+        no_thresh = _evaluate_moves_2ply_batched(
+            small_state, board, Player.WHITE, moves, encoding_config,
+            None, None,
+        )
+        huge_thresh = _evaluate_moves_2ply_batched(
+            small_state, board, Player.WHITE, moves, encoding_config,
+            None, 100.0,
+        )
+        np.testing.assert_allclose(no_thresh, huge_thresh, atol=1e-6)
+
+    def test_default_filters_return_legal_move(
+        self, small_state, encoding_config
+    ):
+        """Default move filters (top-k + threshold) yield a legal move."""
+        board = _race_board({2: 2, 4: 1}, {21: 1, 23: 2})
+        moves = generate_legal_moves(board, Player.WHITE, (2, 1))
+        move, val = select_move_2ply(
+            small_state, board, Player.WHITE, moves, encoding_config
+        )
+        assert move in moves
+        assert np.isfinite(val)
+
+    def test_deterministic(self, small_state, encoding_config):
+        board = _race_board({2: 1, 4: 1}, {21: 1, 23: 1})
+        moves = generate_legal_moves(board, Player.WHITE, (2, 1))
+        m1, v1 = select_move_2ply(
+            small_state, board, Player.WHITE, moves, encoding_config
+        )
+        m2, v2 = select_move_2ply(
+            small_state, board, Player.WHITE, moves, encoding_config
+        )
+        assert m1 == m2
+        assert v1 == pytest.approx(v2, abs=1e-6)
+
+    def test_network_call_count(
+        self, small_state, encoding_config, monkeypatch
+    ):
+        """The whole 2-ply selection runs in a handful of batched calls.
+
+        Regression test for item 109: the old implementation made one
+        network call per (candidate, dice, response) — hundreds of calls
+        even for small positions.
+        """
+        import backgammon.evaluation.search as search_mod
+
+        calls = {"n": 0}
+        real = search_mod._batch_evaluate
+
+        def counting(state, boards, cfg):
+            calls["n"] += 1
+            return real(state, boards, cfg)
+
+        monkeypatch.setattr(search_mod, "_batch_evaluate", counting)
+
+        board = _race_board({2: 2, 4: 1}, {21: 1, 23: 2})
+        moves = generate_legal_moves(board, Player.WHITE, (2, 1))
+        assert len(moves) >= 2
+
+        select_move_2ply(
+            small_state, board, Player.WHITE, moves, encoding_config
+        )
+        # 0-ply candidate screen (only if pruning) + response screen (only
+        # if filtering prunes) + one chunked 1-ply leaf batch. Chunking may
+        # split the leaf batch, but for this small position everything
+        # fits in a handful of calls.
+        assert calls["n"] <= 4
 
 
 class TestMoveOrdering:

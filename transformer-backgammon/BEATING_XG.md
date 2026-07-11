@@ -26,10 +26,10 @@ After the bug fixes just landed:
 | Game engine | Complete | Yes |
 | Neural network | Modern transformer (RMSNorm, SwiGLU, pre-norm, muP) | Comparable architecture |
 | Training pipeline | TD(lambda) + curriculum + EMA + AdamW (label-corrupting flip augmentation removed July 2026) | Comparable approach |
-| Search | 0/1/2-ply with batching | Behind (XG uses 3-ply + rollouts) |
+| Search | 0/1/2-ply, fully batched with gnubg-style move filters (July 2026) | Behind (XG uses 3-ply + rollouts) |
 | Board encoding | 10-dim enhanced, canonical mover perspective (mirrored for Black, July 2026) | Reasonable |
 | World model | Stochastic MuZero architecture (not yet trained) | Ahead (XG has none) |
-| Bearoff database | None | Major gap |
+| Bearoff database | One-sided 15-checker DB: exact race win probs + perfect bearoff moves (July 2026) | Close (XG adds two-sided DBs; search wiring pending — TODO item 129) |
 | Opening book | None | Minor gap |
 | Cube decisions | Infrastructure only | Major gap |
 | Race model | Pip count formula | Behind |

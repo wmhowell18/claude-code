@@ -223,6 +223,11 @@ class TranspositionTable:
 # the number of compilations small during search.
 _BATCH_PAD_SIZES = [1, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
 
+# Batches larger than this are evaluated in fixed-size chunks so every
+# network call reuses the same compiled shape (and device memory stays
+# bounded when deep search collects hundreds of thousands of leaves).
+_MAX_EVAL_BATCH = 4096
+
 
 def _pad_batch_size(n: int) -> int:
     """Find smallest padded batch size >= n."""
@@ -306,6 +311,18 @@ def _batch_evaluate(
         return np.array([], dtype=np.float32)
 
     n = len(boards)
+
+    # Evaluate oversized batches in fixed-size chunks: one compiled shape,
+    # bounded device memory.
+    if n > _MAX_EVAL_BATCH:
+        out = np.empty(n, dtype=np.float32)
+        for start in range(0, n, _MAX_EVAL_BATCH):
+            chunk = boards[start:start + _MAX_EVAL_BATCH]
+            out[start:start + len(chunk)] = _batch_evaluate(
+                state, chunk, encoding_config
+            )
+        return out
+
     encoded = _encode_boards_batch(boards, encoding_config)
 
     # Pad to a common batch size to minimize JIT recompilations
@@ -717,81 +734,115 @@ def select_move_1ply(
     return legal_moves[best_idx], float(move_values[best_idx])
 
 
-def evaluate_move_2ply(
-    state: train_state.TrainState,
-    board: Board,
-    player: Player,
-    move: Move,
-    encoding_config: Optional[EncodingConfig] = None,
-) -> float:
-    """Evaluate a single move at 2-ply (opponent uses 1-ply response).
+# Default number of opponent responses per (candidate move, dice roll)
+# that are refined at 1-ply during 2-ply search. The rest are pruned
+# after 0-ply screening — gnubg-style "move filters". Terminal responses
+# are always exact and never pruned.
+DEFAULT_2PLY_OPP_TOP_K = 5
 
-    Apply the move, then for each of 21 opponent dice rolls, the opponent
-    selects their best move using 1-ply evaluation (dice-averaged lookahead
-    from their perspective). This gives a much more accurate assessment
-    than 1-ply at the cost of significantly more computation.
+# Responses whose screened 0-ply value falls more than this many equity
+# points (units of _equity_to_value, roughly [-3, 3]) below the best
+# response for the same dice roll are pruned even inside the top-k —
+# the second half of gnubg's move-filter rule ("accept N, keep within
+# threshold"). In lopsided positions this prunes most of the top-k.
+DEFAULT_2PLY_OPP_THRESHOLD = 0.25
+
+
+def _evaluate_positions_1ply_batched(
+    state: train_state.TrainState,
+    boards: List[Board],
+    encoding_config: EncodingConfig,
+) -> np.ndarray:
+    """Evaluate many positions at 1-ply, sharing batched network calls.
+
+    For each board, the player to move picks their best 0-ply move for
+    each of the 21 dice rolls; results are averaged by dice probability.
+    Leaf positions from ALL boards are collected into shared batches
+    (chunked by _batch_evaluate), so the number of network calls is
+    O(total_leaves / _MAX_EVAL_BATCH) instead of O(len(boards)).
 
     Args:
         state: Network training state.
-        board: Current board state.
-        player: Player making the move.
-        move: Move to evaluate.
-        encoding_config: Encoding config (defaults to raw).
+        boards: Positions to evaluate.
+        encoding_config: Encoding configuration.
 
     Returns:
-        Value estimate from player's perspective (higher = better).
+        Array of shape (len(boards),) with 1-ply values, each from that
+        board's player_to_move perspective.
     """
-    if encoding_config is None:
-        encoding_config = enhanced_encoding_config()
+    if not boards:
+        return np.array([], dtype=np.float32)
 
-    new_board = apply_move(board, player, move)
+    leaf_boards: List[Board] = []
+    # Per board: list over 21 dice of (n_network, has_terminal, terminal_val)
+    per_board_info = []
 
-    if is_game_over(new_board):
-        return _terminal_value(new_board, player)
+    for b in boards:
+        mover = b.player_to_move
+        dice_info = []
 
-    opponent = player.opponent()
+        for dice_roll in ALL_DICE_ROLLS:
+            moves = generate_legal_moves(b, mover, dice_roll)
 
-    weighted_value = 0.0
+            if not moves:
+                # Mover dances — turn passes without moving. pass_turn makes
+                # player_to_move = mover's opponent, matching the post-move
+                # leaves below, so the same negation applies in aggregation.
+                leaf_boards.append(pass_turn(b))
+                dice_info.append((1, False, 0.0))
+                continue
 
-    for dice_roll in ALL_DICE_ROLLS:
-        prob = DICE_PROBABILITIES[dice_roll]
-        opp_moves = generate_legal_moves(new_board, opponent, dice_roll)
+            terminal_found = False
+            terminal_val = -np.inf
+            n_network = 0
 
-        if not opp_moves:
-            # Opponent dances — checkers unchanged, our turn again.
-            # pass_turn makes player_to_move = us so the network value
-            # really is from our perspective.
-            values = _batch_evaluate(
-                state, [pass_turn(new_board)], encoding_config
-            )
-            our_val = float(values[0])
-            weighted_value += prob * our_val
-            continue
+            for m in moves:
+                after = apply_move(b, mover, m)
+                if is_game_over(after):
+                    v = _terminal_value(after, mover)
+                    if v > terminal_val:
+                        terminal_val = v
+                        terminal_found = True
+                else:
+                    leaf_boards.append(after)
+                    n_network += 1
 
-        # Opponent picks the move that maximizes THEIR value.
-        # Each opponent move is evaluated at 1-ply from the opponent's
-        # perspective (they average over OUR dice responses).
-        opp_best = -np.inf
+            dice_info.append((n_network, terminal_found, terminal_val))
 
-        for opp_move in opp_moves:
-            after_opp = apply_move(new_board, opponent, opp_move)
+        per_board_info.append(dice_info)
 
-            if is_game_over(after_opp):
-                opp_val = _terminal_value(after_opp, opponent)
-            else:
-                # Evaluate at 1-ply from opponent's perspective.
-                # This means: for each of OUR dice rolls, we pick our best
-                # response (at 0-ply), and opponent averages the results.
-                opp_val = _evaluate_position_1ply(
-                    state, after_opp, opponent, encoding_config
-                )
+    leaf_values = _batch_evaluate(state, leaf_boards, encoding_config)
 
-            opp_best = max(opp_best, opp_val)
+    values = np.zeros(len(boards), dtype=np.float32)
+    cursor = 0
 
-        # Convert back to our perspective
-        weighted_value += prob * (-opp_best)
+    for bi, dice_info in enumerate(per_board_info):
+        weighted_value = 0.0
 
-    return weighted_value
+        for dice_idx, (n_network, has_terminal, terminal_val) in enumerate(
+            dice_info
+        ):
+            prob = DICE_PROBABILITIES[ALL_DICE_ROLLS[dice_idx]]
+
+            # Mover picks the best move for this dice roll
+            best_val = -np.inf
+            if has_terminal:
+                best_val = terminal_val
+
+            for _ in range(n_network):
+                # Leaf value is from the leaf's player_to_move perspective,
+                # i.e. the mover's opponent. Negate to get the mover's value.
+                best_val = max(best_val, -float(leaf_values[cursor]))
+                cursor += 1
+
+            if best_val == -np.inf:
+                best_val = 0.0
+
+            weighted_value += prob * best_val
+
+        values[bi] = weighted_value
+
+    return values
 
 
 def _evaluate_position_1ply(
@@ -802,11 +853,7 @@ def _evaluate_position_1ply(
 ) -> float:
     """Evaluate a position at 1-ply from a given player's perspective.
 
-    The player to move on `board` (board.player_to_move — in 2-ply search
-    this is perspective's opponent responding to their move) picks their
-    best 0-ply move for each of the 21 dice rolls; the results are
-    averaged by dice probability and returned from `perspective`'s
-    point of view.
+    Thin wrapper over _evaluate_positions_1ply_batched for a single board.
 
     Args:
         state: Network training state.
@@ -817,76 +864,236 @@ def _evaluate_position_1ply(
     Returns:
         Value from perspective's point of view.
     """
-    mover = board.player_to_move
+    val = float(
+        _evaluate_positions_1ply_batched(state, [board], encoding_config)[0]
+    )
+    if board.player_to_move == perspective:
+        return val
+    return -val
 
-    # Collect all boards we need to evaluate in one batch
-    all_boards = []
-    dice_info = []  # (n_network, has_terminal, terminal_val)
 
-    for dice_roll in ALL_DICE_ROLLS:
-        moves = generate_legal_moves(board, mover, dice_roll)
+def _evaluate_moves_2ply_batched(
+    state: train_state.TrainState,
+    board: Board,
+    player: Player,
+    moves: LegalMoves,
+    encoding_config: EncodingConfig,
+    opp_top_k: Optional[int] = None,
+    opp_threshold: Optional[float] = None,
+) -> np.ndarray:
+    """Evaluate candidate moves at 2-ply with fully batched network calls.
 
-        if not moves:
-            # Mover dances — turn passes without moving. pass_turn makes
-            # player_to_move = mover's opponent, matching the post-move
-            # boards below, so the same negation applies in aggregation.
-            all_boards.append(pass_turn(board))
-            dice_info.append((1, False, 0.0))
+    For each candidate move and each of the 21 opponent dice rolls, the
+    opponent's best response is found by refining responses at 1-ply.
+    All network evaluations are shared across the whole (move, dice,
+    response) expansion:
+
+    1. One batched 0-ply call screens every opponent response.
+    2. Only the opp_top_k best responses per (move, dice) that also fall
+       within opp_threshold of the best screened response — gnubg-style
+       move filters — are refined at 1-ply, whose leaves from ALL
+       responses are evaluated in shared chunked batches.
+
+    Terminal opponent responses always use exact values and are never
+    pruned. When the opponent dances, the unchanged position (our turn
+    again) is refined at 1-ply like any selected response.
+
+    Args:
+        state: Network training state.
+        board: Current board state.
+        player: Player making the moves.
+        moves: Candidate moves to evaluate.
+        encoding_config: Encoding configuration.
+        opp_top_k: Opponent responses refined at 1-ply per (move, dice).
+            None refines every response (full-width, most accurate).
+        opp_threshold: Prune responses whose screened 0-ply value is more
+            than this far below the best response for the same dice roll
+            (equity units, ~[-3, 3]). None disables threshold pruning.
+
+    Returns:
+        Array of shape (len(moves),) with 2-ply values from player's
+        perspective.
+    """
+    opponent = player.opponent()
+    n_moves = len(moves)
+    out = np.zeros(n_moves, dtype=np.float32)
+
+    # --- Expansion: candidate moves × dice × opponent responses ---
+    candidate_terminal: Dict[int, float] = {}
+    screen_boards: List[Board] = []
+    # (move_idx, dice_idx) -> entry:
+    #   {"kind": "dance"} (slot assigned during refinement collection), or
+    #   {"kind": "moves", "terminal_best": float | None,
+    #    "range": (start, end) into screen_boards}
+    entries: Dict[Tuple[int, int], dict] = {}
+    dance_boards: Dict[Tuple[int, int], Board] = {}
+
+    for mi, move in enumerate(moves):
+        new_board = apply_move(board, player, move)
+
+        if is_game_over(new_board):
+            candidate_terminal[mi] = _terminal_value(new_board, player)
             continue
 
-        terminal_found = False
-        terminal_val = -np.inf
-        n_network = 0
+        for di, dice_roll in enumerate(ALL_DICE_ROLLS):
+            opp_moves = generate_legal_moves(new_board, opponent, dice_roll)
 
-        for m in moves:
-            after = apply_move(board, mover, m)
-            if is_game_over(after):
-                v = _terminal_value(after, mover)
-                if v > terminal_val:
-                    terminal_val = v
-                    terminal_found = True
-            else:
-                all_boards.append(after)
-                n_network += 1
+            if not opp_moves:
+                # Opponent dances — checkers unchanged, our turn again.
+                entries[(mi, di)] = {"kind": "dance"}
+                dance_boards[(mi, di)] = pass_turn(new_board)
+                continue
 
-        dice_info.append((n_network, terminal_found, terminal_val))
+            terminal_best: Optional[float] = None
+            start = len(screen_boards)
 
-    # Batch evaluate
-    if all_boards:
-        all_values = _batch_evaluate(state, all_boards, encoding_config)
-    else:
-        all_values = np.array([])
+            for opp_move in opp_moves:
+                after_opp = apply_move(new_board, opponent, opp_move)
+                if is_game_over(after_opp):
+                    v = _terminal_value(after_opp, opponent)
+                    if terminal_best is None or v > terminal_best:
+                        terminal_best = v
+                else:
+                    screen_boards.append(after_opp)
 
-    # Compute dice-averaged value from the MOVER's perspective
-    board_cursor = 0
-    weighted_value = 0.0
+            entries[(mi, di)] = {
+                "kind": "moves",
+                "terminal_best": terminal_best,
+                "range": (start, len(screen_boards)),
+            }
 
-    for dice_idx, (n_network, has_terminal, terminal_val) in enumerate(dice_info):
-        prob = DICE_PROBABILITIES[ALL_DICE_ROLLS[dice_idx]]
+    # --- 0-ply screening of opponent responses (move filter) ---
+    # Only needed when filtering can actually prune something.
+    screen_values: Optional[np.ndarray] = None
+    filtering = opp_top_k is not None or opp_threshold is not None
+    if filtering and screen_boards:
+        needs_screen = any(
+            e["kind"] == "moves" and e["range"][1] - e["range"][0] > 1
+            for e in entries.values()
+        )
+        if needs_screen:
+            # After the opponent's response, player_to_move = us, so the
+            # values are from OUR perspective; opponent's value = -value.
+            screen_values = _batch_evaluate(
+                state, screen_boards, encoding_config
+            )
 
-        # Mover picks the best move for this dice roll
-        best_val = -np.inf
+    # --- Collect positions to refine at 1-ply ---
+    refine_boards: List[Board] = []
 
-        if has_terminal:
-            best_val = max(best_val, terminal_val)
+    for key, e in entries.items():
+        if e["kind"] == "dance":
+            e["slot"] = len(refine_boards)
+            refine_boards.append(dance_boards[key])
+            continue
 
-        for _ in range(n_network):
-            # Value is from the board's next player_to_move perspective,
-            # i.e. the mover's opponent. Negate to get the mover's value.
-            opp_val = float(all_values[board_cursor])
-            mover_val = -opp_val
-            best_val = max(best_val, mover_val)
-            board_cursor += 1
+        start, end = e["range"]
+        idxs = list(range(start, end))
+        if screen_values is not None and len(idxs) > 1:
+            opp_vals = -screen_values[start:end]
+            order = np.argsort(-opp_vals, kind="stable")
+            if opp_top_k is not None:
+                order = order[:opp_top_k]
+            if opp_threshold is not None and len(order) > 1:
+                # Best response for this dice roll: exact terminal wins
+                # count too (they are always kept regardless).
+                best_ref = float(opp_vals[order[0]])
+                if e["terminal_best"] is not None:
+                    best_ref = max(best_ref, e["terminal_best"])
+                order = [
+                    j for j in order
+                    if float(opp_vals[j]) >= best_ref - opp_threshold
+                ]
+            idxs = [start + int(j) for j in order]
 
-        if best_val == -np.inf:
-            best_val = 0.0
+        e["slots"] = []
+        for j in idxs:
+            e["slots"].append(len(refine_boards))
+            refine_boards.append(screen_boards[j])
 
-        weighted_value += prob * best_val
+    # --- Batched 1-ply refinement ---
+    # Every refine board has player_to_move = us (the opponent just moved,
+    # or danced), so refined values are from OUR perspective.
+    refined = _evaluate_positions_1ply_batched(
+        state, refine_boards, encoding_config
+    )
 
-    # Convert from the mover's perspective to the requested perspective
-    if mover == perspective:
-        return weighted_value
-    return -weighted_value
+    # --- Aggregation: dice-average of opponent's best response ---
+    for mi in range(n_moves):
+        if mi in candidate_terminal:
+            out[mi] = candidate_terminal[mi]
+            continue
+
+        weighted_value = 0.0
+
+        for di, dice_roll in enumerate(ALL_DICE_ROLLS):
+            prob = DICE_PROBABILITIES[dice_roll]
+            e = entries[(mi, di)]
+
+            if e["kind"] == "dance":
+                weighted_value += prob * float(refined[e["slot"]])
+                continue
+
+            # Opponent picks the response that maximizes THEIR value.
+            opp_best = -np.inf
+            if e["terminal_best"] is not None:
+                opp_best = e["terminal_best"]
+            for slot in e["slots"]:
+                opp_best = max(opp_best, -float(refined[slot]))
+
+            if opp_best == -np.inf:
+                opp_best = 0.0
+
+            weighted_value += prob * (-opp_best)
+
+        out[mi] = weighted_value
+
+    return out
+
+
+def evaluate_move_2ply(
+    state: train_state.TrainState,
+    board: Board,
+    player: Player,
+    move: Move,
+    encoding_config: Optional[EncodingConfig] = None,
+    opp_top_k: Optional[int] = None,
+    opp_threshold: Optional[float] = None,
+) -> float:
+    """Evaluate a single move at 2-ply (opponent uses 1-ply response).
+
+    Apply the move, then for each of 21 opponent dice rolls, the opponent
+    selects their best move using 1-ply evaluation (dice-averaged lookahead
+    from their perspective). This gives a much more accurate assessment
+    than 1-ply at the cost of significantly more computation.
+
+    All network calls are batched across the full expansion (see
+    _evaluate_moves_2ply_batched).
+
+    Args:
+        state: Network training state.
+        board: Current board state.
+        player: Player making the move.
+        move: Move to evaluate.
+        encoding_config: Encoding config (defaults to raw).
+        opp_top_k: If set, only the opp_top_k best opponent responses per
+            dice roll (screened at 0-ply) are refined at 1-ply. None
+            refines every response (full-width).
+        opp_threshold: Prune responses more than this far below the best
+            screened response (equity units). None disables.
+
+    Returns:
+        Value estimate from player's perspective (higher = better).
+    """
+    if encoding_config is None:
+        encoding_config = enhanced_encoding_config()
+
+    return float(
+        _evaluate_moves_2ply_batched(
+            state, board, player, [move], encoding_config,
+            opp_top_k, opp_threshold,
+        )[0]
+    )
 
 
 def select_move_2ply(
@@ -897,16 +1104,17 @@ def select_move_2ply(
     encoding_config: Optional[EncodingConfig] = None,
     top_k: Optional[int] = None,
     tt: Optional[TranspositionTable] = None,
+    opp_top_k: Optional[int] = DEFAULT_2PLY_OPP_TOP_K,
+    opp_threshold: Optional[float] = DEFAULT_2PLY_OPP_THRESHOLD,
 ) -> Tuple[Move, float]:
     """Select best move using 2-ply evaluation with progressive deepening.
 
-    Uses a two-stage approach for efficiency:
+    Uses a staged approach for efficiency (gnubg-style move filters):
     1. Evaluate ALL moves at 0-ply (single batch forward pass, fast).
-    2. Run full 2-ply evaluation only on the top-k candidates.
-
-    This dramatically reduces computation compared to running 2-ply on
-    every legal move, with minimal strength loss since the best move
-    almost always appears in the top candidates at 0-ply.
+    2. Evaluate the top-k candidates at 2-ply, with all network calls
+       batched across candidates, dice rolls, and opponent responses,
+       and opponent responses pre-screened at 0-ply so only the best
+       opp_top_k per (move, dice) are refined at 1-ply.
 
     Args:
         state: Network training state.
@@ -917,7 +1125,13 @@ def select_move_2ply(
         top_k: Number of candidate moves to evaluate at 2-ply.
             If None, defaults to min(8, len(legal_moves)).
             Set to a large number to evaluate all moves (no pruning).
-        tt: Optional transposition table for caching evaluations.
+        tt: Optional transposition table for caching 0-ply screening
+            evaluations.
+        opp_top_k: Opponent responses refined at 1-ply per (move, dice).
+            None disables the filter (full-width, slowest).
+        opp_threshold: Prune responses more than this far below the best
+            screened response for the same dice roll (equity units).
+            None disables threshold pruning.
 
     Returns:
         Tuple of (best_move, best_value).
@@ -927,72 +1141,55 @@ def select_move_2ply(
 
     if not legal_moves:
         return (), 0.0
-    if len(legal_moves) == 1:
-        val = evaluate_move_2ply(
-            state, board, player, legal_moves[0], encoding_config
-        )
-        return legal_moves[0], val
 
     # Default top_k: evaluate at most 8 candidates at 2-ply
     if top_k is None:
         top_k = min(8, len(legal_moves))
 
-    # If we have few enough moves, just evaluate all at 2-ply
     if len(legal_moves) <= top_k:
-        best_move = legal_moves[0]
-        best_value = -np.inf
+        candidates = list(legal_moves)
+    else:
+        # Stage 1: fast 0-ply screening of all moves to find candidates
+        move_scores_0ply = []
+        result_boards = []
 
-        for move in legal_moves:
-            val = evaluate_move_2ply(
-                state, board, player, move, encoding_config
-            )
-            if val > best_value:
-                best_value = val
-                best_move = move
+        for i, move in enumerate(legal_moves):
+            new_board = apply_move(board, player, move)
+            if is_game_over(new_board):
+                move_scores_0ply.append(
+                    (_terminal_value(new_board, player), i, move)
+                )
+            elif tt is not None:
+                cached_val = tt.lookup(new_board, 0)
+                if cached_val is not None:
+                    # Stored from the resulting board's POV (opponent)
+                    move_scores_0ply.append((-cached_val, i, move))
+                else:
+                    result_boards.append((new_board, i, move))
+            else:
+                result_boards.append((new_board, i, move))
 
-        return best_move, best_value
+        # Batch evaluate non-terminal, non-cached positions
+        if result_boards:
+            boards_only = [b for b, _, _ in result_boards]
+            values = _batch_evaluate(state, boards_only, encoding_config)
+            for j, (new_board, i, move) in enumerate(result_boards):
+                if tt is not None:
+                    tt.store(new_board, 0, float(values[j]))
+                move_scores_0ply.append((-float(values[j]), i, move))
 
-    # Stage 1: Fast 0-ply evaluation of all moves to find candidates
-    _, _ = select_move_0ply(
-        state, board, player, legal_moves, encoding_config, tt=tt,
+        # Sort by 0-ply value (descending, index as tiebreak) and take top-k
+        move_scores_0ply.sort(key=lambda x: (-x[0], x[1]))
+        candidates = [move for _, _, move in move_scores_0ply[:top_k]]
+
+    # Stage 2: batched 2-ply evaluation of the candidates
+    values_2ply = _evaluate_moves_2ply_batched(
+        state, board, player, candidates, encoding_config,
+        opp_top_k, opp_threshold,
     )
-    # Re-evaluate to get all values (select_move_0ply only returns best)
-    move_scores_0ply = []
-    result_boards = []
-    terminal_info = {}
 
-    for i, move in enumerate(legal_moves):
-        new_board = apply_move(board, player, move)
-        if is_game_over(new_board):
-            terminal_info[i] = _terminal_value(new_board, player)
-            move_scores_0ply.append((terminal_info[i], i, move))
-        else:
-            result_boards.append((new_board, i, move))
-
-    # Batch evaluate non-terminal positions
-    if result_boards:
-        boards_only = [b for b, _, _ in result_boards]
-        values = _batch_evaluate(state, boards_only, encoding_config)
-        for j, (_, i, move) in enumerate(result_boards):
-            move_scores_0ply.append((-float(values[j]), i, move))
-
-    # Sort by 0-ply value (descending) and take top-k
-    move_scores_0ply.sort(key=lambda x: -x[0])
-    candidates = [(move, score) for score, _, move in move_scores_0ply[:top_k]]
-
-    # Stage 2: Full 2-ply evaluation of top-k candidates
-    best_move = candidates[0][0]
-    best_value = -np.inf
-
-    for move, _ in candidates:
-        val = evaluate_move_2ply(
-            state, board, player, move, encoding_config
-        )
-        if val > best_value:
-            best_value = val
-            best_move = move
-
-    return best_move, best_value
+    best_idx = int(np.argmax(values_2ply))
+    return candidates[best_idx], float(values_2ply[best_idx])
 
 
 def select_move(
@@ -1005,6 +1202,8 @@ def select_move(
     encoding_config: Optional[EncodingConfig] = None,
     top_k: Optional[int] = None,
     tt: Optional[TranspositionTable] = None,
+    opp_top_k: Optional[int] = DEFAULT_2PLY_OPP_TOP_K,
+    opp_threshold: Optional[float] = DEFAULT_2PLY_OPP_THRESHOLD,
 ) -> Tuple[Move, float]:
     """Select best move at a given search depth.
 
@@ -1021,6 +1220,10 @@ def select_move(
         top_k: For 2-ply, number of candidates to evaluate deeply.
             Moves are pre-screened at 0-ply and only top_k proceed to 2-ply.
         tt: Optional transposition table for caching evaluations.
+        opp_top_k: For 2-ply, opponent responses refined at 1-ply per
+            (move, dice) after 0-ply screening. None = full-width.
+        opp_threshold: For 2-ply, prune responses more than this far
+            below the best screened response (equity units).
 
     Returns:
         Tuple of (best_move, best_value).
@@ -1036,7 +1239,8 @@ def select_move(
     elif ply == 2:
         return select_move_2ply(
             state, board, player, legal_moves, encoding_config,
-            top_k=top_k, tt=tt,
+            top_k=top_k, tt=tt, opp_top_k=opp_top_k,
+            opp_threshold=opp_threshold,
         )
     else:
         raise ValueError(f"Unsupported ply depth: {ply}. Use 0, 1, or 2.")
