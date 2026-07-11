@@ -23,6 +23,15 @@ from backgammon.evaluation.evaluator import (
     evaluate_vs_opponent,
 )
 
+from backgammon.evaluation.bearoff import (
+    BearoffDatabase,
+    home_board_counts,
+    bearoff_win_probability,
+    bearoff_equity,
+    select_bearoff_move,
+    bearoff_agent,
+)
+
 __all__ = [
     # Agents
     "Agent",
@@ -41,4 +50,11 @@ __all__ = [
     "TrainingEvaluator",
     "EvalConfig",
     "evaluate_vs_opponent",
+    # Bearoff database
+    "BearoffDatabase",
+    "home_board_counts",
+    "bearoff_win_probability",
+    "bearoff_equity",
+    "select_bearoff_move",
+    "bearoff_agent",
 ]

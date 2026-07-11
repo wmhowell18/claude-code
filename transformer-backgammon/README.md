@@ -68,14 +68,15 @@ The core engine, network, training pipeline, and evaluation framework are comple
 - Full game engine with move generation, doubling cube, match play
 - Transformer network with value/policy/cube heads
 - TD(lambda) training with curriculum learning and self-play
-- 0/1/2-ply search with batched dice averaging
+- 0/1/2-ply search, fully batched with gnubg-style move filters
+- One-sided bearoff database: exact race win probabilities and perfect bearoff move selection (`scripts/build_bearoff_db.py`)
 - Checkpoint save/restore, metrics logging, early stopping
 - Benchmark position evaluation and agent comparison
 
 **What's not yet wired:**
 - Policy head (disabled; hash collisions in action encoding need a better scheme)
 - GnuBG interface for head-to-head evaluation
-- Bearoff database (major gap vs XG)
+- Bearoff database into search/self-play leaf evaluation (TODO item 129)
 - 3-ply search
 
 See [TODO.md](TODO.md) for the full feature list and [PERIODIC_REVIEW.md](PERIODIC_REVIEW.md) for the latest code review.
@@ -140,7 +141,7 @@ transformer-backgammon/
 |   |                      #   + Stochastic MuZero world model
 |   ├── training/          # Training: self-play, TD(lambda), replay buffer, losses
 |   |                      #   + curriculum, metrics, checkpointing
-|   ├── evaluation/        # Agents, search (0/1/2-ply), benchmarks
+|   ├── evaluation/        # Agents, search (0/1/2-ply), benchmarks, bearoff DB
 |   └── utils/             # Config, logging
 ├── tests/                 # Mirrors src/ structure
 ├── scripts/               # smoke_test.py, train_v6e.py, evaluate.py
@@ -186,7 +187,7 @@ late_phase_games = 10000
 | **Architecture** | LayerNorm, GELU | RMSNorm, SwiGLU, pre-norm, muP |
 | **Features** | Hand-crafted (many) | Learned + 8 global features |
 | **Training** | Years of refinement | TD(lambda) + EMA + AdamW + curriculum |
-| **Endgame** | Bearoff databases | Neural only (databases planned) |
+| **Endgame** | Bearoff databases | One-sided bearoff database (exact race probabilities) |
 | **Speed** | Very fast per position | 10-100x faster batched on GPU |
 
 The key bet is that GPU batching (512+ positions simultaneously) compensates for per-position latency, and that transformers can learn strategic features that hand-engineering misses. See [BEATING_XG.md](BEATING_XG.md) for the full path forward.
@@ -203,7 +204,7 @@ The key bet is that GPU batching (512+ positions simultaneously) compensates for
 | First training run (2.5K games) | Next |
 | Scale to 15K games, beat pip count agent | Planned |
 | GnuBG interface for evaluation | Planned |
-| Bearoff database | Planned |
+| Bearoff database (one-sided, exact race probabilities) | Done |
 | 3-ply search | Planned |
 | Scale to 200K+ games | Planned |
 
@@ -224,7 +225,7 @@ MIT
 Contributions welcome! See [TODO.md](TODO.md) for open items. Key areas:
 
 - Training at scale (longer runs, hyperparameter sweeps)
-- Bearoff database implementation
+- Wiring the bearoff database into search/self-play (TODO item 129)
 - GnuBG integration for evaluation
 - Architecture experiments (MoE, deeper models)
 - Encoding improvements (blot vulnerability, escape features)
