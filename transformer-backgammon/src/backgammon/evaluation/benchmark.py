@@ -399,7 +399,9 @@ def compute_equity_error(
             - 'n_evaluated': Number of positions with known equity
             - 'per_position': List of (name, predicted, expected, error)
     """
-    from backgammon.evaluation.search import _batch_evaluate, _equity_to_value
+    # Network-only path: this metric measures the NETWORK's accuracy, so
+    # the exact-bearoff fast-path must not mask its errors here.
+    from backgammon.evaluation.search import _batch_evaluate_network
     from backgammon.encoding.encoder import enhanced_encoding_config
 
     encoding_config = enhanced_encoding_config()
@@ -420,7 +422,7 @@ def compute_equity_error(
     expected = np.array([eq for _, eq in known])
 
     # Get network predictions
-    predicted = _batch_evaluate(state, boards, encoding_config)
+    predicted = _batch_evaluate_network(state, boards, encoding_config)
 
     errors = np.abs(predicted - expected)
 

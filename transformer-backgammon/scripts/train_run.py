@@ -308,6 +308,10 @@ def build_config(preset_name, dtype="bfloat16", checkpoint_dir=None, log_dir=Non
         use_1ply_selfplay=True,
         lookahead_top_k=8,
 
+        # Exact bearoff endgame values (search leaves, self-play move
+        # selection, TD targets). First run builds & caches the database.
+        use_exact_bearoff=True,
+
         # Position weighting (color symmetry is built into the canonical
         # mover-perspective encoding; no flip augmentation needed)
         use_position_weighting=True,

@@ -162,6 +162,16 @@ class TrainingConfig:
     use_1ply_selfplay: bool = False  # Use 1-ply dice-averaged lookahead for move selection
     lookahead_top_k: int = 8  # Pre-screen to top-k moves before 1-ply expansion
 
+    # Exact endgame evaluation: replace network evaluation with exact values
+    # from the one-sided bearoff database wherever both players are bearing
+    # off and gammons are impossible (search leaves, self-play move selection,
+    # TD targets — gnubg does the same). The first enable on a machine builds
+    # the database (~1 min, pure Python) and caches it to ~/.cache/backgammon;
+    # later runs load it in milliseconds. Off by default so unit tests and
+    # tiny experiments pay nothing; every real-run preset turns it on.
+    use_exact_bearoff: bool = False
+    bearoff_max_checkers: int = 15  # Database build limit (15 = full DB)
+
     # Game length limits
     max_moves: int = 200  # Max moves per game before declaring draw
 
@@ -229,6 +239,9 @@ def v6e_quick_training_config() -> TrainingConfig:
         # 1-ply lookahead for much stronger self-play training signal
         use_1ply_selfplay=True,
         lookahead_top_k=8,
+
+        # Exact bearoff endgame values (search, self-play, TD targets)
+        use_exact_bearoff=True,
 
         # Paths
         checkpoint_dir="checkpoints_v6e",
@@ -503,6 +516,17 @@ def train(config: Optional[TrainingConfig] = None):
 
     # Generate a unique run ID so log entries from different runs can be separated
     _current_run_id = uuid.uuid4().hex[:8]
+
+    # Exact endgame evaluation from the one-sided bearoff database.
+    # Enabled before any self-play/search so every evaluation funnel
+    # (search leaves, self-play move selection, TD targets) uses exact
+    # values in mutual-bearoff positions.
+    if config.use_exact_bearoff:
+        from backgammon.evaluation.bearoff import enable_exact_bearoff
+        print("🎯 Enabling exact bearoff evaluation "
+              "(builds & caches the database on first use)...")
+        db = enable_exact_bearoff(max_checkers=config.bearoff_max_checkers)
+        print(f"   Bearoff database ready (max_checkers={db.max_checkers})")
 
     # Initialize random state
     rng = np.random.default_rng(config.seed)

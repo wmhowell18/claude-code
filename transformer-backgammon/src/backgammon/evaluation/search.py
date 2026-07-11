@@ -41,6 +41,10 @@ from backgammon.encoding.encoder import (
     EncodingConfig,
     encode_boards_canonical,
 )
+from backgammon.evaluation.bearoff import (
+    get_exact_bearoff_db,
+    exact_bearoff_value,
+)
 from backgammon.utils.jit_cache import get_jit_inference
 
 
@@ -298,6 +302,12 @@ def _batch_evaluate(
     """Evaluate a batch of boards, returning value from each board's
     player_to_move perspective.
 
+    When the shared bearoff database is enabled (see
+    backgammon.evaluation.bearoff.enable_exact_bearoff), mutual-bearoff
+    positions with gammons impossible are evaluated exactly from the
+    database instead of the network — exact endgame values sharpen every
+    search that expands into the bearoff.
+
     Args:
         state: Network training state (model + params).
         boards: List of board states.
@@ -310,6 +320,50 @@ def _batch_evaluate(
     if not boards:
         return np.array([], dtype=np.float32)
 
+    db = get_exact_bearoff_db()
+    if db is not None:
+        values = np.empty(len(boards), dtype=np.float32)
+        network_boards = []
+        network_indices = []
+        for i, b in enumerate(boards):
+            v = exact_bearoff_value(db, b)
+            if v is None:
+                network_indices.append(i)
+                network_boards.append(b)
+            else:
+                values[i] = v
+        if network_boards:
+            values[network_indices] = _batch_evaluate_network(
+                state, network_boards, encoding_config
+            )
+        return values
+
+    return _batch_evaluate_network(state, boards, encoding_config)
+
+
+def _batch_evaluate_network(
+    state: train_state.TrainState,
+    boards: List[Board],
+    encoding_config: EncodingConfig,
+) -> np.ndarray:
+    """Network-only batch evaluation (no exact bearoff fast-path).
+
+    Used directly by benchmark.compute_equity_error, which measures the
+    NETWORK's accuracy — the exact-value fast-path must not mask its
+    errors there.
+
+    Args:
+        state: Network training state (model + params).
+        boards: List of board states.
+        encoding_config: Encoding configuration.
+
+    Returns:
+        Array of shape (len(boards),) with network value estimates from
+        each board's player_to_move perspective.
+    """
+    if not boards:
+        return np.array([], dtype=np.float32)
+
     n = len(boards)
 
     # Evaluate oversized batches in fixed-size chunks: one compiled shape,
@@ -318,7 +372,7 @@ def _batch_evaluate(
         out = np.empty(n, dtype=np.float32)
         for start in range(0, n, _MAX_EVAL_BATCH):
             chunk = boards[start:start + _MAX_EVAL_BATCH]
-            out[start:start + len(chunk)] = _batch_evaluate(
+            out[start:start + len(chunk)] = _batch_evaluate_network(
                 state, chunk, encoding_config
             )
         return out

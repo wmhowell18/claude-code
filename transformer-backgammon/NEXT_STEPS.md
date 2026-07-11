@@ -190,6 +190,10 @@ config = TrainingConfig(
     use_td_lambda=True,
     td_lambda=0.7,
 
+    # Exact bearoff endgame values (search, self-play, TD targets).
+    # First run builds & caches the database (~1 min).
+    use_exact_bearoff=True,
+
     checkpoint_every_n_batches=100,
     log_every_n_batches=10,
     eval_every_n_batches=50,
