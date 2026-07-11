@@ -8,6 +8,8 @@
 >
 > **Search & endgame upgrades (July 2026, session 2)**: 2-ply search rebuilt with full batching and gnubg-style move filters — ~29× fewer network calls, all in fixed 4096-board chunks (item 109). One-sided bearoff database added (item 43): exact roll distributions for all 54,264 home-board positions, exact race win probabilities, perfect bearoff move selection, `bearoff_agent()`.
 >
+> **Exact endgame wiring (July 2026, session 3)**: bearoff DB wired into every evaluation funnel (item 129) — search leaves, batched self-play move selection, and TD(lambda) targets all use exact values in gammon-free mutual-bearoff positions, gnubg-style. New `TrainingConfig.use_exact_bearoff`, on in all real-run presets. Untrained 0-ply agent + exact bearoff beats the same agent without it 71.5% over 200 bearoff games.
+>
 > **Root-cause review (July 2026)**: Training runs had never beaten random play. A full pipeline audit found and fixed two catastrophic bugs — color-flip augmentation corrupting 50% of training labels (item 120) and a direction-ambiguous board encoding (item 121) — plus a lagging-EMA self-play bug (item 122), a stale 5-dim value formula in the agent (item 123), sign errors in the "opponent dances" branches of 1-ply/2-ply search (item 124), a bar↔off swap in `flip_board` (item 126), and White's borne-off checkers scored at 25 pips each in `pip_count` (item 127). Search encoding was also vectorized (item 108), and the test suite — un-runnable since Mar 2026 — is green again (item 128). **Verified: smoke test now shows 0-ply win rate vs random jumping from ~70% (untrained) to ~94% after 480 warmstart games** — the pipeline learns.
 
 ---
@@ -159,6 +161,30 @@ training quality and telemetry — address before committing to multi-hour TPU r
   before restoring, catching layer-count changes the old post-restore shape check couldn't see.
   **Suite now: 533 passed, 0 failed.** *(July 2026)*
 
+### Notes (July 2026 session 3 — exact bearoff wiring, item 129)
+
+- **Design**: interception happens at the two evaluation funnels rather than in each caller —
+  `search._batch_evaluate` and `self_play._batched_inference` partition each batch into
+  exactly-evaluable boards (served from the DB) and the rest (network). Because ALL 0/1/2-ply
+  search paths and both self-play paths flow through those funnels, endgame move selection is
+  database-perfect and TD targets pick up exact values with no changes to callers.
+- **Exactness gate matters**: the DB ignores gammons, so exact values are only served when both
+  sides have borne off ≥1 checker (gammons then impossible; in this engine mutual bearoff also
+  implies a pure race since the home boards are disjoint). Positions with a live gammon fall back
+  to the network — no approximation is ever silently injected into training targets.
+- **Kept the benchmark honest**: `compute_equity_error` measures the NETWORK, so it now calls the
+  network-only path explicitly; otherwise enabling the DB would mask network error on race/bearoff
+  benchmark positions and corrupt the training-progress signal.
+- **Cost**: two scalar array reads per board pre-filter (off-counts ≥1 for both) before any
+  per-point work, so midgame batches pay essentially nothing. Full DB build ~39 s (one-time,
+  cached at ~/.cache/backgammon); enables in ms afterwards.
+- **Measured**: untrained 0-ply neural agent WITH exact bearoff vs identical agent WITHOUT:
+  143/200 = 71.5% ± 6.3% from the bearoff-practice start. (Play-time gain will be smaller for a
+  trained network, but the bigger prize is exact TD targets propagating backward from the endgame.)
+- **Follow-up ideas**: extend the DB with first-checker-off distributions to make gammon-live
+  bearoff positions exact too (gnubg stores these as optional "gammon distributions"); two-sided
+  DB for ≤6-checker positions remains item 41.
+
 ### Notes (July 2026 session 2 — search batching + bearoff DB)
 
 - **Item 109 done**: 2-ply search is now fully batched with gnubg-style move filters
@@ -167,9 +193,9 @@ training quality and telemetry — address before committing to multi-hour TPU r
   with `opp_top_k=None, opp_threshold=None`.
 - **Item 43 done**: one-sided bearoff database in `evaluation/bearoff.py` + `bearoff_agent()`.
   Build once with `python scripts/build_bearoff_db.py` (cached in ~/.cache/backgammon).
-- **New follow-up (item 129)**: wire `bearoff_equity()` into search/self-play as an exact
-  terminal-ish evaluator for mutual-bearoff positions — replaces network evaluation with exact
-  values in the endgame, sharpening both play and TD training targets (gnubg does exactly this).
+- ~~**New follow-up (item 129)**: wire `bearoff_equity()` into search/self-play as an exact
+  terminal-ish evaluator for mutual-bearoff positions~~ — **DONE (July 2026, session 3)**; see
+  item 129 and the session 3 notes above.
 - **Measured**: bearoff_agent (pip fallback) vs pip_count_agent: 53.3% over 300 games; perfect
   bearoff alone ≈ +3%. Opening-position 2-ply: 124 batched network calls vs ~3,600 sequential.
 - **Testing note**: the full test suite (incl. jax/flax) now runs fine in the Claude remote
@@ -344,11 +370,21 @@ training quality and telemetry — address before committing to multi-hour TPU r
   Known limitations (documented): one-sided policy, gammons ignored in equity. (Effort: M,
   Impact: moderate) *(July 2026)*
 - [ ] **44. Contact endgame tablebases** — Perfect play for simple contact positions. (Effort: L, Impact: moderate)
-- [ ] **129. Wire bearoff DB into search & self-play** — Use `bearoff_equity()` (exact, item 43)
-  instead of the network wherever both players can bear off: search leaf evaluation
-  (`_batch_evaluate` fast-path), self-play move selection, and TD training targets. Exact endgame
-  values sharpen the training signal for everything upstream of bearoff (gnubg does this).
-  (Effort: S-M, Impact: moderate)
+- [x] **129. Wire bearoff DB into search & self-play** — Done via a process-wide shared database
+  (`enable_exact_bearoff`/`disable_exact_bearoff`/`get_exact_bearoff_db` in `bearoff.py`) consulted
+  by every evaluation funnel: `search._batch_evaluate` (all 0/1/2-ply paths),
+  `self_play._batched_inference` (batched self-play move selection AND the recorded value estimates
+  that become TD(lambda) targets), and `NeuralNetworkAgent.get_equity_estimate` (sequential play).
+  Exactness gate: both players bearing off AND both have ≥1 checker off, so gammons are impossible
+  and the DB win probability fully determines the equity — values are exact, not approximate
+  (positions where a gammon is still live fall back to the network). `benchmark.compute_equity_error`
+  deliberately uses the new network-only `_batch_evaluate_network` so the equity-error metric keeps
+  measuring the network. New `TrainingConfig.use_exact_bearoff` (+ `bearoff_max_checkers`), off by
+  default for fast unit tests, enabled in the v6e preset, all `train_run.py` presets, and the Colab
+  notebook. **Measured**: untrained 0-ply agent + exact bearoff beats the identical agent without it
+  71.5% ± 6.3% over 200 pure-bearoff games; full DB builds in ~39 s then loads from cache in ms.
+  19 new tests in `tests/evaluation/test_exact_bearoff_wiring.py`. (Effort: S-M, Impact: moderate)
+  *(July 2026)*
 
 ### MCTS / Advanced Search
 
@@ -375,7 +411,11 @@ training quality and telemetry — address before committing to multi-hour TPU r
 
 ### Speed & Efficiency
 
-- [ ] **56. JIT compile evaluation pipeline** — Not just train_step, also inference and search. (Effort: S, Impact: moderate)
+- [x] **56. JIT compile evaluation pipeline** — Network inference is JIT-compiled and cached
+  everywhere via `utils/jit_cache.get_jit_inference` (search `_batch_evaluate_network`, batched
+  self-play `_batched_inference_network`, `NeuralNetworkAgent`), with batch-size padding to avoid
+  recompiles. The Python-side move generation/expansion logic stays host-side by design (see item
+  57 for vectorizing move generation). *(Feb–July 2026, marked done July 2026)*
 - [x] **108. Search encoding path not vectorized** — `search.py:_encode_boards_batch` now routes
   the standard 10-feature config through the shared vectorized `encode_boards_canonical()` (numpy
   slicing, no per-point Python loops) and pads batches to common sizes to avoid JIT recompiles.
@@ -481,6 +521,7 @@ training quality and telemetry — address before committing to multi-hour TPU r
 8. ~~**Fix items 101-103, 105-107, 119**~~ — DONE (Mar 2026). 6-dim equity, global features wired, dead code removed, training telemetry fixed (equity_accuracy + LR from schedule), stale test dimensions swept (1024→4096, 5→6-dim). **Item 104** (policy head hash collisions) worked around with `train_policy=False` default; root fix deferred to item 59
 8b. ~~**Fix items 120-125 + 108 + 110** (root-cause audit)~~ — DONE (July 2026). Removed label-corrupting color-flip augmentation, canonical mover-perspective encoding with Black mirroring, EMA decay warmup, 6-dim value formula in agent, dance sign fixes + 2-ply wrong-mover fix, vectorized search encoding + batch padding, numpy replay buffer
 8c. ~~**Items 109 + 43** (batched 2-ply with move filters + one-sided bearoff DB)~~ — DONE (July 2026). 2-ply now ~29× fewer network calls, all fixed-shape 4096 batches; exact bearoff race probabilities + perfect bearoff agent
+8d. ~~**Item 129** (exact bearoff wired into search, self-play, and TD targets)~~ — DONE (July 2026). Every evaluation funnel serves exact values in gammon-free mutual-bearoff positions; `use_exact_bearoff=True` in all real-run presets
 9. **Longer training run** with the fixed pipeline — use `scripts/train_run.py` with presets (poc-15k, full-50k, long-200k), or `colab_tpu_training.ipynb` on a Colab TPU ← **NEXT**
 10. **Items 17-18** (N-step bootstrapping + rollout targets) — even better training signal
 11. **Wire Stochastic MuZero into training** (item 117 architecture done, needs MCTS integration + training loop)

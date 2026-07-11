@@ -217,7 +217,7 @@ class TestSearchInterception:
         enable_exact_bearoff(db=db6)
         cfg = enhanced_encoding_config()
         board = _race_board({1: 1, 2: 1, 5: 1}, {2: 1, 3: 1, 4: 1})
-        dice = (5, 2)
+        dice = (2, 1)
         legal = generate_legal_moves(board, Player.WHITE, dice)
         assert len(legal) > 1
 

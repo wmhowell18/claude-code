@@ -35,7 +35,7 @@ transformer-backgammon/
 │   ├── evaluation/
 │   │   ├── evaluator.py       # Position evaluation
 │   │   ├── search.py          # N-ply lookahead (batched, gnubg-style move filters)
-│   │   ├── bearoff.py         # One-sided bearoff database (exact race win probs)
+│   │   ├── bearoff.py         # One-sided bearoff DB + shared exact endgame evaluation
 │   │   ├── mcts.py            # Monte Carlo Tree Search (optional)
 │   │   └── benchmarks.py      # Benchmark suites
 │   │

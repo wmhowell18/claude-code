@@ -29,7 +29,7 @@ After the bug fixes just landed:
 | Search | 0/1/2-ply, fully batched with gnubg-style move filters (July 2026) | Behind (XG uses 3-ply + rollouts) |
 | Board encoding | 10-dim enhanced, canonical mover perspective (mirrored for Black, July 2026) | Reasonable |
 | World model | Stochastic MuZero architecture (not yet trained) | Ahead (XG has none) |
-| Bearoff database | One-sided 15-checker DB: exact race win probs + perfect bearoff moves (July 2026) | Close (XG adds two-sided DBs; search wiring pending — TODO item 129) |
+| Bearoff database | One-sided 15-checker DB wired into search, self-play & TD targets as an exact endgame evaluator (July 2026) | Close (XG adds two-sided DBs) |
 | Opening book | None | Minor gap |
 | Cube decisions | Infrastructure only | Major gap |
 | Race model | Pip count formula | Behind |
@@ -96,7 +96,7 @@ Key work:
 
 1. **3-ply search** with proper batching. The current 2-ply search makes k*21 separate network calls (TODO #109). Fix this first, then extend to 3-ply. With batched evaluation and move ordering, 3-ply should be tractable at ~1-2 seconds per move on GPU.
 
-2. **Bearoff database** (TODO #41). This is non-negotiable for championship-level play. The endgame is where equity errors compound, and perfect bearoff play eliminates an entire class of errors.
+2. **Bearoff database** (TODO #41; one-sided DB done and wired into search/self-play/TD targets July 2026 — remaining: two-sided and contact DBs). This is non-negotiable for championship-level play. The endgame is where equity errors compound, and perfect bearoff play eliminates an entire class of errors.
    - One-sided bearoff: ~54K positions for 15 checkers on points 1-6. Store exact win/gammon probabilities. This alone significantly improves endgame play.
    - Two-sided bearoff: Much larger but can be computed for positions with <=6 checkers total on each side. This handles the final phase of most games perfectly.
    - Contact bearoff: Positions with checkers still in contact but bearing off. More complex, larger database.
