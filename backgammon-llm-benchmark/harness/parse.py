@@ -110,8 +110,10 @@ def extract_answer_text(text: str, decision_type: str) -> tuple[str | None, bool
     # Fallback: last plausible answer-looking line.
     if decision_type == "cube":
         for line in reversed(lines):
-            if _CUBE_WORD_RE.search(line):
-                return line.strip().strip("`*_ "), True
+            m = _CUBE_WORD_RE.search(line)
+            if m:
+                # Return just the recognized cube keyword, not the whole sentence.
+                return m.group(0).strip(), True
         return None, True
 
     for line in reversed(lines):
