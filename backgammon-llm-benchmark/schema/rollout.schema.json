@@ -42,9 +42,9 @@
             "properties": {
               "move": { "type": "string", "description": "Standard slash notation, e.g. '24/18 13/11'." },
               "equity": { "type": "number", "description": "Money or normalized match equity." },
-              "error_mp": { "type": "number", "description": "Error vs best in millipoints (0 for best)." },
-              "std_err": { "type": "number" },
-              "rank": { "type": "integer" }
+              "error_mp": { "type": "number", "description": "Non-negative error vs the best move in millipoints (equity delta x 1000; 0 for the best move)." },
+              "std_err": { "type": "number", "description": "Rollout standard error of this move's equity (same equity units), used for the equivalence tolerance in PLAN.md §4.3." },
+              "rank": { "type": "integer", "description": "1-based rank by equity as reported by the engine (1 = best)." }
             }
           }
         }
@@ -54,16 +54,17 @@
       "type": "object",
       "description": "Present when decision_type == cube; the three canonical equities (PLAN.md §1.3).",
       "properties": {
-        "no_double_equity": { "type": "number" },
-        "double_take_equity": { "type": "number" },
-        "double_pass_equity": { "type": "number" },
+        "no_double_equity": { "type": "number", "description": "Doubler equity if no double is offered ('no action'), from the on-roll player's perspective." },
+        "double_take_equity": { "type": "number", "description": "Doubler equity if it doubles and the opponent takes." },
+        "double_pass_equity": { "type": "number", "description": "Doubler equity if it doubles and the opponent passes (typically +1 cube point)." },
         "best_action": {
           "type": "string",
+          "description": "Derived best action for the position's decider.",
           "enum": ["No double", "Double, Take", "Double, Pass", "Too good"]
         },
         "error_mp": {
           "type": "object",
-          "description": "Millipoint error for each wrong action.",
+          "description": "Non-negative millipoint cost of each named action relative to the best available to whoever chooses it: 'No double' is the doubler's cost of not doubling; 'Double, Take'/'Double, Pass' are the receiver's cost of the wrong response.",
           "additionalProperties": { "type": "number" }
         }
       }

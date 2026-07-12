@@ -4,9 +4,14 @@ A benchmark that measures how well large language models play backgammon —
 **checker plays** *and* **cube decisions** — scored against eXtreme Gammon (XG)
 rollout ground truth, on a single human-comparable error metric.
 
-> **Status: Phase 0 — scaffolding.** This repo currently contains only the
-> project skeleton (directory tree, schema stubs, docstring-only module stubs).
-> No dataset, no working harness, no results yet. See
+> **Status: plumbing complete, no data yet.** The core engine (`bgcore/`:
+> board model, legal-move generation, notation), ID codecs (`ids/`: XGID,
+> GNU BG), renderers (`render/`: ASCII/SVG/PNG), evaluation harness
+> (`harness/`: OpenRouter client, prompts, parsing, BenchPR scoring, cache,
+> budget tracking, runner), dataset pipeline (`generate/`: gnubg integration,
+> sampling, dedup, tiering, contamination tooling), and the static leaderboard
+> generator (`site/`) are implemented with 252 passing tests. **No positions,
+> games, rollouts, or results exist yet** — that's Phase 1. See
 > [`PLAN.md`](PLAN.md) for the full founding design doc and roadmap.
 
 ## What it is
