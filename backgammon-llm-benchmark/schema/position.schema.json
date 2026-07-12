@@ -87,7 +87,26 @@
     "image_render_version": { "type": "string" },
     "decision_type": { "type": "string", "enum": ["checker", "cube"] },
     "play_mode": { "type": "string", "enum": ["money", "match"] },
-    "tier": { "type": "string", "enum": ["T1", "T2", "T3", "T4"] },
+    "tier": {
+      "type": "string",
+      "enum": ["T1", "T2", "T3", "T4"],
+      "description": "Human-difficulty tier (PLAN.md §3.2), derived from expected_expert_loss / expert_miss_rate."
+    },
+    "expected_expert_loss": {
+      "type": "number",
+      "description": "EEL: predicted mean equity loss (millipoints) for a reference PR-3 human on this decision (PLAN.md §3.1)."
+    },
+    "expert_miss_rate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Predicted probability a reference PR-3 human picks a non-best move (PLAN.md §3.1)."
+    },
+    "difficulty_source": {
+      "type": "string",
+      "enum": ["taxonomy-prior", "error-model", "panel"],
+      "description": "Most authoritative source behind the tier assignment (PLAN.md §3.1)."
+    },
     "phase": {
       "type": "string",
       "enum": ["race", "holding-game", "blitz", "priming", "backgame", "bearoff", "opening-ish", "cube-action"]

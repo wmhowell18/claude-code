@@ -28,8 +28,10 @@ multiple redundant representations so one source of truth can serve every track.
   self-play (never harvested), deduped against public collections, and
   spot-checked for web-findability. The authoritative set is a **private
   held-out split** — only SHA-256 hashes and canaries are published. (PLAN.md §2)
-- **Difficulty tiers T1–T4.** Defined by objective rollout-derived criteria,
-  primarily the best-vs-second equity gap (blunder margin) plus phase. (PLAN.md §3)
+- **Difficulty tiers T1–T4.** Defined by how hard the decision is for top
+  humans — estimated expert miss rate / expected expert loss, calibrated by an
+  expert panel playing the positions blind — not by the equity gap between
+  moves. (PLAN.md §3)
 - **BenchPR metric with a human north star.** `BenchPR = 500 × mean(equity_loss)`,
   computed like XG's Performance Rating so models and humans sit on the same
   axis. The leaderboard draws PR 2 / 4 / 8 human reference lines. (PLAN.md §4)

@@ -158,7 +158,8 @@ For **cube decisions** — the three canonical equities:
 - doubling window / cube efficiency where relevant.
 
 Store `best_move`, `best_equity`, `second_best_move`, `equity_gap` (blunder
-margin, primary tier signal), and `phase` tag (§3).
+margin — used for scoring and for filtering near-free decisions; tiers are
+human-difficulty-based, §3), and `phase` tag (§3).
 
 ### 1.4 Decision types and play mode
 
@@ -253,34 +254,70 @@ the check date. This is a sampling QA step, not per-position for the whole set.
 
 ## 3. Difficulty tiers
 
-Tiers are defined by **objective rollout-derived criteria**, not vibes. Primary
-axis is the **blunder margin** (equity gap between best and second-best move) —
-small gaps are hard, large gaps are easy — combined with decision rarity and
-game phase.
+Tiers measure **how hard the decision is for top humans** — not how costly a
+mistake is. The equity gap between best and second-best move is deliberately
+**not** the tier axis: a huge-gap decision can be obvious (easy), a tiny-gap
+decision can be famously hard, and the most valuable expert content is often
+*large-gap decisions that strong humans still get wrong*. The gap keeps two
+supporting roles only: it feeds scoring (equity loss), and it filters out
+near-free decisions (gap < ~0.002) that add noise, not signal.
 
 **Phase tags** (from board topology / rollout metadata): `race`,
 `holding-game`, `blitz`, `priming`, `backgame`, `bearoff`, `opening-ish`,
 `cube-action`.
 
-### 3.1 Tier definitions
+### 3.1 How human difficulty is estimated
 
-| Tier | Name | Objective criteria | Intuition |
-|------|------|--------------------|-----------|
-| **T1** | Easy | best-vs-2nd equity gap ≥ 0.080; common phase (race/simple checker); unique clearly-best play | "any decent player finds it" |
-| **T2** | Medium | gap 0.030–0.080; standard positions incl. routine cube take/pass | solid intermediate territory |
-| **T3** | Hard | gap 0.008–0.030; contact positions, timing, non-obvious cube windows | strong-player territory |
-| **T4** | Expert | gap < 0.008 **or** rare phase (backgame/prime-vs-prime/deep cube) **or** double-only-if-you-see-X | reference-grade; where PR-2 humans and top bots separate |
+Our positions are fresh by design (§2), so they have no human play history.
+Difficulty is therefore *estimated*, with three sources in increasing order of
+authority:
+
+1. **Known-hard taxonomy (prior).** Categories where expert errors are known to
+   concentrate: backgame timing, prime-vs-prime, blitz cube windows,
+   too-good/cash decisions, deep-anchor holding games, wastage-critical
+   bearoffs. Used to seed tier assignments and as a QA cross-check.
+2. **Human-error model (primary at scale).** Fit a model that predicts expert
+   error rate / expected loss from position features, trained on large public
+   corpora of *analyzed human matches* (e.g., online match archives run through
+   GNU BG/XG, filtered to strong players by PR band). Training on public games
+   does not contaminate the benchmark — our positions stay fresh; only
+   difficulty *statistics* transfer. Apply the model to every candidate
+   position.
+3. **Expert panel calibration (ground truth).** A small panel of strong players
+   (PR ≤ 5, ideally 2–4) plays the pilot set and a stratified sample of the
+   dev/held-out sets blind. Their empirical miss rate and equity loss calibrate
+   and validate the model, and hand-tier the marquee positions. Bonus: the same
+   panel data doubles as a **measured human north star on our own positions**
+   (§4.5), rather than only citing published PRs.
+
+**Operational metric:** for each position we store `expected_expert_loss` (EEL,
+predicted mean equity loss in millipoints for a reference PR-3 human) and
+`expert_miss_rate` (predicted probability that player picks a non-best move).
+
+### 3.2 Tier definitions
+
+| Tier | Name | Human-difficulty criteria (provisional thresholds) | Intuition |
+|------|------|-----------------------------------------------------|-----------|
+| **T1** | Easy | experts essentially never err: miss rate < 2%, EEL < 1 mpt | "any decent club player finds it" |
+| **T2** | Medium | club players err, experts rarely: miss rate 2–10% | solid-intermediate separators |
+| **T3** | Hard | experts err at a real rate: miss rate 10–30% | strong-player separators |
+| **T4** | Expert | even world-class players err often: miss rate > 30% or EEL > 10 mpt; historically debated categories | reference-grade; where PR-2 humans and top bots separate |
 
 Notes:
 
+- Thresholds are **provisional until panel calibration** (Phase 1 gate); the
+  tier boundaries are re-fit so the panel's observed error rates match the tier
+  intent.
+- Bootstrap ordering: pilot (50 positions) is tiered from the taxonomy prior +
+  author judgment, then panel-calibrated; the human-error model takes over for
+  the full set in Phase 2.
 - Cube decisions get their own within-tier weighting; near-doubling-window
   positions naturally land in T3/T4.
-- We cap "trap" positions (gap so small the choice is nearly free) — if the gap
-  is < ~0.002 the decision barely matters and we down-sample it (it adds noise,
-  not signal), unless it's a marquee "big blunder if you pick the third option"
-  case.
+- Near-free decisions (gap < ~0.002) are down-sampled regardless of estimated
+  difficulty — if the choice barely matters, it measures nothing — unless
+  there's a large-blunder third option that humans actually pick.
 
-### 3.2 Dataset size and splits
+### 3.3 Dataset size and splits
 
 **Target total: ~1,500 positions** (v1 authoritative set), reached in stages:
 
@@ -291,8 +328,8 @@ Notes:
 | Private held-out | ~1,300 | authoritative leaderboard set |
 
 Per-tier target (of the ~1,300 held-out): **T1 25% / T2 30% / T3 30% /
-T4 15%.** Skew away from too many T4 (rollout cost is high and variance eats
-signal). Within each tier keep the ~70/30 checker/cube and ~60/40 money/match
+T4 15%.** Skew away from too many T4 (rollout cost is high, variance eats
+signal, and genuinely world-class-hard positions are the scarcest to source). Within each tier keep the ~70/30 checker/cube and ~60/40 money/match
 splits from §1.4.
 
 ---
@@ -371,6 +408,10 @@ at **PR 2 (world-class), PR 4 (elite), PR 8 (strong club)**. The headline
 question the benchmark answers: *"Does model X play at the level of a PR-2
 human?"* Optionally include a couple of real reference points (e.g., published
 tournament PRs) as annotated dots.
+
+The expert panel used for tier calibration (§3.1) plays a sample of the actual
+benchmark positions, so their measured BenchPR is a **direct human baseline on
+this dataset** — plotted alongside the published-PR reference lines.
 
 ### 4.6 Sampling policy
 
@@ -476,17 +517,24 @@ rejected for v1 (hosting friction, not needed).
 
 ### Phase 1 — Pilot dataset (~50 positions)
 
-- GNU BG self-play generator → sampler → dedup/blocklist → tiering.
+- GNU BG self-play generator → sampler → dedup/blocklist → tiering (taxonomy
+  prior + author judgment at this stage, per §3.1).
 - **Interim ground truth via GNU BG rollouts** (until XG automation is solved).
 - Manual QA of tier assignments; contamination spot-checks.
+- **Expert panel calibration:** ≥2 strong players (PR ≤ 5) play the pilot blind;
+  observed miss rates re-fit the tier thresholds and provide the first measured
+  human-north-star data points.
 - **Acceptance:** 50 positions across all tiers + both decision types, each with
-  full rollout data; one end-to-end model run (one cheap model) produces a
-  BenchPR and best-move accuracy; scoring reproduces by re-running from cache.
+  full rollout data; panel results recorded and tier thresholds re-fit; one
+  end-to-end model run (one cheap model) produces a BenchPR and best-move
+  accuracy; scoring reproduces by re-running from cache.
 
 ### Phase 2 — Full dataset + harness
 
 - Scale to ~1,500 positions; finalize public/private split; publish hashes +
   canaries + creation date.
+- Fit the **human-error model** (§3.1) on analyzed public match corpora,
+  validate it against the panel data, and use it to tier the full set.
 - Swap/augment ground truth to **XG rollouts** for the authoritative set
   (see Open Questions).
 - Full async harness with caching, cost tracking, retries; run a slate of
@@ -560,7 +608,7 @@ backgammon-llm-benchmark/
 │   ├── selfplay.py             # drive GNU BG (and later XG) self-play
 │   ├── sample.py               # sample candidate positions from games
 │   ├── dedup.py                # blocklist + intra-set dedup
-│   ├── tiering.py              # assign T1-T4 from rollout gaps + phase
+│   ├── tiering.py              # assign T1-T4 from estimated human difficulty (§3)
 │   └── contamination.py        # web-findability spot-checks, canary injection
 │
 ├── harness/                    # LLM evaluation harness
@@ -639,6 +687,10 @@ side and compare.
    and who runs models against the private set (author-only vs. trusted runner)?
 8. **Licensing.** Code license (MIT?) and dataset license/terms (custom
    "no-train" + canary) — confirm before first public push.
+9. **Expert panel + error-model corpus.** Who are the 2+ PR≤5 panelists, how are
+   they compensated, and which analyzed-match corpus (source, size, PR filter)
+   trains the human-error model? Panel time is the scarcest resource in the
+   tiering pipeline (§3.1).
 
 ---
 

@@ -73,7 +73,7 @@
     "second_best_move": { "type": "string" },
     "equity_gap": {
       "type": "number",
-      "description": "Blunder margin (best - second-best); primary tier signal (PLAN.md §3)."
+      "description": "Blunder margin (best - second-best); scoring input and near-free-decision filter — tiers are human-difficulty-based (PLAN.md §3)."
     },
     "phase": { "type": "string" }
   }
