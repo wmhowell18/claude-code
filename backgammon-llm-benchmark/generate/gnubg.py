@@ -568,10 +568,15 @@ def parse_cube_rollout(
             "Double, Pass" if dp_eq < dt_eq else "Double, Take"
         )
 
+    # Millipoint error of each named action, all >= 0. "No double" is the
+    # doubler's error (cost of not doubling); "Double, Take"/"Double, Pass" are
+    # the receiver's response errors (cost of the wrong take/pass), measured
+    # against the response that minimizes the doubler's equity.
+    best_response = min(dt_eq, dp_eq)
     error_mp = {
-        "No double": _to_mp(best_eq - nd_eq),
-        "Double, Take": _to_mp(best_eq - dt_eq),
-        "Double, Pass": _to_mp(best_eq - dp_eq),
+        "No double": _to_mp(max(0.0, best_eq - nd_eq)),
+        "Double, Take": _to_mp(max(0.0, dt_eq - best_response)),
+        "Double, Pass": _to_mp(max(0.0, dp_eq - best_response)),
     }
 
     meta = s.to_meta()
