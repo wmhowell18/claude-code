@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://backgammon-llm-benchmark/schema/rollout.schema.json",
+  "title": "Rollout ground-truth record",
+  "description": "Full-rollout ground truth for one position (PLAN.md §1.3). Stores per-move / per-cube-action equities and error sizes so scoring is a lookup. STUB: fields are indicative, not final.",
+  "type": "object",
+  "required": ["position_id", "engine", "rollout_meta", "decision_type"],
+  "properties": {
+    "position_id": { "type": "string" },
+    "xgid": { "type": "string" },
+    "engine": {
+      "type": "string",
+      "enum": ["gnubg", "xg"],
+      "description": "gnubg = interim ground truth; xg = authoritative (PLAN.md §1.3, §7)."
+    },
+    "decision_type": { "type": "string", "enum": ["checker", "cube"] },
+    "rollout_meta": {
+      "type": "object",
+      "description": "The exact settings blob truth was produced with, for reproducibility / re-roll (PLAN.md §1.3).",
+      "properties": {
+        "trials": { "type": "integer" },
+        "chequer_ply": { "type": "string" },
+        "cube_ply": { "type": "string" },
+        "truncation": { "type": "string" },
+        "variance_reduction": { "type": "boolean" },
+        "antithetic_dice": { "type": "boolean" },
+        "met": { "type": "string", "description": "Match-equity-table source (PLAN.md §9 item 3)." },
+        "seed": { "type": "integer" },
+        "settings_version": { "type": "string" }
+      }
+    },
+    "checker": {
+      "type": "object",
+      "description": "Present when decision_type == checker.",
+      "properties": {
+        "moves": {
+          "type": "array",
+          "description": "Legal moves (top-K, K~15, incl. best + second) with rollout equities.",
+          "items": {
+            "type": "object",
+            "required": ["move", "equity", "error_mp", "rank"],
+            "properties": {
+              "move": { "type": "string", "description": "Standard slash notation, e.g. '24/18 13/11'." },
+              "equity": { "type": "number", "description": "Money or normalized match equity." },
+              "error_mp": { "type": "number", "description": "Non-negative error vs the best move in millipoints (equity delta x 1000; 0 for the best move)." },
+              "std_err": { "type": "number", "description": "Rollout standard error of this move's equity (same equity units), used for the equivalence tolerance in PLAN.md §4.3." },
+              "rank": { "type": "integer", "description": "1-based rank by equity as reported by the engine (1 = best)." }
+            }
+          }
+        }
+      }
+    },
+    "cube": {
+      "type": "object",
+      "description": "Present when decision_type == cube; the three canonical equities (PLAN.md §1.3).",
+      "properties": {
+        "no_double_equity": { "type": "number", "description": "Doubler equity if no double is offered ('no action'), from the on-roll player's perspective." },
+        "double_take_equity": { "type": "number", "description": "Doubler equity if it doubles and the opponent takes." },
+        "double_pass_equity": { "type": "number", "description": "Doubler equity if it doubles and the opponent passes (typically +1 cube point)." },
+        "best_action": {
+          "type": "string",
+          "description": "Derived best action for the position's decider.",
+          "enum": ["No double", "Double, Take", "Double, Pass", "Too good"]
+        },
+        "error_mp": {
+          "type": "object",
+          "description": "Non-negative millipoint cost of each named action relative to the best available to whoever chooses it: 'No double' is the doubler's cost of not doubling; 'Double, Take'/'Double, Pass' are the receiver's cost of the wrong response.",
+          "additionalProperties": { "type": "number" }
+        }
+      }
+    },
+    "best_move": { "type": "string" },
+    "best_equity": { "type": "number" },
+    "second_best_move": { "type": "string" },
+    "equity_gap": {
+      "type": "number",
+      "description": "Blunder margin (best - second-best); scoring input and near-free-decision filter — tiers are human-difficulty-based (PLAN.md §3)."
+    },
+    "phase": { "type": "string" }
+  }
+}

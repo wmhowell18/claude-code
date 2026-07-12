@@ -1,0 +1,59 @@
+# ---------------------------------------------------------------------------
+# Benchmark data policy (PLAN.md §2.5, §8 "Pragmatic notes")
+#
+# The PRIVATE held-out set is never committed — only its published hashes and
+# the canary are. positions/pilot, positions/dev, results/, and the blocklist
+# ARE published, so they are deliberately NOT ignored below.
+# ---------------------------------------------------------------------------
+
+# Private authoritative held-out records — never commit (only hashes.json).
+positions/heldout/*
+!positions/heldout/.gitkeep
+!positions/heldout/hashes.json
+
+# Generated images for the held-out set must not leak the private positions.
+render/images/heldout/
+
+# Raw self-play games can be large/regenerable intermediate artifacts.
+data/selfplay/*
+!data/selfplay/.gitkeep
+
+# Response cache (content-addressed; regenerable, can be large).
+.cache/
+harness/.cache/
+
+# Secrets / API keys (OpenRouter etc.)
+.env
+.env.*
+!.env.example
+
+# ---------------------------------------------------------------------------
+# Python artifacts
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---------------------------------------------------------------------------
+# Built static site output (regenerated from results/*.json)
+# ---------------------------------------------------------------------------
+site/public/*
+!site/public/.gitkeep
+
+# ---------------------------------------------------------------------------
+# OS / editor junk
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

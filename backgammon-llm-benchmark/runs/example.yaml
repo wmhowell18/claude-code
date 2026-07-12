@@ -1,0 +1,45 @@
+# Example run config (PLAN.md §5.2).
+#
+# `scripts/run_benchmark.py --config runs/example.yaml` consumes this. Each run
+# writes results/<run_id>__<model>__<track>.json plus a per-run working tree under
+# runs/<run_id>/ (raw responses, parsed scores, and a content-addressed cache) so
+# runs are idempotent, resumable, and reproducible.
+#
+# Config format: YAML is read with PyYAML if installed, otherwise with the small
+# built-in parser in harness/runner.py (parse_simple_yaml). PyYAML is NOT a
+# required dependency. A JSON config (runs/example.json, same keys) works with
+# zero extra packages — use `--config runs/example.json` if you prefer.
+
+run_id: example
+track: text                 # text | image | text+image   (PLAN.md §4.1)
+split: dev                  # pilot | dev | heldout        (PLAN.md §3.2)
+
+# OpenRouter model slugs (PLAN.md §5.1). Add a model = add a line, no code change.
+models:
+  - openai/gpt-4o-mini
+  - anthropic/claude-3.5-sonnet
+
+# Where the dataset lives. Each path may be a single JSON file (array or
+# JSON-lines) or a directory of *.json records. Relative to --base-dir (repo root
+# by default). Rollouts are keyed by position_id (schema/rollout.schema.json).
+dataset:
+  positions: positions/dev
+  rollouts: rollouts/gnubg
+
+sampling:                   # PLAN.md §4.6
+  temperature: 0            # 0 = reproducible greedy baseline
+  n: 1                      # samples per position (>1 only for self-consistency)
+  mode: greedy              # greedy | self-consistency
+  max_retries: 2            # re-asks on unparseable output before worst-case scoring
+  # max_tokens: 2048        # optional cap on completion length
+  # seed: 7                 # optional provider seed passthrough
+
+# Fixed-$ budget track (PLAN.md §5.3). usd: null = untracked (full run). Set a
+# dollar cap to stop issuing requests once spend would exceed it; positions still
+# unanswered at exhaustion are scored worst-case.
+budget:
+  usd: null
+
+concurrency: 8              # bounded in-flight requests
+prompt_version: bench-1     # informational; the harness pins its own PROMPT_VERSION
+results_dir: results        # where results/*.json are written

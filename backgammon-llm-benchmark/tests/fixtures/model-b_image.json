@@ -1,0 +1,32 @@
+{
+  "synthetic": true,
+  "_note": "SYNTHETIC TEST FIXTURE — fabricated numbers, not real benchmark data.",
+  "run_id": "syn-b-image-0001",
+  "model": "example/synthetic-model-b",
+  "track": "image",
+  "manifest": {
+    "dataset_hash": "sha256:deadbeefcafef00d0011223344556677",
+    "prompt_version": "p-2026.07.1",
+    "ascii_render_version": "ascii-3",
+    "image_render_version": "img-2",
+    "sampling": { "temperature": 0, "n": 1, "mode": "greedy" },
+    "timestamp": "2026-07-10T12:15:00Z"
+  },
+  "aggregate": {
+    "benchpr": 6.90,
+    "best_move_accuracy": 0.40,
+    "mean_equity_loss": 0.0138,
+    "cost_usd": 1.05,
+    "per_tier": {
+      "T1": { "benchpr": 2.80, "best_move_accuracy": 0.74, "n": 30 },
+      "T2": { "benchpr": 5.60, "best_move_accuracy": 0.44, "n": 36 },
+      "T3": { "benchpr": 9.00, "best_move_accuracy": 0.28, "n": 36 },
+      "T4": { "benchpr": 15.20, "best_move_accuracy": 0.08, "n": 18 }
+    }
+  },
+  "decisions": [
+    { "position_id": "syn-p001", "chosen": "24/20 13/11", "is_best": false, "equity_loss": 0.019 },
+    { "position_id": "syn-p002", "chosen": "No double", "is_best": false, "equity_loss": 0.052 },
+    { "position_id": "syn-p003", "chosen": "13/8 6/4", "is_best": false, "equity_loss": 0.011 }
+  ]
+}

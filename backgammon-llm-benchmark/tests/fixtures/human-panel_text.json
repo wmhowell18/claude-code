@@ -1,0 +1,31 @@
+{
+  "synthetic": true,
+  "_note": "SYNTHETIC TEST FIXTURE — fabricated numbers, not real benchmark data.",
+  "kind": "human",
+  "run_id": "syn-human-text-0001",
+  "model": "human-panel/expert-panel",
+  "track": "text",
+  "manifest": {
+    "dataset_hash": "sha256:deadbeefcafef00d0011223344556677",
+    "prompt_version": "p-2026.07.1",
+    "ascii_render_version": "ascii-3",
+    "image_render_version": "img-2",
+    "timestamp": "2026-07-10T12:20:00Z"
+  },
+  "aggregate": {
+    "benchpr": 2.30,
+    "best_move_accuracy": 0.71,
+    "mean_equity_loss": 0.0046,
+    "per_tier": {
+      "T1": { "benchpr": 0.50, "best_move_accuracy": 0.98, "n": 30 },
+      "T2": { "benchpr": 1.80, "best_move_accuracy": 0.80, "n": 36 },
+      "T3": { "benchpr": 3.20, "best_move_accuracy": 0.60, "n": 36 },
+      "T4": { "benchpr": 6.10, "best_move_accuracy": 0.34, "n": 18 }
+    }
+  },
+  "decisions": [
+    { "position_id": "syn-p001", "chosen": "24/18 13/11", "is_best": true, "equity_loss": 0.0 },
+    { "position_id": "syn-p002", "chosen": "Double, Take", "is_best": true, "equity_loss": 0.0 },
+    { "position_id": "syn-p003", "chosen": "13/7 13/8", "is_best": true, "equity_loss": 0.0 }
+  ]
+}

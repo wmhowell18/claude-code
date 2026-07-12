@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://backgammon-llm-benchmark/schema/results.schema.json",
+  "title": "Model-run result file",
+  "description": "Output of one benchmark run, consumed by the static site (PLAN.md §5.2 report.py, §6). STUB: fields are indicative, not final.",
+  "type": "object",
+  "required": ["run_id", "model", "track", "manifest", "aggregate", "decisions"],
+  "properties": {
+    "run_id": { "type": "string" },
+    "model": { "type": "string", "description": "OpenRouter model slug." },
+    "track": { "type": "string", "enum": ["text", "image", "text+image"] },
+    "manifest": {
+      "type": "object",
+      "description": "Reproducibility manifest written per run (PLAN.md §5.2).",
+      "required": ["dataset_hash", "prompt_version", "timestamp"],
+      "properties": {
+        "dataset_hash": { "type": "string" },
+        "prompt_version": { "type": "string" },
+        "ascii_render_version": { "type": "string" },
+        "image_render_version": { "type": "string" },
+        "sampling": {
+          "type": "object",
+          "properties": {
+            "temperature": { "type": "number" },
+            "n": { "type": "integer" },
+            "mode": { "type": "string", "enum": ["greedy", "self-consistency"] }
+          }
+        },
+        "budget_usd": { "type": "number", "description": "Set for the fixed-$ budget track (PLAN.md §5.3)." },
+        "timestamp": { "type": "string", "format": "date-time" }
+      }
+    },
+    "aggregate": {
+      "type": "object",
+      "description": "Headline metrics (PLAN.md §4.4).",
+      "required": ["benchpr", "best_move_accuracy", "mean_equity_loss"],
+      "properties": {
+        "benchpr": { "type": "number", "description": "500 x mean(equity_loss)." },
+        "benchpr_label": { "type": "string", "description": "e.g. 'BenchPR (PR-calibrated)' until validated." },
+        "benchpr_ci95": {
+          "type": "array",
+          "description": "Optional [low, high] 95% percentile-bootstrap CI on BenchPR (PLAN.md §4.4).",
+          "items": { "type": "number" },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "best_move_accuracy": { "type": "number" },
+        "mean_equity_loss": { "type": "number" },
+        "cost_usd": { "type": "number" },
+        "n": { "type": "integer", "description": "Optional: number of scored decisions." },
+        "parse_failures": { "type": "integer", "description": "Optional: count of illegal/unparseable answers scored worst-case (PLAN.md §4.6)." },
+        "benchpr_at_budget": { "type": "number", "description": "Best BenchPR achieved within budget (PLAN.md §5.3)." },
+        "per_tier": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "benchpr": { "type": "number" },
+              "best_move_accuracy": { "type": "number" },
+              "mean_equity_loss": { "type": "number" },
+              "n": { "type": "integer" }
+            }
+          }
+        },
+        "per_track": {
+          "type": "object",
+          "description": "Optional roll-up keyed by track (same shape as per_tier).",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "benchpr": { "type": "number" },
+              "best_move_accuracy": { "type": "number" },
+              "mean_equity_loss": { "type": "number" },
+              "n": { "type": "integer" }
+            }
+          }
+        },
+        "per_decision_type": {
+          "type": "object",
+          "description": "Optional roll-up keyed by decision_type (checker|cube), same shape as per_tier.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "benchpr": { "type": "number" },
+              "best_move_accuracy": { "type": "number" },
+              "mean_equity_loss": { "type": "number" },
+              "n": { "type": "integer" }
+            }
+          }
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "description": "Per-position outcomes (public dev set only for the position explorer; heldout aggregate-only).",
+      "items": {
+        "type": "object",
+        "required": ["position_id", "chosen", "equity_loss"],
+        "properties": {
+          "position_id": { "type": "string" },
+          "chosen": { "type": "string", "description": "Normalized parsed answer." },
+          "raw_answer": { "type": "string" },
+          "is_best": { "type": "boolean" },
+          "equity_loss": { "type": "number" },
+          "parse_failed": { "type": "boolean" },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "prompt_tokens": { "type": "integer" },
+              "completion_tokens": { "type": "integer" },
+              "reasoning_tokens": { "type": "integer" },
+              "cost_usd": { "type": "number" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

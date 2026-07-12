@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://backgammon-llm-benchmark/schema/position.schema.json",
+  "title": "Position record",
+  "description": "A single benchmark position with redundant representations (PLAN.md §1.1). One JSON record is the source of truth for both text and image tracks. STUB: fields are indicative, not final.",
+  "type": "object",
+  "required": ["position_id", "xgid", "board_json", "ascii", "tier", "decision_type"],
+  "properties": {
+    "position_id": {
+      "type": "string",
+      "description": "Stable internal id (typically derived from the normalized XGID hash)."
+    },
+    "xgid": {
+      "type": "string",
+      "description": "Canonical XGID string; primary key and dedup source (PLAN.md §1.1)."
+    },
+    "gnubg_id": {
+      "type": "object",
+      "description": "Secondary ID for GNU BG interop (PLAN.md §1.1).",
+      "properties": {
+        "position_id": { "type": "string" },
+        "match_id": { "type": "string" }
+      }
+    },
+    "board_json": {
+      "type": "object",
+      "description": "Unambiguous machine-readable board, always from the player-to-move's perspective (PLAN.md §1.1).",
+      "required": ["points", "bar", "off", "turn", "cube", "score", "decision_type"],
+      "properties": {
+        "points": {
+          "type": "array",
+          "description": "26-item array (indices 0..25) from the mover's perspective. Indices 1-24 are board points; positive = mover (x), negative = opponent (o). Indices 0 and 25 are reserved sentinels and MUST be 0 (bar/off live in their own fields). The mover advances from low indices to high indices, bears off beyond index 24, and has its home board on indices 19-24 (index 24 = ace point, 1 pip from off). See bgcore/board.py.",
+          "items": { "type": "integer" },
+          "minItems": 26,
+          "maxItems": 26
+        },
+        "bar": {
+          "type": "object",
+          "description": "Checkers on the bar. x = mover, o = opponent.",
+          "properties": { "x": { "type": "integer" }, "o": { "type": "integer" } }
+        },
+        "off": {
+          "type": "object",
+          "description": "Checkers borne off (not encoded in XGID/GNU BG IDs; derived as 15 minus on-board minus bar). x = mover, o = opponent.",
+          "properties": { "x": { "type": "integer" }, "o": { "type": "integer" } }
+        },
+        "turn": { "type": "string", "enum": ["x", "o"], "description": "Mover's physical seat as tracked by external IDs: 'x' = the ID's bottom/player-1 seat, 'o' = the top/player-2 seat. The layout itself is always mover-relative; this field only lets XGID/GNU BG IDs round-trip losslessly." },
+        "dice": {
+          "type": "array",
+          "description": "The roll to be played (checker decisions); empty/absent for cube decisions.",
+          "items": { "type": "integer", "minimum": 1, "maximum": 6 }
+        },
+        "cube": {
+          "type": "object",
+          "description": "Doubling cube. value is the face value (a power of two); owner is 'center' (nobody), 'x' (mover owns) or 'o' (opponent owns).",
+          "properties": {
+            "value": { "type": "integer" },
+            "owner": { "type": "string", "enum": ["center", "x", "o"] }
+          }
+        },
+        "score": {
+          "type": "object",
+          "properties": {
+            "x": { "type": "integer" },
+            "o": { "type": "integer" },
+            "length": { "type": "integer", "description": "Match length; 0 or absent for money play." },
+            "crawford": { "type": "boolean" }
+          }
+        },
+        "pip": {
+          "type": "object",
+          "properties": { "x": { "type": "integer" }, "o": { "type": "integer" } }
+        },
+        "decision_type": { "type": "string", "enum": ["checker", "cube"] }
+      }
+    },
+    "ascii": {
+      "type": "string",
+      "description": "Deterministic fixed-width ASCII render (text-track payload)."
+    },
+    "ascii_render_version": { "type": "string" },
+    "image_png": {
+      "type": "string",
+      "description": "Path/ref to rendered PNG (image-track payload); may be absent for held-out."
+    },
+    "image_svg": {
+      "type": "string",
+      "description": "Path/ref to source SVG for deterministic re-rasterization."
+    },
+    "image_render_version": { "type": "string" },
+    "decision_type": { "type": "string", "enum": ["checker", "cube"] },
+    "play_mode": { "type": "string", "enum": ["money", "match"] },
+    "tier": {
+      "type": "string",
+      "enum": ["T1", "T2", "T3", "T4"],
+      "description": "Human-difficulty tier (PLAN.md §3.2), derived from expected_expert_loss / expert_miss_rate."
+    },
+    "expected_expert_loss": {
+      "type": "number",
+      "description": "EEL: predicted mean equity loss (millipoints) for a reference PR-3 human on this decision (PLAN.md §3.1)."
+    },
+    "expert_miss_rate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Predicted probability a reference PR-3 human picks a non-best move (PLAN.md §3.1)."
+    },
+    "difficulty_source": {
+      "type": "string",
+      "enum": ["taxonomy-prior", "error-model", "panel"],
+      "description": "Most authoritative source behind the tier assignment (PLAN.md §3.1)."
+    },
+    "phase": {
+      "type": "string",
+      "enum": ["race", "holding-game", "blitz", "priming", "backgame", "bearoff", "opening-ish", "cube-action"]
+    },
+    "split": { "type": "string", "enum": ["pilot", "dev", "heldout"] },
+    "rollout_ref": {
+      "type": "string",
+      "description": "Reference/key into rollouts/ ground-truth data for this position."
+    },
+    "canary": {
+      "type": "string",
+      "description": "Embedded canary token (BENCH-CANARY-<uuid>) for published artifacts (PLAN.md §2.5)."
+    },
+    "created": { "type": "string", "format": "date-time" }
+  }
+}
