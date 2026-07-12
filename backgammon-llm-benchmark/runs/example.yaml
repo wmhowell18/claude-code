@@ -1,0 +1,23 @@
+# Example run config (PLAN.md §5.2). STUB — illustrative fields only.
+# `scripts/run_benchmark.py` consumes this; each run also writes a manifest
+# (dataset hash, prompt_version, timestamp) for reproducibility.
+
+run_id: example
+track: text          # text | image | text+image  (PLAN.md §4.1)
+split: dev           # pilot | dev | heldout       (PLAN.md §3.2)
+
+models:              # OpenRouter model slugs (PLAN.md §5.1)
+  - openai/gpt-4o-mini
+  - anthropic/claude-3.5-sonnet
+
+sampling:            # PLAN.md §4.6
+  temperature: 0
+  n: 1
+  mode: greedy       # greedy | self-consistency
+  max_retries: 2     # re-asks on unparseable output
+
+budget:              # fixed-$ budget track (PLAN.md §5.3); null = untracked
+  usd: null
+
+concurrency: 8
+prompt_version: v0
