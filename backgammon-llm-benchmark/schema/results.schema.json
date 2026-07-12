@@ -37,9 +37,18 @@
       "properties": {
         "benchpr": { "type": "number", "description": "500 x mean(equity_loss)." },
         "benchpr_label": { "type": "string", "description": "e.g. 'BenchPR (PR-calibrated)' until validated." },
+        "benchpr_ci95": {
+          "type": "array",
+          "description": "Optional [low, high] 95% percentile-bootstrap CI on BenchPR (PLAN.md §4.4).",
+          "items": { "type": "number" },
+          "minItems": 2,
+          "maxItems": 2
+        },
         "best_move_accuracy": { "type": "number" },
         "mean_equity_loss": { "type": "number" },
         "cost_usd": { "type": "number" },
+        "n": { "type": "integer", "description": "Optional: number of scored decisions." },
+        "parse_failures": { "type": "integer", "description": "Optional: count of illegal/unparseable answers scored worst-case (PLAN.md §4.6)." },
         "benchpr_at_budget": { "type": "number", "description": "Best BenchPR achieved within budget (PLAN.md §5.3)." },
         "per_tier": {
           "type": "object",
@@ -48,6 +57,33 @@
             "properties": {
               "benchpr": { "type": "number" },
               "best_move_accuracy": { "type": "number" },
+              "mean_equity_loss": { "type": "number" },
+              "n": { "type": "integer" }
+            }
+          }
+        },
+        "per_track": {
+          "type": "object",
+          "description": "Optional roll-up keyed by track (same shape as per_tier).",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "benchpr": { "type": "number" },
+              "best_move_accuracy": { "type": "number" },
+              "mean_equity_loss": { "type": "number" },
+              "n": { "type": "integer" }
+            }
+          }
+        },
+        "per_decision_type": {
+          "type": "object",
+          "description": "Optional roll-up keyed by decision_type (checker|cube), same shape as per_tier.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "benchpr": { "type": "number" },
+              "best_move_accuracy": { "type": "number" },
+              "mean_equity_loss": { "type": "number" },
               "n": { "type": "integer" }
             }
           }

@@ -1,0 +1,22 @@
+{
+  "run_id": "example",
+  "track": "text",
+  "split": "dev",
+  "models": ["openai/gpt-4o-mini", "anthropic/claude-3.5-sonnet"],
+  "dataset": {
+    "positions": "positions/dev",
+    "rollouts": "rollouts/gnubg"
+  },
+  "sampling": {
+    "temperature": 0,
+    "n": 1,
+    "mode": "greedy",
+    "max_retries": 2
+  },
+  "budget": {
+    "usd": null
+  },
+  "concurrency": 8,
+  "prompt_version": "bench-1",
+  "results_dir": "results"
+}
