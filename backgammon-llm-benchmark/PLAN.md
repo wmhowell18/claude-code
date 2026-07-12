@@ -594,6 +594,8 @@ backgammon-llm-benchmark/
 │   ├── blocklist/              # dedup hashes of known public positions
 │   └── manifests/              # dataset manifests (hash + creation date)
 │
+├── bgcore/                     # core domain layer (stdlib-only): board model, move rules, notation
+│
 ├── render/                     # position -> text/image rendering
 │   ├── ascii.py                # deterministic ASCII board render (versioned)
 │   ├── svg.py                  # board -> SVG

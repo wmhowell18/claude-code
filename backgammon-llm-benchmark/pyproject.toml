@@ -11,8 +11,8 @@ requires-python = ">=3.10"
 authors = [{ name = "wesleyhowell7" }]
 license = { text = "TBD — see PLAN.md §9" }
 
-# Phase 0 is pure scaffolding: nothing needs to install yet. Runtime
-# dependencies are declared as optional extras so `pip install .` stays empty.
+# The core domain layer (bgcore/ + ids/) is stdlib-only, so the base install has
+# no runtime dependencies. Heavier features live in optional extras below.
 dependencies = []
 
 [project.optional-dependencies]
@@ -39,4 +39,4 @@ dev = [
 
 [tool.setuptools]
 # Only the importable code packages ship; data dirs are not packages.
-packages = ["harness", "render", "ids", "generate"]
+packages = ["bgcore", "harness", "render", "ids", "generate"]

@@ -29,20 +29,22 @@
       "properties": {
         "points": {
           "type": "array",
-          "description": "Indices 1-24 from mover's perspective; positive = mover (x), negative = opponent (o).",
+          "description": "26-item array (indices 0..25) from the mover's perspective. Indices 1-24 are board points; positive = mover (x), negative = opponent (o). Indices 0 and 25 are reserved sentinels and MUST be 0 (bar/off live in their own fields). The mover advances from low indices to high indices, bears off beyond index 24, and has its home board on indices 19-24 (index 24 = ace point, 1 pip from off). See bgcore/board.py.",
           "items": { "type": "integer" },
           "minItems": 26,
           "maxItems": 26
         },
         "bar": {
           "type": "object",
+          "description": "Checkers on the bar. x = mover, o = opponent.",
           "properties": { "x": { "type": "integer" }, "o": { "type": "integer" } }
         },
         "off": {
           "type": "object",
+          "description": "Checkers borne off (not encoded in XGID/GNU BG IDs; derived as 15 minus on-board minus bar). x = mover, o = opponent.",
           "properties": { "x": { "type": "integer" }, "o": { "type": "integer" } }
         },
-        "turn": { "type": "string", "enum": ["x", "o"] },
+        "turn": { "type": "string", "enum": ["x", "o"], "description": "Mover's physical seat as tracked by external IDs: 'x' = the ID's bottom/player-1 seat, 'o' = the top/player-2 seat. The layout itself is always mover-relative; this field only lets XGID/GNU BG IDs round-trip losslessly." },
         "dice": {
           "type": "array",
           "description": "The roll to be played (checker decisions); empty/absent for cube decisions.",
@@ -50,6 +52,7 @@
         },
         "cube": {
           "type": "object",
+          "description": "Doubling cube. value is the face value (a power of two); owner is 'center' (nobody), 'x' (mover owns) or 'o' (opponent owns).",
           "properties": {
             "value": { "type": "integer" },
             "owner": { "type": "string", "enum": ["center", "x", "o"] }
