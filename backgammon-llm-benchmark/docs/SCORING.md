@@ -6,8 +6,9 @@
 ## Primary metric — equity loss
 
 For each decision, `error = best_equity - chosen_equity` (>= 0), read from stored
-rollout data (PLAN.md §1.3, §4.4). Averaged over positions, optionally per-tier
-and per-track.
+rollout data (PLAN.md §1.3, §4.4). The equities come from **GNU BG rollouts —
+the authoritative ground-truth engine (permanent, per the 2026-07-15 decision).**
+Averaged over positions, optionally per-tier and per-track.
 
 ## BenchPR
 
@@ -24,4 +25,7 @@ Human north-star reference lines: PR 2 / 4 / 8 (PLAN.md §4.5).
 XG's exact PR constant and its cube-vs-checker handling must be matched for the
 numbers to be literally comparable. Until validated against >=3 XG-analyzed
 reference games (`scripts/validate_pr.py`), label the metric
-**"BenchPR (PR-calibrated)"** (PLAN.md §4.4, §9 item 2).
+**"BenchPR (PR-calibrated)"** (PLAN.md §4.4, §9 item 2). This is a *metric-scale*
+calibration only — it keeps BenchPR on the same human PR axis as XG's published
+scale. It does **not** make XG a ground-truth engine; the equities are always
+GNU BG rollouts (PLAN.md §1.3, §9.1).
