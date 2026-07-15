@@ -4,15 +4,24 @@ A benchmark that measures how well large language models play backgammon —
 **checker plays** *and* **cube decisions** — scored against eXtreme Gammon (XG)
 rollout ground truth, on a single human-comparable error metric.
 
-> **Status: plumbing complete, no data yet.** The core engine (`bgcore/`:
-> board model, legal-move generation, notation), ID codecs (`ids/`: XGID,
-> GNU BG), renderers (`render/`: ASCII/SVG/PNG), evaluation harness
+> **Status: Phase 1 pilot dataset built (50 positions).** The core engine
+> (`bgcore/`: board model, legal-move generation, notation), ID codecs (`ids/`:
+> XGID, GNU BG), renderers (`render/`: ASCII/SVG/PNG), evaluation harness
 > (`harness/`: OpenRouter client, prompts, parsing, BenchPR scoring, cache,
 > budget tracking, runner), dataset pipeline (`generate/`: gnubg integration,
 > sampling, dedup, tiering, contamination tooling), and the static leaderboard
-> generator (`site/`) are implemented with 252 passing tests. **No positions,
-> games, rollouts, or results exist yet** — that's Phase 1. See
-> [`PLAN.md`](PLAN.md) for the full founding design doc and roadmap.
+> generator (`site/`) are implemented with 255 passing tests. The **50-position
+> pilot** now exists in [`positions/pilot/`](positions/pilot/) with GNU BG
+> ground truth in [`rollouts/gnubg/`](rollouts/gnubg/) and rendered boards in
+> `render/images/pilot/` — freshly generated from GNU BG self-play (never
+> harvested), ~70% checker / ~30% cube, ~60% money / ~40% match, spread across
+> tiers T1–T4. **GNU Backgammon is the authoritative ground-truth engine**
+> (self-play, evaluation, and match-equity tables); XG is only an optional
+> future cross-check. Pilot ground truth is GNU BG 2-ply cubeful evaluation —
+> see each rollout record's `rollout_meta` for the exact settings and the
+> documented upgrade path to full Monte-Carlo rollouts. Next: the public dev and
+> private held-out splits (Phase 2). See [`PLAN.md`](PLAN.md) for the full
+> founding design doc and roadmap.
 
 ## What it is
 
