@@ -293,8 +293,17 @@ class Decision:
 _MATCH_LEN_RE = re.compile(r"^\s*(\d+)\s+point match", re.IGNORECASE)
 _GAME_RE = re.compile(r"^\s*Game\s+(\d+)", re.IGNORECASE)
 # a numbered ply line: "  3) <left cell>   <right cell>"
-_PLY_RE = re.compile(r"^\s*\d+\)\s?(.*)$")
+_PLY_RE = re.compile(r"^(\s*\d+\)\s?)(.*)$")
 _CELL_MOVE_RE = re.compile(r"^([1-6]{2}):\s*(.+?)\s*$")
+# a cell always begins with the dice ("53:") or a cube/result keyword. The two
+# move columns sit at fixed offsets (left ~col 5, right ~col 33), so we split on
+# the right column rather than on a run of spaces — a wide 4-checker move can
+# leave only a single space before the right cell, which a space-run split would
+# wrongly merge into one cell.
+_CELL_START_RE = re.compile(
+    r"[1-6]{2}:|Doubles?|Takes?|Drops?|Passe?s?|Cannot|Wins?", re.IGNORECASE
+)
+_RIGHT_COL_MIN = 20
 # a dance / forced no-move cell carries only the dice: "64:"
 _CELL_DANCE_RE = re.compile(r"^([1-6]{2}):\s*$")
 _CELL_DOUBLE_RE = re.compile(r"Doubles?\s*=>\s*(\d+)", re.IGNORECASE)
@@ -365,15 +374,25 @@ def _apply_gnubg_move(board: Board, move: str) -> Board:
     return nb
 
 
-def _split_cells(body: str) -> list[str]:
-    """Split a ply line body into its (up to two) column cells.
+def _split_cells(line: str, body_start: int) -> list[str]:
+    """Split a full ply line into its (up to two) column cells by column offset.
 
-    .mat columns are separated by a run of >=2 spaces. Cells are returned
-    stripped; empty cells are dropped so cube events (which occupy one column)
-    parse cleanly.
+    ``body_start`` is the index just past the ``"NN) "`` prefix. The left cell
+    runs from there to the start of the right cell; the right cell is the first
+    cell-start token (dice or a cube/result keyword) at or beyond
+    ``_RIGHT_COL_MIN``. Cells are returned stripped; empty cells are dropped so
+    cube/dance events (which occupy a single column) parse cleanly.
     """
-    parts = re.split(r"\s{2,}", body.strip())
-    return [p.strip() for p in parts if p.strip()]
+    right_col: int | None = None
+    for mm in _CELL_START_RE.finditer(line):
+        if mm.start() >= max(_RIGHT_COL_MIN, body_start):
+            right_col = mm.start()
+            break
+    if right_col is None:
+        cells = [line[body_start:]]
+    else:
+        cells = [line[body_start:right_col], line[right_col:]]
+    return [c.strip() for c in cells if c.strip()]
 
 
 def _parse_cell(cell: str, seat: int) -> RawEvent | None:
@@ -418,8 +437,8 @@ def parse_match_events(text: str) -> list[tuple[int, list[RawEvent]]]:
             continue
         pm = _PLY_RE.match(line)
         if pm and cur_game is not None:
-            body = pm.group(1)
-            for idx, cell in enumerate(_split_cells(body)):
+            body_start = len(pm.group(1))
+            for idx, cell in enumerate(_split_cells(line, body_start)):
                 ev = _parse_cell(cell, seat=idx)
                 if ev is not None:
                     events.append(ev)

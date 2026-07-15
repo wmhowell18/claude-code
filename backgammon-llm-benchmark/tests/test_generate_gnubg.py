@@ -113,6 +113,19 @@ def test_gnubg_hops_maps_bar_off_and_segmented_chains():
     assert gnubg._gnubg_hops("13/9(3)") == [(12, 16), (12, 16), (12, 16)]
 
 
+def test_split_cells_by_fixed_column_not_spaces():
+    # a wide 4-checker left move can leave only a single space before the right
+    # cell; splitting on runs of >=2 spaces would wrongly merge them. The two
+    # columns sit at fixed offsets, so we split by column instead.
+    line = " 17) 22: 25/23* 25/23 14/12 12/10 22: 25/23 9/7 9/7 6/4"
+    body_start = len(" 17) ")
+    cells = gnubg._split_cells(line, body_start)
+    assert cells == ["22: 25/23* 25/23 14/12 12/10", "22: 25/23 9/7 9/7 6/4"]
+    # an empty left cell (opening move) keeps only the right cell
+    opening = "  1)                             53: 8/3 6/3"
+    assert gnubg._split_cells(opening, len("  1) ")) == ["53: 8/3 6/3"]
+
+
 def test_parse_cell_detects_dance_and_bearoff_move():
     dance = gnubg._parse_cell("64:", seat=1)
     assert dance is not None and dance.kind == "nomove" and dance.dice == [6, 4]
