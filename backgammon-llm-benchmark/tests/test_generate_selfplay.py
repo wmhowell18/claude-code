@@ -48,9 +48,11 @@ def test_generate_uses_injected_runner():
     config = RunConfig(games=2, seed=9, match_length=7)
     cands = selfplay.generate(config, runner=fake_runner)
     assert len(cands) == 9
-    # the runner received the built gnubg command script
+    # the runner received the built gnubg command script; a match run plays one
+    # self-chaining match per call (games are auto-chained within the match, so a
+    # single 'new game' kicks it off — loop the call for several matches).
     assert any(c == "new match 7" for c in seen["commands"])
-    assert seen["commands"].count("new game") == 2
+    assert seen["commands"].count("new game") == 1
 
 
 def test_build_commands_reflects_config():

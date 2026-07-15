@@ -98,6 +98,54 @@ CANNED_MAT = """7 point match
 def test_match_length_detection():
     assert gnubg.match_length_of(CANNED_MAT) == 7
     assert gnubg.match_length_of("Game 1\n") == 0
+    # a real gnubg money export is a "0 point match" (optionally after a comment)
+    assert gnubg.match_length_of('; [EventDate "2026.07.15"]\n\n 0 point match\n') == 0
+
+
+def test_gnubg_hops_maps_bar_off_and_segmented_chains():
+    # gnubg point numbers -> bgcore board indices (index = 25 - point);
+    # bar entry is point 25, bear-off is point 0.
+    assert gnubg._gnubg_hops("25/21") == [("bar", 4)]
+    assert gnubg._gnubg_hops("6/0") == [(19, "off")]
+    # a single checker written as shared-point segments flattens to ordered hops
+    assert gnubg._gnubg_hops("24/18 18/16") == [(1, 7), (7, 9)]
+    # repeated tokens expand
+    assert gnubg._gnubg_hops("13/9(3)") == [(12, 16), (12, 16), (12, 16)]
+
+
+def test_parse_cell_detects_dance_and_bearoff_move():
+    dance = gnubg._parse_cell("64:", seat=1)
+    assert dance is not None and dance.kind == "nomove" and dance.dice == [6, 4]
+    mv = gnubg._parse_cell("53: 8/3 6/3", seat=0)
+    assert mv.kind == "move" and mv.dice == [5, 3]
+
+
+def test_apply_gnubg_move_handles_bar_bearoff_and_hit():
+    from bgcore.board import Board, validate
+
+    # bar entry (gnubg point 25 -> board index) that hits a lone opponent blot on
+    # the entry point (board index 4 == gnubg point 21). A hand-built board with
+    # exactly 15 checkers per side keeps the position valid.
+    pts = [0] * 26
+    pts[1] = 14  # 14 mover checkers parked out of the way (+1 on the bar == 15)
+    pts[4] = -1  # a lone opponent blot on the entry point
+    pts[20] = -14  # the rest of the opponent's checkers
+    b = Board(
+        points=pts,
+        bar={"x": 1, "o": 0},
+        off={"x": 0, "o": 0},
+        turn="x",
+        dice=[4, 2],
+        cube={"value": 1, "owner": "center"},
+        score={"x": 0, "o": 0, "length": 0, "crawford": False},
+        decision_type="checker",
+    )
+    b.refresh_pip()
+    nb = gnubg._apply_gnubg_move(b, "25/21")  # bar/21 in bgcore terms
+    validate(nb)
+    assert nb.bar["x"] == 0
+    assert nb.points[4] == 1  # mover now holds the point
+    assert nb.bar["o"] == 1  # the blot was sent to the opponent bar
 
 
 def test_parse_match_extracts_checker_and_cube_decisions():
