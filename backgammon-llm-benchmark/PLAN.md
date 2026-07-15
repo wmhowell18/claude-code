@@ -3,8 +3,9 @@
 **Status:** Draft v1 · **Created:** 2026-07-12 · **Owner:** wesleyhowell7
 
 A benchmark that measures how well large language models play backgammon —
-checker plays *and* cube decisions — scored against eXtreme Gammon (XG) rollout
-ground truth, using a human-comparable error metric (an XG-PR-like score). The
+checker plays *and* cube decisions — scored against **GNU Backgammon (gnubg)
+rollout** ground truth, using a human-comparable error metric (an XG-PR-like
+score). The
 benchmark ships two tracks (text and image), difficulty tiers, a
 contamination-resistant private position set, and a static leaderboard that
 plots model skill against dollar cost with a top-human "north-star" line.
@@ -13,6 +14,22 @@ This document is opinionated. Each section states a **default recommendation**
 in bold and notes alternatives briefly. A second agent should be able to
 scaffold the repo from the [Repository Structure](#8-repository-structure)
 section and start Phase 0.
+
+---
+
+## Decisions log
+
+- **2026-07-15 — Ground-truth engine is GNU Backgammon (gnubg), permanently.**
+  gnubg rollouts are the authoritative source of truth for every position, in
+  all phases — not an interim stand-in for eXtreme Gammon (XG). This resolves
+  Open Question §9.1 (the XG batch-analysis / GUI-automation options are moot)
+  and §9.3 (the match-equity table is gnubg's default MET, which must match the
+  truth engine). XG rollouts are **not** the end state; at most they are an
+  optional future cross-check on a handful of marquee positions. **BenchPR stays
+  calibrated to XG's published PR scale** (§4.4) — that is a property of the
+  *metric formula* for human comparability, and is independent of which engine
+  produces the equities; it remains open (§9.2) only in the sense of pinning the
+  exact constant.
 
 ---
 
@@ -55,15 +72,17 @@ serve any track from a single source of truth.
 | `image_svg` | source SVG | Regenerate PNG at any DPI |
 
 **Canonical ID: XGID.** It is compact, encodes board + cube + dice + score +
-turn, and is the native currency of the ground-truth tool (XG). We use it as the
-primary key and the dedup hash source.
+turn, and is a widely-recognized notation (XG's native currency, and readable by
+GNU BG via ID conversion). We use it as the primary key and the dedup hash
+source; this is a notation choice and is independent of the ground-truth engine
+(gnubg, §1.3).
 
 > Note the residual risk (see §2.5): XGID *format* is likely present in
 > pretraining even if our specific positions are not. That is fine — we are not
 > hiding the notation, only the position-to-answer mapping.
 
 **Secondary ID: GNU BG Position ID.** Free/open tooling (GNU BG) can parse it,
-which matters because GNU BG is our interim rollout engine (§1.3, §7). Store
+which matters because GNU BG is our ground-truth rollout engine (§1.3, §7). Store
 both the Position ID and Match ID.
 
 **Structured JSON (`board_json`)** — the unambiguous form, e.g.:
@@ -116,21 +135,23 @@ decision-relevant state is visible. (A later ablation can hide pip counts to
 test spatial reasoning.) Render at a fixed target (e.g., 1024×768 PNG) plus keep
 SVG for retina/zoom. Store `image_render_version`.
 
-### 1.3 Ground truth (source of truth = XG rollouts)
+### 1.3 Ground truth (source of truth = GNU BG rollouts)
 
 Ground truth is a **full rollout** per position, not a static evaluation.
+**GNU Backgammon (gnubg) is the authoritative engine, permanently** (Decisions
+log, 2026-07-15; §9.1). XG rollouts are not the end state — at most an optional
+future cross-check on a few marquee positions.
 
-**Standardized rollout settings (target = XG):**
+**Standardized rollout settings (engine = GNU BG):**
 
 | Setting | Default |
 |---------|---------|
-| Engine (v1 ship) | XG rollout |
-| Engine (interim) | GNU BG rollout (§7) while XG automation is unsolved |
-| Checker play depth | XG 4-ply (rollouts use 3-ply/2-ply chequer as XG default) |
-| Cube decisions in rollout | XG "world-class"/rollout cube |
+| Engine | GNU BG rollout (authoritative) |
+| Checker play depth | GNU BG "world-class" / 2-ply chequer for rollouts |
+| Cube decisions in rollout | GNU BG world-class cube evaluation |
 | Trials | 1296 (money-safe minimum) → **standard 1296, deep tier 5184** |
 | Truncation | none for short; adaptive/truncated for race positions |
-| Variance reduction | ON (XG variance reduction / quasi-random dice) |
+| Variance reduction | ON (GNU BG variance reduction / quasi-random dice) |
 | Duplicated (antithetic) dice | ON |
 | Seed | recorded per position for reproducibility |
 
@@ -519,7 +540,7 @@ rejected for v1 (hosting friction, not needed).
 
 - GNU BG self-play generator → sampler → dedup/blocklist → tiering (taxonomy
   prior + author judgment at this stage, per §3.1).
-- **Interim ground truth via GNU BG rollouts** (until XG automation is solved).
+- **Ground truth via GNU BG rollouts** (the authoritative engine, §1.3).
 - Manual QA of tier assignments; contamination spot-checks.
 - **Expert panel calibration:** ≥2 strong players (PR ≤ 5) play the pilot blind;
   observed miss rates re-fit the tier thresholds and provide the first measured
@@ -535,13 +556,14 @@ rejected for v1 (hosting friction, not needed).
   canaries + creation date.
 - Fit the **human-error model** (§3.1) on analyzed public match corpora,
   validate it against the panel data, and use it to tier the full set.
-- Swap/augment ground truth to **XG rollouts** for the authoritative set
-  (see Open Questions).
+- Roll out the full authoritative set with **GNU BG rollouts** (the permanent
+  ground-truth engine, §1.3) at the standard trial counts.
 - Full async harness with caching, cost tracking, retries; run a slate of
   models on text + image tracks.
 - **Acceptance:** full set rolled out; ≥6 models scored on both tracks; results
   JSON emitted; BenchPR validated against ≥3 XG-analyzed reference games to
-  within a documented tolerance.
+  within a documented tolerance (a *metric-scale* calibration check, §4.4 — the
+  truth engine remains GNU BG).
 
 ### Phase 3 — Website + budget ranking
 
@@ -557,7 +579,7 @@ rejected for v1 (hosting friction, not needed).
 |-------|-------------|------|
 | 0 | Scaffolding + renderers | lossless XGID round-trip, valid record |
 | 1 | 50-pos pilot + 1 model run | end-to-end BenchPR, reproducible |
-| 2 | ~1,500 pos + full harness | XG truth, ≥6 models, PR validated |
+| 2 | ~1,500 pos + full harness | GNU BG truth, ≥6 models, PR validated |
 | 3 | Site + budget track | live leaderboard, BenchPR @ $10 |
 
 ---
@@ -586,8 +608,8 @@ backgammon-llm-benchmark/
 │       └── hashes.json         # published SHA-256 hashes of held-out records
 │
 ├── rollouts/                   # ground-truth rollout data, keyed by position id
-│   ├── gnubg/                  # interim GNU BG rollouts
-│   └── xg/                     # authoritative XG rollouts
+│   ├── gnubg/                  # authoritative GNU BG rollouts
+│   └── xg/                     # reserved: optional future XG cross-check only
 │
 ├── data/                       # generated/intermediate artifacts
 │   ├── selfplay/               # raw bot self-play games (source of positions)
@@ -655,30 +677,31 @@ backgammon-llm-benchmark/
 
 Pragmatic notes: `positions/heldout/` and generated `render/images/` for heldout
 are gitignored; only `hashes.json` and canaries are committed. `rollouts/` is
-split by engine so we can carry GNU BG (interim) and XG (authoritative) side by
-side and compare.
+split by engine: `gnubg/` holds the authoritative rollouts, and `xg/` is
+reserved for an optional future XG cross-check (unused in v1).
 
 ---
 
 ## 9. Open questions (author decisions needed)
 
-1. **XG rollout automation.** XG is Windows-only GUI software with no official
-   batch/scripting API. Options, roughly in order of effort:
-   - (a) **GNU BG rollouts as interim ground truth** for Phases 0–1 (fully
-     scriptable, open) — *recommended to unblock now*.
-   - (b) **XG batch analysis of exported games:** self-play games → import into
-     XG → "Analyze" whole session → export the analysis (equities/errors) →
-     parse. Semi-manual but scales to hundreds.
-   - (c) **Manual XG rollout import** for the T4/marquee positions only (highest
-     value, lowest volume).
-   - (d) GUI automation (AutoHotkey/pywinauto) as a last resort.
-   - **Decision needed:** is authoritative truth XG, GNU BG, or "GNU BG now, XG
-     upgrade later"? BenchPR calibration depends on this.
+1. **~~XG rollout automation.~~ RESOLVED 2026-07-15 — ground truth is GNU BG,
+   permanently.** GNU BG rollouts are the authoritative source of truth in all
+   phases (Decisions log; §1.3, §7). GNU BG is fully open and scriptable, which
+   removes the automation problem entirely. The XG options once considered here
+   — (b) XG batch analysis of exported sessions, (c) manual XG rollout import for
+   marquee positions, (d) GUI automation (AutoHotkey/pywinauto) — are **moot**;
+   at most XG serves as an optional future cross-check on a handful of positions,
+   never as the authoritative engine. BenchPR calibration is unaffected: it is a
+   metric-scale choice (item 2), not an engine choice.
 2. **BenchPR constant.** Confirm the exact XG PR formula/constant and its
    cube-vs-checker handling so BenchPR is literally comparable to published human
-   PRs (else label it "PR-calibrated").
-3. **Match-equity source.** Which MET (XG default vs. GNU BG) for match-play
-   normalized equities? Must match the truth engine.
+   PRs (else label it "PR-calibrated"). *Still open — this is about the metric
+   formula (the human-comparability axis, §4.4), and is independent of the
+   ground-truth engine (§9.1).*
+3. **~~Match-equity source.~~ RESOLVED 2026-07-15 — GNU BG's default MET.**
+   Match-play normalized equities use GNU BG's built-in default match-equity
+   table, because the MET must match the truth engine (§9.1). Recorded per
+   position in `rollout_meta.met`.
 4. **Dataset size vs. rollout budget.** ~1,500 at 1296+ trials is a lot of
    rollout compute — confirm the trial counts per tier and total time budget.
 5. **Model slate + spend cap.** Which models for v1, and what total $ are we

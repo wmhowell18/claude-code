@@ -11,7 +11,7 @@
     "engine": {
       "type": "string",
       "enum": ["gnubg", "xg"],
-      "description": "gnubg = interim ground truth; xg = authoritative (PLAN.md §1.3, §7)."
+      "description": "gnubg = authoritative ground truth; xg = optional future cross-check only (PLAN.md §1.3, §7)."
     },
     "decision_type": { "type": "string", "enum": ["checker", "cube"] },
     "rollout_meta": {

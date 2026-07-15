@@ -1,7 +1,8 @@
 """GNU Backgammon integration (PLAN.md §1.3, §2.1, §7).
 
-GNU BG is our **interim** ground-truth and self-play engine while XG batch
-automation is unsolved. It exposes a *command language* driven either over a
+GNU BG is our **authoritative** ground-truth and self-play engine throughout the
+benchmark (XG is only an optional future cross-check). It exposes a *command
+language* driven either over a
 tty (``gnubg -t``) by piping newline-separated commands, or via its embedded
 Python (``gnubg -p script.py``). We use the command language.
 
@@ -30,7 +31,6 @@ import shlex
 from dataclasses import dataclass, field
 from typing import Any
 
-from bgcore import moves as _moves
 from bgcore.board import Board, flip, validate
 
 # ---------------------------------------------------------------------------
@@ -108,29 +108,40 @@ def selfplay_commands(
 ) -> list[str]:
     """Build the command script that self-plays ``games`` and exports them.
 
-    ``match_length=None`` gives money sessions (``new session``); a positive
-    integer gives ``new match <n>``. The ``set automatic`` triple makes gnubg
-    roll and move for both bots without interaction; ``new game`` then plays a
-    game to completion. Games are exported with :func:`export_commands`.
+    ``match_length=None`` gives money sessions: ``games`` is the number of games
+    played (each explicit ``new game`` runs to completion via automatic roll/move,
+    with automatic *game* OFF so a money session — which never ends on its own —
+    does not loop forever). A positive ``match_length`` plays ``games`` full
+    matches of that length: automatic *game* is ON so the match chains its own
+    games and stops when a player reaches ``match_length``. A deterministic RNG
+    (``mersenne`` + ``seed``) makes runs reproducible. Games are exported with
+    :func:`export_commands`.
     """
     if games < 1:
         raise ValueError("games must be >= 1")
     cmds: list[str] = []
     cmds += engine_commands(plies)
-    cmds.append(f"set rng manual")  # deterministic seeding below
+    cmds.append("set rng mersenne")  # a real RNG so 'set seed' is honoured
     cmds.append(f"set seed {int(seed)}")
-    # let the bots play unattended
-    cmds.append("set automatic game on")
+    # let the bots roll and move unattended
     cmds.append("set automatic roll on")
     cmds.append("set automatic move on")
     cmds.append("set automatic doubles 0")
     if match_length is None:
+        # money: bound the session ourselves — auto game OFF, one game at a time.
+        cmds.append("set automatic game off")
         cmds.append("new session")
+        for _ in range(games):
+            cmds.append("new game")
     else:
         if match_length < 1:
             raise ValueError("match_length must be >= 1")
+        # match: auto game ON is safe (bounded by match length). A gnubg session
+        # holds one match at a time and ``export match`` only writes the current
+        # one, so a single call plays exactly one match (loop the call in Python,
+        # with distinct seeds, to gather several matches across varied scores).
+        cmds.append("set automatic game on")
         cmds.append(f"new match {int(match_length)}")
-    for _ in range(games):
         cmds.append("new game")
     cmds += export_commands(export_path, fmt=export_format, scope="match")
     return cmds
@@ -201,18 +212,38 @@ def script(commands: list[str]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _export_path_of(commands: list[str]) -> str | None:
+    """Return the file path an ``export``/``save match`` command writes to, if any.
+
+    gnubg cannot write a .mat export to stdout, so self-play commands export to a
+    file; :func:`run_gnubg` reads that file back. Rollout commands have no export
+    and fall through to stdout.
+    """
+    for c in reversed(commands):
+        s = c.strip()
+        if s.startswith("export ") or s.startswith("save match "):
+            toks = shlex.split(s)
+            if toks:
+                return toks[-1]
+    return None
+
+
 def run_gnubg(
     commands: list[str],
     *,
     binary: str = "gnubg",
     timeout: float = 3600.0,
 ) -> str:
-    """Run gnubg headless, feeding ``commands`` on stdin, returning stdout text.
+    """Run gnubg headless, feeding ``commands`` on stdin.
 
-    Isolated here so the rest of the module stays pure and testable. Not exercised
-    in CI (no gnubg binary). Callers in the pipeline inject this (or a canned
-    stand-in) as a plain ``Callable[[list[str]], str]``.
+    Returns the exported *match text* when the command list contains an
+    ``export``/``save match`` (self-play): gnubg writes the .mat to a file rather
+    than stdout, so we read that file back. Otherwise (e.g. a rollout) the gnubg
+    stdout is returned. Isolated here so the rest of the module stays pure and
+    testable. Not exercised in CI (no gnubg binary). Callers in the pipeline
+    inject this (or a canned stand-in) as a plain ``Callable[[list[str]], str]``.
     """
+    import os  # noqa: PLC0415
     import subprocess  # noqa: PLC0415 - kept local so importing this module is I/O-free
 
     proc = subprocess.run(  # noqa: S603
@@ -223,6 +254,10 @@ def run_gnubg(
         timeout=timeout,
         check=False,
     )
+    path = _export_path_of(commands)
+    if path and os.path.exists(path):
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
     return proc.stdout
 
 
@@ -258,20 +293,106 @@ class Decision:
 _MATCH_LEN_RE = re.compile(r"^\s*(\d+)\s+point match", re.IGNORECASE)
 _GAME_RE = re.compile(r"^\s*Game\s+(\d+)", re.IGNORECASE)
 # a numbered ply line: "  3) <left cell>   <right cell>"
-_PLY_RE = re.compile(r"^\s*\d+\)\s?(.*)$")
+_PLY_RE = re.compile(r"^(\s*\d+\)\s?)(.*)$")
 _CELL_MOVE_RE = re.compile(r"^([1-6]{2}):\s*(.+?)\s*$")
+# a cell always begins with the dice ("53:") or a cube/result keyword. The two
+# move columns sit at fixed offsets (left ~col 5, right ~col 33), so we split on
+# the right column rather than on a run of spaces — a wide 4-checker move can
+# leave only a single space before the right cell, which a space-run split would
+# wrongly merge into one cell.
+_CELL_START_RE = re.compile(
+    r"[1-6]{2}:|Doubles?|Takes?|Drops?|Passe?s?|Cannot|Wins?", re.IGNORECASE
+)
+_RIGHT_COL_MIN = 20
+# a dance / forced no-move cell carries only the dice: "64:"
+_CELL_DANCE_RE = re.compile(r"^([1-6]{2}):\s*$")
 _CELL_DOUBLE_RE = re.compile(r"Doubles?\s*=>\s*(\d+)", re.IGNORECASE)
+_REP_RE = re.compile(r"\((\d+)\)$")
 
 
-def _split_cells(body: str) -> list[str]:
-    """Split a ply line body into its (up to two) column cells.
+def _gnubg_hops(move: str) -> list[tuple[Any, Any]]:
+    """Expand a gnubg .mat move cell into its ordered single-die hops.
 
-    .mat columns are separated by a run of >=2 spaces. Cells are returned
-    stripped; empty cells are dropped so cube events (which occupy one column)
-    parse cleanly.
+    gnubg writes each checker's play in its own point numbers (24 = back, 1 =
+    ace), entering from the bar as point ``25`` and bearing off to point ``0``,
+    with a checker's multi-die play as space-separated segments that share the
+    intermediate point (``24/18 18/16``). Rather than reconcile that spelling
+    with :mod:`bgcore.notation`'s merged slash-chains, we flatten it to the exact
+    sequence of (from, to) single-die hops gnubg applied, in ``bgcore`` **board
+    indices** (``"bar"`` / ``"off"`` at the ends). Applying these hops in order
+    reproduces gnubg's resulting position faithfully (checkers are fungible, so
+    the one-checker-chain vs. two-checker ambiguity is irrelevant to the layout).
+    Repeated tokens (``13/9(3)``) are expanded to that many identical hop chains.
     """
-    parts = re.split(r"\s{2,}", body.strip())
-    return [p.strip() for p in parts if p.strip()]
+    def _pt(sym: str) -> Any:
+        core = sym.rstrip("*")
+        if core in ("0",):
+            return "off"
+        if core in ("25",):
+            return "bar"
+        return 25 - int(core)  # notation point -> board index
+
+    hops: list[tuple[Any, Any]] = []
+    for raw in move.split():
+        rep = 1
+        mrep = _REP_RE.search(raw)
+        if mrep:
+            rep = int(mrep.group(1))
+            raw = raw[: mrep.start()]
+        segs = raw.split("/")
+        for _ in range(rep):
+            for a, b in zip(segs, segs[1:]):
+                hops.append((_pt(a), _pt(b)))
+    return hops
+
+
+def _apply_gnubg_move(board: Board, move: str) -> Board:
+    """Apply a gnubg .mat move to ``board`` (mover-relative) via its raw hops.
+
+    Reproduces gnubg's own game record faithfully instead of round-tripping
+    through legal-move matching: each single-die hop decrements its source
+    (bar/point), sends any lone opponent checker on the destination to the
+    opponent bar (a hit), and increments the destination (or bears off). The
+    returned board keeps the mover's perspective with ``dice`` cleared; use
+    :func:`bgcore.board.flip` to pass the turn.
+    """
+    nb = board.copy()
+    for frm, to in _gnubg_hops(move):
+        if frm == "bar":
+            nb.bar["x"] -= 1
+        else:
+            nb.points[frm] -= 1
+        if to == "off":
+            nb.off["x"] += 1
+        else:
+            if nb.points[to] == -1:  # hit a lone opponent checker
+                nb.points[to] = 0
+                nb.bar["o"] += 1
+            nb.points[to] += 1
+    nb.dice = []
+    nb.refresh_pip()
+    return nb
+
+
+def _split_cells(line: str, body_start: int) -> list[str]:
+    """Split a full ply line into its (up to two) column cells by column offset.
+
+    ``body_start`` is the index just past the ``"NN) "`` prefix. The left cell
+    runs from there to the start of the right cell; the right cell is the first
+    cell-start token (dice or a cube/result keyword) at or beyond
+    ``_RIGHT_COL_MIN``. Cells are returned stripped; empty cells are dropped so
+    cube/dance events (which occupy a single column) parse cleanly.
+    """
+    right_col: int | None = None
+    for mm in _CELL_START_RE.finditer(line):
+        if mm.start() >= max(_RIGHT_COL_MIN, body_start):
+            right_col = mm.start()
+            break
+    if right_col is None:
+        cells = [line[body_start:]]
+    else:
+        cells = [line[body_start:right_col], line[right_col:]]
+    return [c.strip() for c in cells if c.strip()]
 
 
 def _parse_cell(cell: str, seat: int) -> RawEvent | None:
@@ -290,6 +411,10 @@ def _parse_cell(cell: str, seat: int) -> RawEvent | None:
         dice = [int(m.group(1)[0]), int(m.group(1)[1])]
         move = m.group(2).strip()
         return RawEvent(kind="move", seat=seat, dice=dice, move=move)
+    m = _CELL_DANCE_RE.match(cell)
+    if m:  # rolled but no legal play (a dance): turn passes, no decision
+        dice = [int(m.group(1)[0]), int(m.group(1)[1])]
+        return RawEvent(kind="nomove", seat=seat, dice=dice)
     return None
 
 
@@ -312,8 +437,8 @@ def parse_match_events(text: str) -> list[tuple[int, list[RawEvent]]]:
             continue
         pm = _PLY_RE.match(line)
         if pm and cur_game is not None:
-            body = pm.group(1)
-            for idx, cell in enumerate(_split_cells(body)):
+            body_start = len(pm.group(1))
+            for idx, cell in enumerate(_split_cells(line, body_start)):
                 ev = _parse_cell(cell, seat=idx)
                 if ev is not None:
                     events.append(ev)
@@ -372,7 +497,13 @@ def parse_match(text: str, *, validate_boards: bool = True) -> list[Decision]:
                         play_mode=play_mode,
                     )
                 )
-                board = _moves.apply_move(board, ev.move)
+                board = _apply_gnubg_move(board, ev.move)
+                board = flip(board)
+                board.decision_type = "cube"
+                i += 1
+            elif ev.kind == "nomove":
+                # a dance (forced no play): the turn passes with no decision to
+                # record, but we must still flip so alternation stays in sync.
                 board = flip(board)
                 board.decision_type = "cube"
                 i += 1

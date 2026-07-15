@@ -6,7 +6,11 @@
 
 Each position ships as one JSON record with `xgid` (canonical ID), `gnubg_id`,
 `board_json`, `ascii`, `image_png`, and `image_svg` (PLAN.md §1.1). Schema:
-`schema/position.schema.json`. Ground truth: `schema/rollout.schema.json`.
+`schema/position.schema.json`. Ground truth: `schema/rollout.schema.json`,
+produced by **GNU BG rollouts — the authoritative engine (permanent, per the
+2026-07-15 decision; PLAN.md §1.3, §9.1).** `xgid` is a canonical *notation*
+choice and does not make XG the truth engine. Match-play equities use GNU BG's
+default match-equity table (PLAN.md §9.3).
 
 ## Tiers (T1-T4)
 
