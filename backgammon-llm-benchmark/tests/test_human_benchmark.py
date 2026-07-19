@@ -80,6 +80,38 @@ def test_cube_entries_have_options_and_no_legal(data):
         assert entry["options"], "cube positions keep their three-button options"
 
 
+def test_checker_entries_carry_best_after_board(records, data):
+    """Every checker position embeds ``best_after`` — the board after the engine's
+    best play — so the practice-mode feedback panel can redraw it. With the
+    move-matching fix every pilot best move is legal, so none should be None."""
+    by_id = {d["position_id"]: d for d in data}
+    for record in records:
+        if record["decision_type"] != "checker":
+            continue
+        entry = by_id[record["position_id"]]
+        ba = entry["best_after"]
+        assert ba is not None, ("best_after must resolve for every pilot position",
+                                record["position_id"])
+        assert len(ba["points"]) == 26
+        assert set(ba["bar"].keys()) == {"x", "o"}
+        assert set(ba["off"].keys()) == {"x", "o"}
+        # It equals applying best_move to the display-frame mover.
+        mover, _ = _display_and_rollout(record)
+        after = bgmoves.apply_move(mover, entry["best_move"])
+        assert ba["points"] == [int(v) for v in after.points]
+
+
+def test_page_carries_practice_and_blind_modes():
+    """The generated page must offer both run modes and the feedback machinery."""
+    records = hb.load_positions()
+    data = hb.build_data(records)
+    manifest = hb.build_manifest(records, "2026-01-01T00:00:00Z")
+    html = hb.render_html(data, manifest)
+    for needle in ("screenFeedback", "STATE_VERSION", "modeChooser", "runmode",
+                   "Blind panel run", "Practice — feedback after each answer", "screenStale"):
+        assert needle in html, needle
+
+
 # -- the embedded legal set == the authoritative engine ---------------------
 
 
@@ -128,3 +160,22 @@ def test_rollout_moves_legal_in_display_frame_are_in_embedded_set(records, data)
                 continue  # illegal in this frame -> not expected in the set
             sig = hb._sig(lm.points, lm.bar["x"], lm.bar["o"], lm.off["x"])
             assert sig in embedded, (record["position_id"], move)
+
+
+def test_all_rollout_moves_resolve_in_display_frame(records):
+    """Regression: after the move-matching fix, EVERY pilot rollout move resolves
+    to a legal move in its display frame (previously 22 moves across 13 positions
+    — single-checker spellings like ``10/3`` — mis-reported as illegal, so their
+    best moves couldn't be composed/scored). None may remain unmatched."""
+    unmatched = []
+    for record in records:
+        if record["decision_type"] != "checker":
+            continue
+        mover, rollout = _display_and_rollout(record)
+        for m in (rollout.get("checker") or {}).get("moves") or []:
+            move = m.get("move")
+            if not move:
+                continue
+            if bgmoves._match(mover, move) in (None, "cannot-move"):
+                unmatched.append((record["position_id"], move))
+    assert unmatched == [], unmatched

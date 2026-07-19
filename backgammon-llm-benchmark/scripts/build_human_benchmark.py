@@ -143,6 +143,26 @@ def _legal_embed(mover: Board) -> list[dict]:
     return out
 
 
+def _best_after(mover: Board, best_move: str | None) -> dict | None:
+    """Board layout (``points``/``bar``/``off``) after applying ``best_move``.
+
+    Used by the practice-mode feedback panel to redraw the board with the engine's
+    best play applied. Returns ``None`` if the move can't be resolved/applied so
+    the panel degrades gracefully (names the best move without animating it).
+    """
+    if not best_move:
+        return None
+    try:
+        after = bgmoves.apply_move(mover, best_move)
+    except Exception:  # noqa: BLE001
+        return None
+    return {
+        "points": [int(v) for v in after.points],
+        "bar": {"x": int(after.bar["x"]), "o": int(after.bar["o"])},
+        "off": {"x": int(after.off["x"]), "o": int(after.off["o"])},
+    }
+
+
 def _endpoint_key(cnt) -> str:
     """Stable key for an endpoint (start,end) multiset — must match the JS port."""
     def s(x):
@@ -273,6 +293,11 @@ def build_data(records: list[dict]) -> list[dict]:
             # hops on a live board and only lets the panelist submit a sequence that
             # reaches one of these signatures.
             entry["legal"] = _legal_embed(mover)
+            # Board layout AFTER the engine's best move, so the practice-mode
+            # feedback panel can re-draw the board with the best play applied. None
+            # when the best move can't be resolved/applied (degrade gracefully — the
+            # panel then just names the best move without animating it).
+            entry["best_after"] = _best_after(mover, entry.get("best_move"))
         else:  # cube
             cube = roll.get("cube") or {}
             errmap = {k: abs(float(v)) for k, v in (cube.get("error_mp") or {}).items()}
@@ -456,6 +481,27 @@ code { background: var(--chip); padding: 1px 5px; border-radius: 4px; font-size:
 .live-valid { min-height: 1.1em; font-weight: 600; }
 .live-valid.ok { color: var(--ok); }
 .live-valid.bad { color: var(--bad); }
+
+/* run-mode chooser */
+.mode-opts { display: flex; flex-direction: column; gap: 10px; margin: 6px 0 4px; }
+.mode-card { display: grid; grid-template-columns: auto 1fr; grid-gap: 2px 10px;
+  align-items: start; border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px 14px; cursor: pointer; font-weight: 400; margin: 0; }
+.mode-card:hover { border-color: var(--accent); }
+.mode-card input { grid-row: span 2; margin-top: 3px; }
+.mode-card b { font-weight: 700; }
+.mode-card span { grid-column: 2; }
+
+/* per-answer feedback */
+.verdict { font-size: 1.25rem; font-weight: 800; margin: 10px 0 6px; }
+.verdict.ok { color: var(--ok); }
+.verdict.bad { color: var(--bad); }
+.fb-grid { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 4px; }
+.fb-row { display: flex; flex-wrap: wrap; gap: 4px 12px; border-bottom: 1px solid var(--line); padding-bottom: 5px; }
+.fb-k { color: var(--muted); min-width: 150px; font-size: .9rem; }
+.fb-v { font-weight: 600; font-variant-numeric: tabular-nums; }
+.errbox { background: var(--chip); border: 1px solid var(--line); border-radius: 8px;
+  padding: 12px; overflow-x: auto; white-space: pre-wrap; font-size: .82rem; color: var(--bad); }
 """
 
 _JS = r"""
@@ -465,6 +511,10 @@ var DATA = JSON.parse(document.getElementById("bench-data").textContent);
 var MANIFEST = JSON.parse(document.getElementById("bench-manifest").textContent);
 var TOTAL = DATA.length;
 var STORE_KEY = "bg-human-bench-pilot-v1";
+/* Bump when the saved-state shape changes so stale localStorage is detected on
+   load (we offer "start fresh" rather than silently mixing schemas). */
+var STATE_VERSION = 2;
+var MODES = { practice: "practice", blind: "blind" };
 
 /* ---- notation port (faithful JS port of bgcore/notation.py) ---- */
 var CANNOT_MOVE = {"cannot move":1,"cannotmove":1,"cant move":1,"no move":1,"no play":1,"dance":1};
@@ -648,15 +698,34 @@ function scoreCube(pos, label){
 }
 
 /* ---- persistence ---- */
+/* Read raw saved state. Returns {state, stale}: `stale` is true when there is a
+   non-empty prior run whose version does not match STATE_VERSION (schema drift) —
+   the boot code then offers a clean restart instead of mixing schemas. */
 function loadState(){
-  try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; }
-  catch(e){ return {}; }
+  var raw;
+  try { raw = localStorage.getItem(STORE_KEY); }
+  catch(e){ raw = null; }
+  if(!raw) return { state: freshState(), stale: false };
+  var st;
+  try { st = JSON.parse(raw); }
+  catch(e){ return { state: freshState(), stale: false, corrupt: true }; }
+  if(!st || typeof st !== "object") return { state: freshState(), stale: false, corrupt: true };
+  if(!st.answers || typeof st.answers !== "object") st.answers = {};
+  var hasProgress = st.name || Object.keys(st.answers).length > 0;
+  if(hasProgress && st.v !== STATE_VERSION){ return { state: st, stale: true }; }
+  if(st.v !== STATE_VERSION) st.v = STATE_VERSION;
+  if(st.mode !== MODES.practice && st.mode !== MODES.blind) st.mode = MODES.practice;
+  return { state: st, stale: false };
 }
+function freshState(){ return { v: STATE_VERSION, mode: MODES.practice, answers: {} }; }
 function saveState(st){
   try { localStorage.setItem(STORE_KEY, JSON.stringify(st)); } catch(e){}
 }
-var STATE = loadState();
-/* STATE = { name, started, answers: { position_id: {chosen,is_best,equity_loss,matched,parse_failed} } } */
+function clearState(){ try { localStorage.removeItem(STORE_KEY); } catch(e){} }
+/* STATE = { v, mode, name, started, answers: { position_id: {chosen,is_best,equity_loss,matched,parse_failed} } } */
+var _loaded = loadState();
+var STATE = _loaded.state;
+var STATE_STALE = _loaded.stale;
 if(!STATE.answers) STATE.answers = {};
 
 /* ---- helpers ---- */
@@ -805,7 +874,8 @@ function renderBoardSVG(bd, view){
     s.push('<g'+(usedMask[1]?' opacity="0.32"':'')+'>'+svgDie(dx+70, dy, d1)+'</g>');
     if(d0 === d1 && rem){ s.push(svgText(dx+62, dy-10, "x"+rem.length, 18, "middle", "bold")); }
   } else {
-    s.push(svgText(barLeft() + BBARW + 3 * BCOLW, (BYTOP+BYBOT)/2, "[cube decision]", 22));
+    var lbl = (view.diceLabel !== undefined) ? view.diceLabel : "[cube decision]";
+    if(lbl) s.push(svgText(barLeft() + BBARW + 3 * BCOLW, (BYTOP+BYBOT)/2, lbl, 20));
   }
 
   /* header text */
@@ -1014,6 +1084,29 @@ function ClickBoard(pos, wrap, ctrl, onSubmit){
 }
 
 /* ---- screens ---- */
+function modeChooser(current){
+  /* Two radio cards: practice (feedback after each answer) vs blind run. */
+  function card(mode, title, desc){
+    var id = "mode-" + mode;
+    var radio = el("input", { type: "radio", name: "runmode", id: id, value: mode });
+    if(current === mode) radio.checked = true;
+    var lab = el("label", { class: "mode-card", for: id }, [
+      radio, el("b", { text: title }), el("span", { class: "small muted", text: desc })
+    ]);
+    return lab;
+  }
+  return el("div", { class: "mode-opts" }, [
+    card(MODES.practice, "Practice — feedback after each answer",
+      "See the engine's best play and your equity loss right after every position. Good for learning."),
+    card(MODES.blind, "Blind panel run — results only at the end",
+      "No feedback until you finish all " + TOTAL + " positions. Use this for a clean benchmark run.")
+  ]);
+}
+function selectedMode(){
+  var checked = document.querySelector('input[name="runmode"]:checked');
+  return (checked && checked.value === MODES.blind) ? MODES.blind : MODES.practice;
+}
+
 function screenIntro(){
   clear();
   var nameVal = STATE.name || "";
@@ -1021,13 +1114,17 @@ function screenIntro(){
     placeholder: "e.g. panelist-3 or your initials" });
   var answered = Object.keys(STATE.answers).length;
   var resumeNote = answered > 0 ? el("p", { class: "muted small",
-    text: "Resuming: " + answered + " of " + TOTAL + " already answered on this device." }) : null;
+    text: "Resuming: " + answered + " of " + TOTAL + " already answered on this device (mode locked to “" +
+      (STATE.mode === MODES.blind ? "blind" : "practice") + "”)." }) : null;
+  var chooser = answered > 0 ? null : modeChooser(STATE.mode || MODES.practice);
   var btn = el("button", { class: "btn", text: answered > 0 ? "Resume" : "Start" });
   btn.onclick = function(){
     var v = document.getElementById("pname").value.trim();
     if(!v){ document.getElementById("pname").focus(); return; }
     STATE.name = v;
+    if(answered === 0) STATE.mode = selectedMode();   /* lock mode once a run begins */
     if(!STATE.started) STATE.started = new Date().toISOString();
+    STATE.v = STATE_VERSION;
     saveState(STATE);
     routeToNext();
   };
@@ -1036,27 +1133,42 @@ function screenIntro(){
     reset = el("button", { class: "btn secondary", text: "Start over (clear answers)" });
     reset.onclick = function(){
       if(confirm("Clear all saved answers on this device and start fresh?")){
-        STATE = { answers: {} }; saveState(STATE); screenIntro();
+        clearState(); STATE = freshState(); STATE_STALE = false; screenIntro();
       }
     };
   }
   app.appendChild(el("div", { class: "panel" }, [
     el("h1", { text: "Backgammon Human Benchmark — Pilot" }),
     el("p", { text: "You will see " + TOTAL + " backgammon positions, one at a time. For each, " +
-      "give the play you think is best. Some are checker plays (type the move); some are cube decisions (pick a button)." }),
+      "give the play you think is best. Some are checker plays (click or type the move); some are cube decisions (pick a button)." }),
     el("p", { html: "In every diagram <b>you play the White checkers</b> (your opponent is Black), and it is " +
       "always your roll. You move your White checkers toward your home board (points 6 to 1, lower right) and " +
       "bear off on the right. Points are numbered from your perspective (24 = back checkers, 1 = ace point)." }),
-    el("p", { class: "muted", html: "This is a <b>blind</b> test: no engine evaluation or “best move” is shown until you finish all " +
-      TOTAL + " positions. You cannot go back to change an earlier answer. Your progress is saved on this device, " +
+    el("p", { class: "muted", html: "You cannot go back to change an earlier answer. Your progress is saved on this device, " +
       "so an accidental tab close will not lose it." }),
     el("hr", { class: "divider" }),
+    chooser ? el("label", { text: "Run mode" }) : null,
+    chooser,
     el("label", { for: "pname", text: "Your name or identifier" }),
     input,
     resumeNote,
     el("div", { class: "btn-row" }, [btn, reset])
   ]));
   input.focus();
+}
+
+/* Stale/corrupt saved-state recovery screen (offered instead of crashing). */
+function screenStale(){
+  clear();
+  var fresh = el("button", { class: "btn", text: "Start fresh" });
+  fresh.onclick = function(){ clearState(); STATE = freshState(); STATE_STALE = false; screenIntro(); };
+  app.appendChild(el("div", { class: "panel" }, [
+    el("h1", { text: "Saved progress can’t be restored" }),
+    el("p", { html: "This device has saved answers from an <b>older version</b> of the quiz. To avoid mixing " +
+      "incompatible data, please start a fresh run. (Your earlier run is not lost — if you already downloaded its " +
+      "results JSON, that file is still valid.)" }),
+    el("div", { class: "btn-row" }, [fresh])
+  ]));
 }
 
 function contextChips(pos){
@@ -1169,20 +1281,107 @@ function screenPosition(idx){
   window.scrollTo(0, 0);
 }
 
+/* Guards against a double-click / double-submit recording an answer twice or
+   double-advancing: once an answer for `idx` exists we never overwrite it, and a
+   reentrant call while a submit is in flight is ignored. */
+var ADVANCING = false;
 function recordAndAdvance(idx, res){
+  if(ADVANCING) return;
   var pos = DATA[idx];
-  STATE.answers[pos.position_id] = {
-    chosen: res.chosen, is_best: res.is_best, equity_loss: res.equity_loss,
-    matched: res.matched, parse_failed: !!res.parse_failed
-  };
-  saveState(STATE);
-  routeToNext();
+  if(STATE.answers[pos.position_id]) return;   /* already answered — no re-record */
+  ADVANCING = true;
+  try {
+    STATE.answers[pos.position_id] = {
+      chosen: res.chosen, is_best: res.is_best, equity_loss: res.equity_loss,
+      matched: res.matched, parse_failed: !!res.parse_failed
+    };
+    saveState(STATE);
+    if(STATE.mode === MODES.blind){ routeToNext(); }
+    else { screenFeedback(idx); }
+  } finally {
+    ADVANCING = false;
+  }
 }
 
 function routeToNext(){
   var i = firstUnanswered();
   if(i >= TOTAL) screenResults();
   else screenPosition(i);
+}
+
+/* ---- per-answer feedback (practice mode) ---- */
+function moveRank(pos, moveStr){
+  if(!moveStr || !pos.moves) return null;
+  var canon = canonicalizeMove(moveStr);
+  for(var i = 0; i < pos.moves.length; i++){
+    if(pos.moves[i].move === moveStr || pos.moves[i].canonical === canon) return pos.moves[i].rank;
+  }
+  return null;
+}
+function cubeRank(pos, label){
+  /* 1-based rank of an action among the posed options, ascending by error. */
+  var order = pos.options.slice().sort(function(a, b){
+    return (pos.error_mp[a] || 0) - (pos.error_mp[b] || 0);
+  });
+  var k = order.indexOf(label);
+  return k >= 0 ? (k + 1) : null;
+}
+
+function screenFeedback(idx){
+  clear();
+  var pos = DATA[idx];
+  var a = STATE.answers[pos.position_id];
+  var pct = Math.round(((idx + 1) / TOTAL) * 100);
+  var head = el("div", {}, [
+    el("div", { class: "progress" }, [
+      el("span", { text: "Feedback — position " + (idx + 1) + " / " + TOTAL }),
+      el("span", { text: STATE.name || "" })
+    ]),
+    el("div", { class: "bar" }, [el("span", { style: "width:" + pct + "%" })])
+  ]);
+
+  var isBest = !!a.is_best;
+  var verdict = el("div", { class: "verdict " + (isBest ? "ok" : "bad") },
+    [ isBest ? "✓ Best play" : "✗ Not the best play" ]);
+
+  var lossMp = a.equity_loss * MP_PER_POINT;
+  var best = bestMoveText(pos);
+  var rows = [];
+  rows.push(el("div", { class: "fb-row" }, [ el("span", { class: "fb-k", text: "Your answer" }),
+    el("span", { class: "fb-v", text: a.chosen + (a.parse_failed ? "  (not recognised — scored as worst option)" : "") }) ]));
+  rows.push(el("div", { class: "fb-row" }, [ el("span", { class: "fb-k", text: pos.decision_type === "cube" ? "Best action" : "Best play" }),
+    el("span", { class: "fb-v", text: best }) ]));
+  rows.push(el("div", { class: "fb-row" }, [ el("span", { class: "fb-k", text: "Your equity loss" }),
+    el("span", { class: "fb-v", text: fmt(lossMp, 1) + " mpt" + (isBest ? "  (0 — best)" : "") }) ]));
+
+  var rank = pos.decision_type === "cube" ? cubeRank(pos, a.chosen) : moveRank(pos, a.matched);
+  var nlisted = pos.decision_type === "cube" ? pos.options.length : (pos.moves ? pos.moves.length : 0);
+  if(rank){
+    rows.push(el("div", { class: "fb-row" }, [ el("span", { class: "fb-k", text: "Rank of your choice" }),
+      el("span", { class: "fb-v", text: "#" + rank + " of " + nlisted + (pos.decision_type === "cube" ? " actions" : " listed moves") }) ]));
+  } else if(pos.decision_type === "checker") {
+    rows.push(el("div", { class: "fb-row" }, [ el("span", { class: "fb-k", text: "Rank of your choice" }),
+      el("span", { class: "fb-v", text: "not among the " + nlisted + " listed moves" }) ]));
+  }
+
+  var kids = [head, verdict, el("div", { class: "fb-grid" }, rows)];
+
+  /* Checker: redraw the board with the engine's best play applied (if resolvable). */
+  if(pos.decision_type === "checker" && pos.best_after){
+    var bd = { points: pos.best_after.points, bar: pos.best_after.bar, off: pos.best_after.off,
+      dice: [], cube: pos.board.cube, score: pos.board.score };
+    var fbWrap = el("div", { class: "board-wrap" });
+    fbWrap.innerHTML = renderBoardSVG(bd, { diceLabel: "▶ best play: " + best });
+    kids.push(el("p", { class: "small muted", text: "The board below shows the position after the engine's best play." }));
+    kids.push(fbWrap);
+  }
+
+  var next = el("button", { class: "btn", text: (idx + 1 >= TOTAL) ? "See results" : "Next position" });
+  next.onclick = function(){ routeToNext(); };
+  kids.push(el("div", { class: "btn-row" }, [next]));
+
+  app.appendChild(el("div", { class: "panel" }, kids));
+  window.scrollTo(0, 0);
 }
 
 /* ---- results ---- */
@@ -1237,6 +1436,7 @@ function buildResultsJSON(agg){
   return {
     kind: "human", run_id: "human-" + (slug || "anon") + "-" + ts.replace(/[:.]/g, "").slice(0, 15),
     model: "human-panel/" + (STATE.name || "anon"), track: "text",
+    mode: (STATE.mode === MODES.blind) ? MODES.blind : MODES.practice,
     manifest: manifest, aggregate: agg, decisions: decisions
   };
 }
@@ -1314,10 +1514,33 @@ function screenResults(){
   window.scrollTo(0, 0);
 }
 
-/* ---- boot ---- */
-if(STATE.name && firstUnanswered() < TOTAL){ screenPosition(firstUnanswered()); }
-else if(STATE.name && firstUnanswered() >= TOTAL && Object.keys(STATE.answers).length === TOTAL){ screenResults(); }
-else { screenIntro(); }
+/* ---- boot + error boundary ---- */
+function screenError(err){
+  clear();
+  app.appendChild(el("div", { class: "panel" }, [
+    el("h1", { text: "Something went wrong" }),
+    el("p", { text: "The quiz hit an unexpected error. Your saved answers on this device are not lost — " +
+      "try reloading the page. If it keeps happening, use “Start over” from the intro to reset." }),
+    el("pre", { class: "errbox", text: String((err && (err.stack || err.message)) || err || "unknown error") })
+  ]));
+}
+function boot(){
+  if(STATE_STALE){ screenStale(); return; }
+  if(STATE.name && firstUnanswered() < TOTAL){ screenPosition(firstUnanswered()); }
+  else if(STATE.name && Object.keys(STATE.answers).length >= TOTAL){ screenResults(); }
+  else { screenIntro(); }
+}
+/* Last-resort handler so an exception in any click handler surfaces a readable
+   box instead of leaving a dead/blank page. */
+var _errShown = false;
+window.onerror = function(msg, src, line, col, err){
+  if(_errShown) return false;
+  _errShown = true;
+  try { screenError(err || msg); } catch(_){ try { app.textContent = "Fatal error: " + msg; } catch(__){} }
+  return false;
+};
+try { boot(); }
+catch(e){ _errShown = true; try { screenError(e); } catch(_){ app.textContent = "Fatal error: " + e; } }
 """
 
 
