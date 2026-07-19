@@ -112,6 +112,20 @@ def test_page_carries_practice_and_blind_modes():
         assert needle in html, needle
 
 
+def test_page_uses_one_click_automove_and_topmoves_feedback():
+    """The page ships the one-click auto-move engine (dice order + swap + spent
+    fading + rejection shake) and the top-3 feedback tables — and no longer uses
+    the old select-then-pick-destination highlight UI."""
+    records = hb.load_positions()
+    html = hb.render_html(hb.build_data(records), hb.build_manifest(records, "2026-01-01T00:00:00Z"))
+    for needle in ("pickDie", "trySwap", "diceSwappable", "usedCount", "bg-shake",
+                   "fbTopMovesTable", "fbCubeTable"):
+        assert needle in html, needle
+    # the destination-highlight primary interaction is gone
+    for gone in ("computeHighlights", "sourceHasMove", "destdot"):
+        assert gone not in html, gone
+
+
 # -- the embedded legal set == the authoritative engine ---------------------
 
 
