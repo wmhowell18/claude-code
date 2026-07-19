@@ -61,6 +61,7 @@ from bgcore import notation  # noqa: E402
 from bgcore import moves as bgmoves  # noqa: E402
 from bgcore.board import Board, flip, pip_counts  # noqa: E402
 from ids.xgid import board_to_xgid  # noqa: E402
+from generate import quality  # noqa: E402  (shared quiz-eligibility gate)
 
 POS_DIR = os.path.join(REPO_ROOT, "positions", "pilot")
 ROLL_DIR = os.path.join(REPO_ROOT, "rollouts", "gnubg")
@@ -94,27 +95,11 @@ def _display_board(rec: dict, rollout: dict) -> Board:
     which the on-roll player is again "x" — so the diagram the panelist plays is
     consistent with the answer key. The frame is chosen per position by which
     orientation actually makes the rollout's moves legal (board_json wins ties).
+
+    Delegates to :func:`generate.quality.display_frame_board` so the quiz and the
+    pipeline quality gate pick the identical frame.
     """
-    b = Board.from_json(rec["board_json"])
-    if rec["decision_type"] == "cube":
-        return b
-    moves = (rollout.get("checker") or {}).get("moves") or []
-
-    def n_legal(bd: Board) -> int:
-        c = 0
-        for m in moves:
-            mv = m.get("move")
-            if not mv:
-                continue
-            try:
-                if bgmoves.is_legal(bd, mv):
-                    c += 1
-            except Exception:  # noqa: BLE001
-                pass
-        return c
-
-    fb = flip(b)
-    return fb if n_legal(fb) > n_legal(b) else b
+    return quality.display_frame_board(rec, rollout)
 
 
 def _sig(points, bar_x, bar_o, off_x) -> str:
@@ -222,6 +207,30 @@ def load_positions() -> list[dict]:
     return records
 
 
+def _load_rollout(pid: str) -> dict:
+    with open(os.path.join(ROLL_DIR, pid + ".json"), encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def filter_eligible(records: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Apply the shared quality gate (:mod:`generate.quality`) to the pilot set.
+
+    Returns ``(eligible_records, excluded)`` where ``excluded`` is a list of
+    ``{"position_id", "reason", "decision_type"}`` for positions gated out (forced /
+    unscoreable / trivial — no real decision). The dataset files are untouched; the
+    gate only affects which positions the quiz presents and scores.
+    """
+    pairs = [(rec, _load_rollout(rec["position_id"])) for rec in records]
+    eligible, excl_pairs = quality.filter_eligible(pairs)
+    by_id = {r["position_id"]: r for r in records}
+    excluded = [
+        {"position_id": pid, "reason": reason,
+         "decision_type": by_id.get(pid, {}).get("decision_type", "?")}
+        for pid, reason in excl_pairs
+    ]
+    return eligible, excluded
+
+
 def build_data(records: list[dict]) -> list[dict]:
     """Assemble the per-position data blob consumed by the page's JS."""
     out = []
@@ -324,16 +333,25 @@ def dataset_hash(records: list[dict]) -> str:
     return "sha256:" + h.hexdigest()
 
 
-def build_manifest(records: list[dict], timestamp: str) -> dict:
+def build_manifest(records: list[dict], timestamp: str,
+                   excluded: list[dict] | None = None,
+                   effective: int | None = None) -> dict:
     versions = {r.get("ascii_render_version", "ascii-1") for r in records}
     img_versions = {r.get("image_render_version", "svg-1") for r in records}
-    return {
+    excluded = excluded or []
+    manifest = {
+        # dataset_hash covers the FULL pilot (unchanged) so runs stay comparable;
+        # the quality gate is recorded additively below.
         "dataset_hash": dataset_hash(records),
         "prompt_version": PROMPT_VERSION,
         "ascii_render_version": sorted(versions)[0] if versions else "ascii-1",
         "image_render_version": sorted(img_versions)[0] if img_versions else "svg-1",
         "timestamp": timestamp,
+        "total_positions": len(records),
+        "effective_positions": len(records) - len(excluded) if effective is None else effective,
+        "excluded_positions": excluded,
     }
+    return manifest
 
 
 def _json_for_script(obj) -> str:
@@ -1517,12 +1535,21 @@ function buildResultsJSON(agg){
   var manifest = {
     dataset_hash: MANIFEST.dataset_hash, prompt_version: MANIFEST.prompt_version,
     ascii_render_version: MANIFEST.ascii_render_version,
-    image_render_version: MANIFEST.image_render_version, timestamp: ts
+    image_render_version: MANIFEST.image_render_version, timestamp: ts,
+    total_positions: MANIFEST.total_positions, effective_positions: MANIFEST.effective_positions,
+    excluded_positions: MANIFEST.excluded_positions || []
   };
   return {
     kind: "human", run_id: "human-" + (slug || "anon") + "-" + ts.replace(/[:.]/g, "").slice(0, 15),
     model: "human-panel/" + (STATE.name || "anon"), track: "text",
     mode: (STATE.mode === MODES.blind) ? MODES.blind : MODES.practice,
+    /* additive: how many of the pilot positions this run actually covered, and
+       which were gated out (no real decision) — keeps runs comparable. */
+    positions: {
+      effective: (MANIFEST.effective_positions !== undefined ? MANIFEST.effective_positions : TOTAL),
+      total: (MANIFEST.total_positions !== undefined ? MANIFEST.total_positions : TOTAL),
+      excluded: (MANIFEST.excluded_positions || []).map(function(e){ return e.position_id; })
+    },
     manifest: manifest, aggregate: agg, decisions: decisions
   };
 }
@@ -1637,12 +1664,22 @@ def main(argv=None) -> int:
                         help="fixed ISO manifest timestamp (default: now, UTC)")
     args = parser.parse_args(argv)
 
-    records = load_positions()
-    if len(records) != 50:
-        print(f"WARNING: expected 50 pilot positions, found {len(records)}", file=sys.stderr)
+    all_records = load_positions()
+    if len(all_records) != 50:
+        print(f"WARNING: expected 50 pilot positions, found {len(all_records)}", file=sys.stderr)
+
+    # Quality gate: drop positions with no real decision (forced / unscoreable /
+    # trivial). Dataset files stay untouched; only the quiz set is filtered.
+    records, excluded = filter_eligible(all_records)
+    if excluded:
+        print(f"Quality gate excluded {len(excluded)} of {len(all_records)} positions "
+              f"(no real decision):")
+        for e in excluded:
+            print(f"  - {e['position_id']}  [{e['decision_type']}]  {e['reason']}")
+
     data = build_data(records)
     ts = args.timestamp or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    manifest = build_manifest(records, ts)
+    manifest = build_manifest(all_records, ts, excluded=excluded, effective=len(records))
     html = render_html(data, manifest)
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
@@ -1652,7 +1689,8 @@ def main(argv=None) -> int:
     n_checker = sum(1 for d in data if d["decision_type"] == "checker")
     n_cube = sum(1 for d in data if d["decision_type"] == "cube")
     print(f"Wrote {args.out}")
-    print(f"  positions: {len(data)}  (checker {n_checker}, cube {n_cube})")
+    print(f"  positions: {len(data)}  (checker {n_checker}, cube {n_cube})  "
+          f"[from {len(all_records)} pilot; {len(excluded)} gated out]")
     print(f"  dataset_hash: {manifest['dataset_hash']}")
     print(f"  size: {len(html):,} bytes")
     return 0
