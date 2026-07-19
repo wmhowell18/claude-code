@@ -26,15 +26,19 @@ python3 scripts/build_human_benchmark.py
 - An intro screen (instructions + a name/identifier field + a blind-test notice).
 - One position at a time with a `Position N / 50` progress bar, deterministic
   order (sorted by `position_id`). Every diagram is shown from the on-roll
-  player's perspective — **the panelist is always `X`** (the light checkers).
-  The generator normalises each record to the mover frame before rendering: a
-  record stored with `turn == "o"` is the color-flipped (opponent's-view) form
-  (`bgcore.board.flip`), so it is flipped back — the board SVG is re-rendered and
-  the pips / score / cube-owner are recomputed — so the displayed `X` is always
-  the player the rollout move list is for. Shown: the board SVG, dice (checker
-  decisions only — cube records carry no dice), cube value/owner, money-vs-match
-  + score, and pip counts. Tier, phase, expected-loss and other difficulty/answer
-  hints are **not** shown.
+  player's perspective — **the panelist always plays the White checkers**
+  (opponent is Black). `board_json` is authoritative and already mover-relative
+  (positive/"x" = on roll, confirmed by both `ids/xgid.py` and `ids/gnubg_id.py`),
+  so its cube owner / score / pips are read as-is — **cube decisions are never
+  color-flipped** (this is what keeps "you own the cube" on the right side). A
+  handful of checker rollouts were computed in the color-mirror frame; those
+  positions are presented as `flip(board_json)` — a legal, symmetric equivalent
+  where the on-roll player is still White — chosen per position by which
+  orientation makes the rollout's moves legal, so the diagram matches the answer
+  key. Checker fills are pushed to true white/black so the UI can say "White"/
+  "Black". Shown: the board SVG, dice (checker decisions only — cube records
+  carry no dice), cube value/owner, money-vs-match + score, and pip counts. Tier,
+  phase, expected-loss and other difficulty/answer hints are **not** shown.
 - Checker decisions take a free-text move in standard notation (a JS port of
   `bgcore/notation.py` normalises it — reordered plays, `*` hits, `(n)` repeats,
   `bar/`/`/off`). A move that reaches the same position spelled differently (e.g.
