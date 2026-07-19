@@ -8,9 +8,11 @@ flow (results JSON -> build -> static HTML). The build is stdlib-only.
 
 `scripts/build_human_benchmark.py` generates a **single self-contained HTML quiz**
 that lets human panelists sit the exact same 50-position pilot set the LLMs are
-scored on, blind, producing a directly comparable **BenchPR**. Everything is
-inlined (all 50 board SVGs, CSS, JS, and the rollout answer key as a JSON blob) —
-zero network requests — so the file can be emailed and opened locally.
+scored on, producing a directly comparable **BenchPR**. Everything is inlined
+(CSS, JS, and the rollout answer key as a JSON blob) — zero network requests — so
+the file can be emailed and opened locally. There are **no pre-baked SVGs**: a
+single runtime JS board engine (a faithful port of `render/svg.py`) draws every
+position from structured data and re-renders after each click.
 
 ```bash
 # Generate site/public/human-benchmark-pilot.html (stdlib only):
@@ -21,9 +23,27 @@ python3 scripts/build_human_benchmark.py
 #   --timestamp "..."   fixed ISO manifest timestamp (default: now, UTC)
 ```
 
+### Run modes
+
+The intro screen offers two modes (persisted in the saved state and recorded in
+the exported results JSON as a top-level `mode` field):
+
+- **Practice — feedback after each answer** (default). After every submission the
+  quiz shows a feedback panel *before advancing*: whether the answer was best, the
+  engine's best play/action, the panelist's equity loss in millipoints, the rank
+  of their choice among the rollout's listed moves/actions, and — for checker
+  decisions — the board redrawn with the best play applied. A **Next position**
+  button advances. Good for learning.
+- **Blind panel run — results only at the end**. The original protocol: no engine
+  ground truth is shown until all 50 positions are done. Use this for a clean
+  benchmark run. (The mode is locked once a run has any answers; "Start over"
+  clears it.)
+
+Both modes end on the same results screen and export the same results JSON shape.
+
 ### What the panelist sees
 
-- An intro screen (instructions + a name/identifier field + a blind-test notice).
+- An intro screen (instructions + a run-mode chooser + a name/identifier field).
 - One position at a time with a `Position N / 50` progress bar, deterministic
   order (sorted by `position_id`). Every diagram is shown from the on-roll
   player's perspective — **the panelist always plays the White checkers**
@@ -39,16 +59,26 @@ python3 scripts/build_human_benchmark.py
   "Black". Shown: the board SVG, dice (checker decisions only — cube records
   carry no dice), cube value/owner, money-vs-match + score, and pip counts. Tier,
   phase, expected-loss and other difficulty/answer hints are **not** shown.
-- Checker decisions take a free-text move in standard notation (a JS port of
-  `bgcore/notation.py` normalises it — reordered plays, `*` hits, `(n)` repeats,
-  `bar/`/`/off`). A move that reaches the same position spelled differently (e.g.
-  naming a single checker's intermediate point, `13/10/9` for `13/9`) also matches
-  via a pre-computed endpoint map (mirrors `bgcore.moves.moves_equivalent`).
-  Unrecognised input warns once, then may be submitted anyway.
+- Checker decisions are composed by **clicking checkers** on the live board: the
+  engine (a JS port of `bgcore/moves.py`'s single-die hop rules) highlights legal
+  destinations and only enables **Submit play** once the composed sequence reaches
+  a legal full-move signature enumerated at build time (`Undo` / `Reset`
+  available). A collapsed secondary **"Prefer to type the move?"** panel still
+  accepts free-text notation (JS port of `bgcore/notation.py` — reordered plays,
+  `*` hits, `(n)` repeats, `bar/`/`/off`) with live legality validation; a move
+  that reaches the same position spelled differently (e.g. a single checker's
+  intermediate point, `10/4/3` for `10/3`) matches via a pre-computed endpoint map
+  and resulting-position fallback (mirrors `bgcore.moves.moves_equivalent`).
+  Unrecognised typed input warns once, then may be submitted anyway.
 - Cube decisions are buttons for exactly the actions the record poses
   (`No double` / `Double, Take` / `Double, Pass`).
-- No going back; answers persist to `localStorage` (keyed by `position_id`), so a
-  tab close doesn't lose progress.
+- No going back; answers persist to `localStorage`, so a tab close doesn't lose
+  progress. The saved state is **version-stamped**: on a schema mismatch (older
+  quiz build) or corrupt storage the page offers a clean "start fresh" instead of
+  crashing or mixing schemas. Boot is wrapped in an error boundary that surfaces a
+  readable error box rather than a blank page, and double-clicking a submit never
+  double-records or double-advances. Reloading mid-quiz resumes at the right
+  question in both modes.
 - A results screen reveals ground truth **only at the end**: total BenchPR, mean
   equity loss, best-move accuracy, per-tier (T1–T4) and per-decision-type
   breakdowns, a per-position review (answer vs. best move + equity loss), and a
@@ -69,7 +99,8 @@ answer reads the chosen action's `error_mp` directly.
 2. **Send** `site/public/human-benchmark-pilot.html` to panelists (email/attach).
 3. Each panelist completes it and clicks **Download results JSON**
    (`human-panel_<name>_text.json`, shaped like `tests/fixtures/human-panel_text.json`:
-   `kind: "human"`, `model: "human-panel/<name>"`, `track: "text"`).
+   `kind: "human"`, `model: "human-panel/<name>"`, `track: "text"`, plus an
+   additive `mode: "practice" | "blind"` recording how the run was taken).
 4. **Collect** the returned JSONs and drop them into `results/`. They are picked
    up by `build.py` as measured human-panel baselines (`kind: "human"`) —
    excluded from the ranked model list, badged `human`, and plotted as the
