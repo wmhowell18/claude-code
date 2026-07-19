@@ -1,25 +1,34 @@
 #!/usr/bin/env python3
 """Build a single self-contained human-benchmark quiz HTML for the pilot set.
 
-Reads the 50 pilot position records (``positions/pilot/bg-*.json``), their GNU BG
-rollouts (``rollouts/gnubg/bg-*.json``) and committed board SVGs
-(``render/images/pilot/bg-*.svg``) and emits ONE fully self-contained HTML file at
+Reads the 50 pilot position records (``positions/pilot/bg-*.json``) and their GNU
+BG rollouts (``rollouts/gnubg/bg-*.json``), re-renders each board SVG in the
+mover frame (``render/svg.py``) and emits ONE fully self-contained HTML file at
 ``site/public/human-benchmark-pilot.html`` — every SVG embedded, all CSS/JS inline,
 zero network requests — so it can be emailed to panelists and opened locally.
 
 The page presents each position blind (no engine ground truth until the end),
 one at a time, from the on-roll player's perspective (always ``X`` / the light
-checkers — the board_json is stored mover-relative, see ``bgcore/board.py``), and
-scores answers exactly like ``harness/scoring.py``:
+checkers). Records are stored so that positive ("x") checkers are the mover ONLY
+when ``turn == "x"``; a ``turn == "o"`` record is the color-flipped opponent's
+view (``bgcore.board.flip``), so it is flipped back to mover-relative before the
+SVG is rendered and the pip/score/cube-owner fields are read — otherwise the
+diagram would show the wrong side on roll and every answer would score as worst.
+
+Answers are scored like ``harness/scoring.py``:
 
 * ``BenchPR = 500 * mean(equity_loss)``; ``equity_loss = error_mp / 1000``.
 * Checker: normalise the typed move (JS port of ``bgcore/notation.py``) and match
-  it against the rollout move list; unmatched / unparseable answers score the
-  worst listed move (PLAN §4.6). ``is_best`` iff the matched move has zero error.
+  it against the rollout move list, first by canonical notation and then — for a
+  play that reaches the same position spelled differently — by the pre-computed
+  endpoint map (mirrors ``bgcore.moves.moves_equivalent``). Unmatched / unparseable
+  answers score the worst listed move (PLAN §4.6). ``is_best`` iff the matched
+  move has zero error.
 * Cube: the record poses exactly {No double, Double-Take, Double-Pass}; the chosen
   action's ``error_mp`` is the loss.
 
-Stdlib only. Run ``python3 scripts/build_human_benchmark.py`` from the repo root.
+Stdlib only (imports the repo's ``bgcore`` / ``render`` packages at build time).
+Run ``python3 scripts/build_human_benchmark.py`` from the repo root.
 """
 
 from __future__ import annotations
@@ -40,6 +49,9 @@ if REPO_ROOT not in sys.path:
 # Authoritative move-notation canonicaliser (used to pre-canonicalise the
 # rollout move strings at build time; the browser ports the same logic to JS).
 from bgcore import notation  # noqa: E402
+from bgcore import moves as bgmoves  # noqa: E402
+from bgcore.board import Board, flip, pip_counts  # noqa: E402
+import render.svg as svgrender  # noqa: E402
 
 POS_DIR = os.path.join(REPO_ROOT, "positions", "pilot")
 ROLL_DIR = os.path.join(REPO_ROOT, "rollouts", "gnubg")
@@ -54,6 +66,72 @@ def _canonical(move: str) -> str:
         return notation.format_move(notation.parse_move(move))
     except notation.NotationError:
         return move.strip()
+
+
+def _mover_board(board_json: dict) -> Board:
+    """Return the board in the *on-roll player's* mover-relative frame.
+
+    Position records are stored so that positive checkers ("x") are the mover
+    ONLY when ``turn == "x"``; a ``turn == "o"`` record is the color-flipped
+    (opponent's-view) form produced by :func:`bgcore.board.flip`, so the actual
+    player on roll is the negative ("o") checkers. The rollout move list and the
+    quiz's "you are X, on roll" framing are both in the mover frame, so we flip
+    ``turn == "o"`` records back to mover-relative before rendering / scoring.
+    """
+    b = Board.from_json(board_json)
+    if b.turn == "o":
+        b = flip(b)
+    return b
+
+
+def _endpoint_key(cnt) -> str:
+    """Stable key for an endpoint (start,end) multiset — must match the JS port."""
+    def s(x):
+        return "bar" if x == "bar" else ("off" if x == "off" else str(int(x)))
+    items = sorted(s(a) + ">" + s(b) for (a, b), n in cnt.items() for _ in range(n))
+    return ",".join(items)
+
+
+def _checker_epmap(mover: Board, rollout_moves: list[dict], worst_mp: float) -> dict:
+    """Map endpoint-multiset key -> resolved score, for position-equivalent matching.
+
+    Mirrors ``harness.scoring.score_checker`` / ``bgcore.moves.moves_equivalent``:
+    two move strings score the same iff they reach the same resulting position.
+    A human may spell a single checker's two-die play with or without its
+    intermediate point ("13/9" vs "13/10/9"); both denote the same legal move.
+    We enumerate the legal moves once (authoritative engine), attach each
+    rollout error to the legal move it resolves to, and key by the (start,end)
+    endpoint multiset — exactly what the engine uses to identify a play. Endpoint
+    keys shared by two distinct legal moves (a rare hit-vs-non-hit ambiguity) are
+    omitted so the fallback can never mis-score; those fall through to the direct
+    string match / worst-legal penalty, matching prior behaviour.
+    """
+    legal = bgmoves.generate_moves(mover)
+    sig_err: dict = {}
+    for m in rollout_moves:
+        mv = m.get("move")
+        if not mv:
+            continue
+        try:
+            lm = bgmoves._match(mover, mv)
+        except Exception:  # noqa: BLE001
+            lm = None
+        if lm not in (None, "cannot-move"):
+            sig_err[lm.signature()] = (abs(float(m.get("error_mp", 0.0))), mv)
+    groups: dict = {}
+    for lm in legal:
+        groups.setdefault(_endpoint_key(lm.endpoint_multiset), []).append(lm)
+    epmap: dict = {}
+    for key, lms in groups.items():
+        if len({lm.signature() for lm in lms}) != 1:
+            continue  # ambiguous endpoint key -> omit (safe)
+        lm = lms[0]
+        if lm.signature() in sig_err:
+            err, disp = sig_err[lm.signature()]
+        else:
+            err, disp = worst_mp, lm.notation  # legal but absent from rollout list
+        epmap[key] = {"error_mp": err, "is_best": err <= 1e-6, "move": disp}
+    return epmap
 
 
 def load_positions() -> list[dict]:
@@ -73,9 +151,13 @@ def build_data(records: list[dict]) -> list[dict]:
         bj = rec["board_json"]
         with open(os.path.join(ROLL_DIR, pid + ".json"), encoding="utf-8") as fh:
             roll = json.load(fh)
-        svg_path = os.path.join(REPO_ROOT, rec["image_svg"])
-        with open(svg_path, encoding="utf-8") as fh:
-            svg = fh.read().strip()
+
+        # Normalise to the on-roll player's frame (flip stored turn="o" records)
+        # so the rendered board, the displayed pips/score/cube and the rollout
+        # move list are all consistent with the quiz's "you are X, on roll".
+        mover = _mover_board(bj)
+        svg = svgrender.render(mover).strip()
+        pip_x, pip_o = pip_counts(mover)
 
         entry: dict = {
             "position_id": pid,
@@ -83,17 +165,17 @@ def build_data(records: list[dict]) -> list[dict]:
             "tier": rec["tier"],
             "play_mode": rec["play_mode"],
             "score": {
-                "x": bj["score"].get("x", 0),
-                "o": bj["score"].get("o", 0),
-                "length": bj["score"].get("length", 0),
-                "crawford": bool(bj["score"].get("crawford", False)),
+                "x": int(mover.score.get("x", 0)),
+                "o": int(mover.score.get("o", 0)),
+                "length": int(mover.score.get("length", 0)),
+                "crawford": bool(mover.score.get("crawford", False)),
             },
             "cube": {
-                "value": bj["cube"].get("value", 1),
-                "owner": bj["cube"].get("owner", "center"),
+                "value": int(mover.cube.get("value", 1)),
+                "owner": mover.cube.get("owner", "center"),
             },
-            "dice": list(bj.get("dice") or []),
-            "pip": {"x": bj["pip"]["x"], "o": bj["pip"]["o"]},
+            "dice": [int(d) for d in mover.dice],
+            "pip": {"x": pip_x, "o": pip_o},
             "svg": svg,
         }
 
@@ -112,6 +194,7 @@ def build_data(records: list[dict]) -> list[dict]:
             entry["worst_error_mp"] = max(
                 (mm["error_mp"] for mm in entry["moves"]), default=0.0
             )
+            entry["epmap"] = _checker_epmap(mover, moves, entry["worst_error_mp"])
         else:  # cube
             cube = roll.get("cube") or {}
             errmap = {k: abs(float(v)) for k, v in (cube.get("error_mp") or {}).items()}
@@ -389,6 +472,36 @@ function canonicalizeMove(s){
   catch(e){ return null; }
 }
 
+/* endpoint (start,end) multiset key of a parsed move — mirrors the engine's
+   move identity (bgcore.moves): a play is identified by which checkers go from
+   where to where, so intermediate points / die order do not matter. Must match
+   the Python _endpoint_key used to build pos.epmap. */
+function endpointKey(tokens){
+  var parts = [];
+  for(var i = 0; i < tokens.length; i++){
+    var ch = tokens[i].chain;
+    var a = ch[0], b = ch[ch.length - 1];
+    var sa = (a === "bar") ? "bar" : (a === "off" ? "off" : String(a));
+    var sb = (b === "bar") ? "bar" : (b === "off" ? "off" : String(b));
+    parts.push(sa + ">" + sb);
+  }
+  parts.sort();
+  return parts.join(",");
+}
+
+/* True iff a typed checker move resolves to any listed / position-equivalent move. */
+function checkerMatches(pos, answer){
+  var canon = canonicalizeMove(answer);
+  if(canon === null) return false;
+  for(var i = 0; i < pos.moves.length; i++){ if(pos.moves[i].canonical === canon) return true; }
+  if(pos.epmap){
+    var tokens = null;
+    try { tokens = parseMove(answer); } catch(e){ tokens = null; }
+    if(tokens && pos.epmap[endpointKey(tokens)]) return true;
+  }
+  return false;
+}
+
 /* ---- scoring (mirror of harness/scoring.py) ---- */
 var MP_PER_POINT = 1000.0;
 var BENCHPR_CONSTANT = 500.0;
@@ -401,6 +514,7 @@ function scoreChecker(pos, answer){
     return { chosen: answer, matched: null, equity_loss: pos.worst_error_mp / MP_PER_POINT,
              is_best: false, parse_failed: true };
   }
+  /* 1) direct match against the (canonicalised) rollout move list */
   for(var i = 0; i < pos.moves.length; i++){
     var mv = pos.moves[i];
     if(mv.canonical === canon){
@@ -410,7 +524,22 @@ function scoreChecker(pos, answer){
                is_best: isBest, parse_failed: false };
     }
   }
-  /* legal-looking but not among the stored moves -> worst-legal penalty */
+  /* 2) position-equivalent match: same resulting position, spelled differently
+     (e.g. intermediate point named, or a legal die reordering). Mirrors
+     bgcore.moves.moves_equivalent via the pre-computed endpoint map. */
+  if(pos.epmap){
+    var tokens = null;
+    try { tokens = parseMove(answer); } catch(e){ tokens = null; }
+    if(tokens){
+      var hit = pos.epmap[endpointKey(tokens)];
+      if(hit){
+        return { chosen: hit.move, matched: hit.move,
+                 equity_loss: hit.is_best ? 0.0 : hit.error_mp / MP_PER_POINT,
+                 is_best: !!hit.is_best, parse_failed: false };
+      }
+    }
+  }
+  /* 3) legal-looking but not a listed / reproducible move -> worst-legal penalty */
   return { chosen: canon, matched: null, equity_loss: pos.worst_error_mp / MP_PER_POINT,
            is_best: false, parse_failed: true };
 }
@@ -562,8 +691,7 @@ function screenPosition(idx){
     function doScore(force){
       var val = input.value.trim();
       if(!val){ input.focus(); return; }
-      var canon = canonicalizeMove(val);
-      var matches = canon !== null && pos.moves.some(function(m){ return m.canonical === canon; });
+      var matches = checkerMatches(pos, val);
       if(!matches && !force){
         warnBox.style.display = "block";
         warnBox.textContent = "“" + val + "” is not recognised as a legal/listed move — check your notation, or submit anyway (it will be scored as your worst option).";
