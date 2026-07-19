@@ -74,25 +74,68 @@ def test_html_is_wellformed_document(fixture_html):
 
 def test_leaderboard_table_row_count(fixture_html):
     # 2 synthetic models + 1 human-panel baseline = 3 rows in the table body.
+    # (The human row carries a class, so match the opening tag, not "<tr>".)
     body = fixture_html.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
-    assert body.count("<tr>") == 3
+    assert body.count("<tr") == 3
 
 
 def test_benchpr_explanation_and_northstar_text(fixture_html):
     assert "BenchPR" in fixture_html
-    assert "Lower is better" in fixture_html
+    assert "lower is better" in fixture_html.lower()
     assert "world-class" in fixture_html
 
 
 def test_synthetic_banner_present(fixture_html):
-    assert "SYNTHETIC PREVIEW" in fixture_html
+    assert "Synthetic preview" in fixture_html
+
+
+# -- GammonBench branding + hero/tiles --------------------------------------
+
+
+def test_gammonbench_branding_present(fixture_html):
+    assert "GammonBench" in fixture_html
+    assert "<title>GammonBench" in fixture_html
+    assert 'class="wordmark"' in fixture_html
+
+
+def test_hero_and_metadata_chips(fixture_html):
+    # one-line description + dataset/prompt metadata chips
+    assert "How well do LLMs play backgammon?" in fixture_html
+    assert "GNU Backgammon" in fixture_html
+    assert 'class="chip"' in fixture_html
+    assert "positions" in fixture_html
+
+
+def test_stat_tiles_present(fixture_html):
+    assert 'class="tiles"' in fixture_html
+    assert 'class="tile' in fixture_html
+    assert "Leader" in fixture_html  # leader tile label
+    assert "Human panel" in fixture_html  # human-baseline tile
+
+
+def test_methodology_links_present(fixture_html):
+    for doc in ("SCORING.md", "DATASET.md", "HARNESS.md"):
+        assert doc in fixture_html
+
+
+def test_theme_tokens_and_dark_mode(fixture_html):
+    assert "prefers-color-scheme: dark" in fixture_html
+    assert '[data-theme="dark"]' in fixture_html
+    assert "--text-track" in fixture_html  # token-level custom properties
 
 
 # -- charts (inline SVG) ----------------------------------------------------
 
 
-def test_all_three_charts_render(fixture_html):
-    assert fixture_html.count("<svg") >= 3  # scatter + tier bars + dumbbell
+def test_all_charts_render(fixture_html):
+    # scatter + tier bars + checker/cube + dumbbell
+    assert fixture_html.count("<svg") >= 4
+
+
+def test_decision_type_chart_present(fixture_html):
+    assert 'class="dtype-bar"' in fixture_html
+    assert 'data-dtype="checker"' in fixture_html
+    assert 'data-dtype="cube"' in fixture_html
 
 
 def test_scatter_reference_lines_present(fixture_html):
@@ -155,6 +198,14 @@ def test_leaderboard_json_track_and_cost_fields(fixture_board):
     assert a["benchpr_ci"] == [2.80, 3.45]
     assert a["cost_usd"] is not None and a["cost_usd"] > 0
     assert a["cost_per_position"] is not None
+
+
+def test_leaderboard_json_new_metric_fields(fixture_board):
+    a = fixture_board["leaderboard"][0]
+    assert a["mean_equity_loss"] == 0.0062
+    assert a["benchpr_checker"] == 2.90
+    assert a["benchpr_cube"] == 3.55
+    assert a["tokens"] is not None and a["tokens"] > 0
 
 
 def test_humans_separated_from_models(fixture_board):

@@ -1,8 +1,9 @@
-"""Static leaderboard build: results/*.json -> static HTML (PLAN.md §6).
+"""GammonBench static leaderboard build: results/*.json -> static HTML (PLAN.md §6).
 
 One-way data flow (results JSON -> build -> static HTML, no backend). Renders the
-leaderboard table, skill-vs-cost scatter with human north-star lines (PR 2/4/8),
-per-tier bars, text-vs-image comparison, and the fixed-budget track section.
+hero/stat tiles, ranked leaderboard table, skill-vs-cost scatter with human
+north-star lines (PR 2/4/8), per-tier bars, checker-vs-cube and text-vs-image
+comparisons, and the fixed-budget track section.
 Charts are deterministic, server-side inline SVG computed in pure Python. The
 page is fully self-contained: inline CSS + inline JS + inline SVG, no external
 CDNs, fonts, or network requests.
@@ -131,6 +132,56 @@ def _is_human(run):
     return run.get("kind") == "human"
 
 
+def _mean_equity_loss(run):
+    return _num(_agg(run).get("mean_equity_loss"))
+
+
+def _tokens(run):
+    """Aggregate token count. Prefer an aggregate ``tokens`` field; else sum the
+    per-decision usage (tolerated optional fields, schema §decisions.usage)."""
+    a = _agg(run)
+    for key in ("tokens", "total_tokens"):
+        v = _num(a.get(key))
+        if v is not None:
+            return v
+    decisions = run.get("decisions")
+    if isinstance(decisions, list):
+        total = 0.0
+        seen = False
+        for d in decisions:
+            usage = (d or {}).get("usage") or {}
+            for key in ("prompt_tokens", "completion_tokens", "reasoning_tokens"):
+                n = _num(usage.get(key))
+                if n is not None:
+                    total += n
+                    seen = True
+        if seen:
+            return total
+    return None
+
+
+def _pdt_benchpr(run, kind):
+    """BenchPR for a decision type (``checker`` / ``cube``) if present."""
+    pdt = _agg(run).get("per_decision_type") or {}
+    return _num((pdt.get(kind) or {}).get("benchpr"))
+
+
+def _dataset_positions(run):
+    """Number of scored positions, preferring the per-tier roll-up totals (the
+    full scored set) over a possibly-truncated ``decisions`` list."""
+    per_tier = _agg(run).get("per_tier") or {}
+    total = 0
+    seen = False
+    for stats in per_tier.values():
+        n = _num((stats or {}).get("n"))
+        if n is not None:
+            total += int(n)
+            seen = True
+    if seen:
+        return total
+    return _n_positions(run)
+
+
 def build_models(latest):
     """Group latest (model, track) runs into per-model entries.
 
@@ -168,11 +219,17 @@ def build_models(latest):
         image_run = tracks.get("image")
         cost_total = 0.0
         have_cost = False
+        tokens_total = 0.0
+        have_tokens = False
         for run in tracks.values():
             c = _cost(run)
             if c is not None:
                 cost_total += c
                 have_cost = True
+            tk = _tokens(run)
+            if tk is not None:
+                tokens_total += tk
+                have_tokens = True
         npos = _n_positions(primary) if primary else None
         cost_per_pos = (cost_total / npos) if (have_cost and npos) else None
 
@@ -185,8 +242,12 @@ def build_models(latest):
                 "benchpr_text": _benchpr(text_run) if text_run else None,
                 "benchpr_image": _benchpr(image_run) if image_run else None,
                 "best_move_accuracy": _num(_agg(primary).get("best_move_accuracy")) if primary else None,
+                "mean_equity_loss": _mean_equity_loss(primary) if primary else None,
+                "benchpr_checker": _pdt_benchpr(primary, "checker") if primary else None,
+                "benchpr_cube": _pdt_benchpr(primary, "cube") if primary else None,
                 "cost_usd": cost_total if have_cost else None,
                 "cost_per_position": cost_per_pos,
+                "tokens": tokens_total if have_tokens else None,
                 "benchpr_at_budget": _num(_agg(primary).get("benchpr_at_budget")) if primary else None,
                 "per_tier": (_agg(primary).get("per_tier") or {}) if primary else {},
                 "n_positions": npos,
@@ -243,12 +304,18 @@ def site_meta(results):
         return {}
     latest = max(results, key=_ts)
     m = latest.get("manifest") or {}
+    positions = None
+    for run in results:
+        p = _dataset_positions(run)
+        if p:
+            positions = max(positions or 0, p)
     return {
         "dataset_hash": m.get("dataset_hash"),
         "prompt_version": m.get("prompt_version"),
         "ascii_render_version": m.get("ascii_render_version"),
         "image_render_version": m.get("image_render_version"),
         "latest_run_timestamp": m.get("timestamp"),
+        "positions": positions,
     }
 
 
@@ -279,6 +346,32 @@ def fmt_usd_small(v):
     if v is None:
         return "—"
     return f"${v:.4f}"
+
+
+def fmt_tokens(v):
+    """Compact token count: 1,284 / 12.9K / 4.2M."""
+    if v is None:
+        return "—"
+    v = float(v)
+    if v >= 1_000_000:
+        return f"{v / 1_000_000:.1f}M"
+    if v >= 10_000:
+        return f"{v / 1_000:.0f}K"
+    if v >= 1_000:
+        return f"{v / 1_000:.1f}K"
+    return f"{int(round(v)):,}"
+
+
+def fmt_eq(v):
+    if v is None:
+        return "—"
+    return f"{v:.4f}"
+
+
+def fmt_int(v):
+    if v is None:
+        return "—"
+    return f"{int(round(v)):,}"
 
 
 # ==========================================================================
@@ -332,8 +425,8 @@ def scatter_svg(points, humans):
                   diamond markers (measured human-panel baselines, PLAN.md §4.5).
     Horizontal reference lines are drawn at PR 2 / 4 / 8.
     """
-    W, H = 720, 420
-    ML, MR, MT, MB = 60, 150, 24, 52
+    W, H = 940, 460
+    ML, MR, MT, MB = 54, 140, 20, 56
     pw, ph = W - ML - MR, H - MT - MB
 
     all_pr = [p["benchpr"] for p in points if p.get("benchpr") is not None]
@@ -361,41 +454,44 @@ def scatter_svg(points, humans):
         return MT + (pr / max_pr) * ph  # lower PR -> higher on screen (top)
 
     s = [_svg_open(W, H)]
-    s.append(f'<text x="{ML}" y="16" class="muted">Skill vs. cost — lower BenchPR is better</text>')
 
+    # y grid + ticks (BenchPR)
     for t in _y_ticks(max_pr):
         y = y_of(t)
-        s.append(f'<line class="grid" x1="{ML}" y1="{y:.1f}" x2="{ML + pw}" y2="{y:.1f}" />')
+        s.append(f'<line class="grid" x1="{ML}" y1="{y:.1f}" x2="{ML + pw}" y2="{y:.1f}" stroke-width="1" />')
         s.append(f'<text x="{ML - 8}" y="{y + 4:.1f}" text-anchor="end" class="muted">{_fmt_num(t)}</text>')
     s.append(
-        f'<text x="16" y="{MT + ph / 2:.0f}" transform="rotate(-90 16 {MT + ph / 2:.0f})" '
-        f'text-anchor="middle" class="muted">BenchPR</text>'
+        f'<text x="14" y="{MT + ph / 2:.0f}" transform="rotate(-90 14 {MT + ph / 2:.0f})" '
+        f'text-anchor="middle" class="lbl">BenchPR (lower is better)</text>'
     )
 
+    # x grid + ticks (log cost)
     e = lo_e
     while e <= hi_e:
         x = x_of(10 ** e)
-        s.append(f'<line class="grid" x1="{x:.1f}" y1="{MT}" x2="{x:.1f}" y2="{MT + ph}" />')
+        s.append(f'<line class="grid" x1="{x:.1f}" y1="{MT}" x2="{x:.1f}" y2="{MT + ph}" stroke-width="1" />')
         label = f"${_fmt_num(10 ** e)}" if e >= 0 else f"${10 ** e:g}"
-        s.append(f'<text x="{x:.1f}" y="{MT + ph + 16}" text-anchor="middle" class="muted">{label}</text>')
+        s.append(f'<text x="{x:.1f}" y="{MT + ph + 18}" text-anchor="middle" class="muted">{label}</text>')
         e += 1
     s.append(
-        f'<text x="{ML + pw / 2:.0f}" y="{H - 6}" text-anchor="middle" class="muted">'
-        "Total cost (USD, log scale)</text>"
+        f'<text x="{ML + pw / 2:.0f}" y="{H - 8}" text-anchor="middle" class="lbl">'
+        "Total cost per run (USD, log scale)</text>"
     )
 
-    s.append(f'<line class="axis" x1="{ML}" y1="{MT}" x2="{ML}" y2="{MT + ph}" />')
-    s.append(f'<line class="axis" x1="{ML}" y1="{MT + ph}" x2="{ML + pw}" y2="{MT + ph}" />')
+    s.append(f'<line class="axis" x1="{ML}" y1="{MT}" x2="{ML}" y2="{MT + ph}" stroke-width="1" />')
+    s.append(f'<line class="axis" x1="{ML}" y1="{MT + ph}" x2="{ML + pw}" y2="{MT + ph}" stroke-width="1" />')
 
+    # human north-star reference lines (annotation, not data)
     for pr, label in REF_LINES:
         y = y_of(pr)
         s.append(
             f'<line class="refline" data-pr="{_fmt_num(pr)}" x1="{ML}" y1="{y:.1f}" '
             f'x2="{ML + pw}" y2="{y:.1f}" stroke="var(--ref)" stroke-width="1" '
-            f'stroke-dasharray="5 4" />'
+            f'stroke-dasharray="4 4" />'
         )
-        s.append(f'<text x="{ML + pw + 6}" y="{y + 4:.1f}" fill="var(--ref)">{esc(label)}</text>')
+        s.append(f'<text x="{ML + pw + 8}" y="{y + 4:.1f}" class="lbl" font-size="11">{esc(label)}</text>')
 
+    # model/track points with a surface ring + direct label
     for p in points:
         pr = p.get("benchpr")
         if pr is None:
@@ -404,48 +500,50 @@ def scatter_svg(points, humans):
         color = "var(--image-track)" if p.get("track") == "image" else "var(--text-track)"
         s.append(
             f'<circle class="pt" data-track="{esc(p.get("track"))}" cx="{x:.1f}" cy="{y:.1f}" '
-            f'r="5" fill="{color}" fill-opacity="0.85" stroke="var(--bg)" stroke-width="1" />'
+            f'r="6" fill="{color}" stroke="var(--surface)" stroke-width="2" />'
+        )
+        s.append(
+            f'<text x="{x + 9:.1f}" y="{y + 4:.1f}" class="lbl" font-size="11">{esc(p.get("label"))}</text>'
         )
 
+    # measured human panel — distinct diamond marker
     for h in humans:
         pr = h.get("benchpr")
         if pr is None:
             continue
         x, y = x_of(h.get("cost")), y_of(pr)
-        d = 6
+        d = 7
         s.append(
             f'<polygon class="human-marker" points="{x:.1f},{y - d:.1f} {x + d:.1f},{y:.1f} '
             f'{x:.1f},{y + d:.1f} {x - d:.1f},{y:.1f}" fill="var(--human)" '
-            f'stroke="var(--bg)" stroke-width="1" />'
+            f'stroke="var(--surface)" stroke-width="2" />'
         )
-        s.append(f'<text x="{x + d + 3:.1f}" y="{y + 4:.1f}" fill="var(--human)">{esc(h.get("label"))}</text>')
-
-    lx, ly = ML + pw + 6, MT + 20
-    legend = [("var(--text-track)", "circle", "text track"), ("var(--image-track)", "circle", "image track")]
-    if humans:
-        legend.append(("var(--human)", "diamond", "human panel"))
-    for i, (color, shape, label) in enumerate(legend):
-        yy = ly + i * 18
-        if shape == "diamond":
-            s.append(f'<polygon points="{lx + 5},{yy - 5} {lx + 10},{yy} {lx + 5},{yy + 5} {lx},{yy} " fill="{color}" />')
-        else:
-            s.append(f'<circle cx="{lx + 5}" cy="{yy}" r="5" fill="{color}" />')
-        s.append(f'<text x="{lx + 16}" y="{yy + 4}" class="muted">{esc(label)}</text>')
+        s.append(
+            f'<text x="{x + d + 5:.1f}" y="{y + 4:.1f}" fill="var(--human)" font-size="11" '
+            f'font-weight="600">{esc(h.get("label"))}</text>'
+        )
 
     s.append("</svg>")
     return "".join(s)
 
 
+TIER_VARS = {"T1": "var(--tier-1)", "T2": "var(--tier-2)", "T3": "var(--tier-3)", "T4": "var(--tier-4)"}
+
+
 def tier_bars_svg(models):
-    """Grouped BenchPR bars by tier T1–T4, one group per model (PLAN.md §6)."""
+    """Grouped BenchPR bars by tier T1–T4, one group per model (PLAN.md §6).
+
+    Tiers use a single-hue ordinal ramp (light T1 → dark T4) — difficulty is an
+    ordered magnitude, not an identity, so a rainbow would misencode it.
+    """
     ranked = [m for m in models if m.get("per_tier")]
     if not ranked:
         return '<p class="sub">No per-tier data in the current results.</p>'
 
-    ML, MR, MT, MB = 46, 16, 28, 64
-    group_w = 108
-    W = max(720, ML + MR + group_w * len(ranked))
-    H = 320
+    ML, MR, MT, MB = 44, 16, 16, 70
+    group_w = 116
+    W = max(960, ML + MR + group_w * len(ranked))
+    H = 330
     pw = W - ML - MR
     ph = H - MT - MB
 
@@ -457,48 +555,112 @@ def tier_bars_svg(models):
                 values.append(v)
     max_pr = _nice_ceiling(max(values) if values else 10.0)
 
-    tier_colors = {"T1": "#22c55e", "T2": "#3b82f6", "T3": "#f59e0b", "T4": "#ef4444"}
-
     s = [_svg_open(W, H)]
-    s.append(f'<text x="{ML}" y="16" class="muted">BenchPR by difficulty tier (lower is better)</text>')
 
     def y_of(pr):
         return MT + ph - (pr / max_pr) * ph
 
     for t in _y_ticks(max_pr):
         y = y_of(t)
-        s.append(f'<line class="grid" x1="{ML}" y1="{y:.1f}" x2="{W - MR}" y2="{y:.1f}" />')
+        s.append(f'<line class="grid" x1="{ML}" y1="{y:.1f}" x2="{W - MR}" y2="{y:.1f}" stroke-width="1" />')
         s.append(f'<text x="{ML - 6}" y="{y + 4:.1f}" text-anchor="end" class="muted">{_fmt_num(t)}</text>')
 
-    s.append(f'<line class="axis" x1="{ML}" y1="{MT + ph}" x2="{W - MR}" y2="{MT + ph}" />')
+    s.append(f'<line class="axis" x1="{ML}" y1="{MT + ph}" x2="{W - MR}" y2="{MT + ph}" stroke-width="1" />')
 
     gw = pw / len(ranked)
-    bar_area = gw * 0.7
-    bw = bar_area / len(TIERS)
+    bar_area = min(gw * 0.74, 22 * len(TIERS) + 2 * (len(TIERS) - 1))
+    slot = bar_area / len(TIERS)
+    bw = min(slot - 2, 22)
     for gi, m in enumerate(ranked):
         gx = ML + gi * gw + (gw - bar_area) / 2
         for ti, t in enumerate(TIERS):
             v = _num((m["per_tier"].get(t) or {}).get("benchpr"))
-            x = gx + ti * bw
+            x = gx + ti * slot
             if v is None:
                 continue
             bh = (v / max_pr) * ph
             y = MT + ph - bh
             s.append(
                 f'<rect class="tier-bar" data-tier="{t}" x="{x:.1f}" y="{y:.1f}" '
-                f'width="{bw - 2:.1f}" height="{bh:.1f}" fill="{tier_colors[t]}" />'
+                f'width="{bw:.1f}" height="{bh:.1f}" rx="3" fill="{TIER_VARS[t]}" />'
             )
         label = m["model"].split("/")[-1]
         cx = ML + gi * gw + gw / 2
         s.append(
-            f'<text x="{cx:.0f}" y="{MT + ph + 16}" text-anchor="end" class="muted" '
-            f'transform="rotate(-25 {cx:.0f} {MT + ph + 16})">{esc(label)}</text>'
+            f'<text x="{cx:.0f}" y="{MT + ph + 18}" text-anchor="middle" class="lbl" '
+            f'font-size="11">{esc(label[:22])}</text>'
         )
 
+    # tier ramp legend, low → high difficulty
+    lx = ML
     for ti, t in enumerate(TIERS):
-        x = ML + ti * 70
-        s.append(f'<rect x="{x}" y="{H - 20}" width="11" height="11" fill="{tier_colors[t]}" />')
-        s.append(f'<text x="{x + 15}" y="{H - 10}" class="muted">{t}</text>')
+        x = lx + ti * 84
+        s.append(f'<rect x="{x}" y="{H - 16}" width="12" height="12" rx="2" fill="{TIER_VARS[t]}" />')
+        cap = {"T1": "T1 easiest", "T4": "T4 hardest"}.get(t, t)
+        s.append(f'<text x="{x + 16}" y="{H - 6}" class="muted" font-size="11">{cap}</text>')
+
+    s.append("</svg>")
+    return "".join(s)
+
+
+def decision_type_bars_svg(models):
+    """Grouped BenchPR bars, checker vs. cube, one group per model.
+
+    Two categorical hues (aqua = checker, violet = cube), well separated for CVD.
+    """
+    rows = [m for m in models if m.get("benchpr_checker") is not None or m.get("benchpr_cube") is not None]
+    if not rows:
+        return '<p class="sub">No checker/cube split in the current results.</p>'
+
+    ML, MR, MT, MB = 44, 16, 16, 58
+    group_w = 96
+    W = max(900, ML + MR + group_w * len(rows))
+    H = 300
+    pw = W - ML - MR
+    ph = H - MT - MB
+
+    vals = []
+    for m in rows:
+        for k in ("benchpr_checker", "benchpr_cube"):
+            if m.get(k) is not None:
+                vals.append(m[k])
+    max_pr = _nice_ceiling(max(vals) if vals else 10.0)
+
+    s = [_svg_open(W, H)]
+
+    def y_of(pr):
+        return MT + ph - (pr / max_pr) * ph
+
+    for t in _y_ticks(max_pr):
+        y = y_of(t)
+        s.append(f'<line class="grid" x1="{ML}" y1="{y:.1f}" x2="{W - MR}" y2="{y:.1f}" stroke-width="1" />')
+        s.append(f'<text x="{ML - 6}" y="{y + 4:.1f}" text-anchor="end" class="muted">{_fmt_num(t)}</text>')
+    s.append(f'<line class="axis" x1="{ML}" y1="{MT + ph}" x2="{W - MR}" y2="{MT + ph}" stroke-width="1" />')
+
+    kinds = [("benchpr_checker", "checker", "var(--checker)"), ("benchpr_cube", "cube", "var(--cube)")]
+    gw = pw / len(rows)
+    bar_area = min(gw * 0.62, 24 * len(kinds) + 4)
+    slot = bar_area / len(kinds)
+    bw = min(slot - 2, 24)
+    for gi, m in enumerate(rows):
+        gx = ML + gi * gw + (gw - bar_area) / 2
+        for ki, (key, kind, color) in enumerate(kinds):
+            v = m.get(key)
+            x = gx + ki * slot
+            if v is None:
+                continue
+            bh = (v / max_pr) * ph
+            y = MT + ph - bh
+            s.append(
+                f'<rect class="dtype-bar" data-dtype="{kind}" x="{x:.1f}" y="{y:.1f}" '
+                f'width="{bw:.1f}" height="{bh:.1f}" rx="3" fill="{color}" />'
+            )
+        label = m["model"].split("/")[-1]
+        cx = ML + gi * gw + gw / 2
+        s.append(
+            f'<text x="{cx:.0f}" y="{MT + ph + 18}" text-anchor="middle" class="lbl" '
+            f'font-size="11">{esc(label[:22])}</text>'
+        )
 
     s.append("</svg>")
     return "".join(s)
@@ -510,9 +672,9 @@ def dumbbell_svg(models):
     if not rows:
         return '<p class="sub">No text/image comparison data in the current results.</p>'
 
-    W = 720
-    ML, MR, MT, MB = 150, 130, 28, 40
-    row_h = 34
+    W = 960
+    ML, MR, MT, MB = 160, 40, 20, 40
+    row_h = 40
     H = MT + MB + row_h * len(rows)
     pw = W - ML - MR
 
@@ -527,37 +689,31 @@ def dumbbell_svg(models):
         return ML + (pr / max_pr) * pw
 
     s = [_svg_open(W, H)]
-    s.append(f'<text x="{ML}" y="16" class="muted">Text vs. image BenchPR per model (lower is better)</text>')
 
     for t in _y_ticks(max_pr):
         x = x_of(t)
-        s.append(f'<line class="grid" x1="{x:.1f}" y1="{MT}" x2="{x:.1f}" y2="{MT + row_h * len(rows)}" />')
+        s.append(f'<line class="grid" x1="{x:.1f}" y1="{MT}" x2="{x:.1f}" y2="{MT + row_h * len(rows)}" stroke-width="1" />')
         s.append(f'<text x="{x:.1f}" y="{H - 12}" text-anchor="middle" class="muted">{_fmt_num(t)}</text>')
+    s.append(
+        f'<text x="{ML + pw / 2:.0f}" y="{H - 24}" text-anchor="middle" class="lbl" font-size="11">'
+        "BenchPR (lower is better)</text>"
+    )
 
     for i, m in enumerate(rows):
         cy = MT + i * row_h + row_h / 2
         label = m["model"].split("/")[-1]
-        s.append(f'<text x="{ML - 8}" y="{cy + 4:.1f}" text-anchor="end">{esc(label)}</text>')
+        s.append(f'<text x="{ML - 10}" y="{cy + 4:.1f}" text-anchor="end" class="lbl">{esc(label)}</text>')
         tv, iv = m["benchpr_text"], m["benchpr_image"]
         if tv is not None and iv is not None:
             s.append(
                 f'<line x1="{x_of(tv):.1f}" y1="{cy:.1f}" x2="{x_of(iv):.1f}" y2="{cy:.1f}" '
-                f'stroke="var(--border)" stroke-width="2" />'
+                f'stroke="var(--axis)" stroke-width="2" stroke-linecap="round" />'
             )
         if tv is not None:
-            s.append(f'<circle class="dot-text" cx="{x_of(tv):.1f}" cy="{cy:.1f}" r="5.5" fill="var(--text-track)" />')
+            s.append(f'<circle class="dot-text" cx="{x_of(tv):.1f}" cy="{cy:.1f}" r="6" fill="var(--text-track)" stroke="var(--surface)" stroke-width="2" />')
         if iv is not None:
-            s.append(f'<circle class="dot-image" cx="{x_of(iv):.1f}" cy="{cy:.1f}" r="5.5" fill="var(--image-track)" />')
+            s.append(f'<circle class="dot-image" cx="{x_of(iv):.1f}" cy="{cy:.1f}" r="6" fill="var(--image-track)" stroke="var(--surface)" stroke-width="2" />')
 
-    lx = W - MR + 6
-    s.append(
-        f'<circle cx="{lx + 5}" cy="{MT + 8}" r="5" fill="var(--text-track)" />'
-        f'<text x="{lx + 16}" y="{MT + 12}" class="muted">text</text>'
-    )
-    s.append(
-        f'<circle cx="{lx + 5}" cy="{MT + 26}" r="5" fill="var(--image-track)" />'
-        f'<text x="{lx + 16}" y="{MT + 30}" class="muted">image</text>'
-    )
     s.append("</svg>")
     return "".join(s)
 
@@ -573,41 +729,66 @@ def _th(label, key, numeric=True, left=False):
     return f'<th{cls}{ds} data-key="{esc(key)}">{esc(label)}<span class="arrow"></span></th>'
 
 
+def _rank_chip(rank):
+    if not rank:
+        return '<span class="rankchip" title="baseline">—</span>'
+    cls = f" r{rank}" if rank <= 3 else ""
+    return f'<span class="rankchip{cls}">{rank}</span>'
+
+
+def _split_cell(row):
+    ch, cu = row.get("benchpr_checker"), row.get("benchpr_cube")
+    if ch is None and cu is None:
+        return '<td class="dim" data-sort="1e9">—</td>'
+    sort = ch if ch is not None else (cu if cu is not None else 1e9)
+    inner = (
+        '<span class="split">'
+        f'<span class="k"><span class="dot checker"></span>{fmt_pr(ch)}</span>'
+        f'<span class="dim">/</span>'
+        f'<span class="k"><span class="dot cube"></span>{fmt_pr(cu)}</span>'
+        "</span>"
+    )
+    return f'<td data-sort="{sort}">{inner}</td>'
+
+
 def leaderboard_table_html(models, humans):
     heads = [
         _th("#", "rank", left=True),
         _th("Model", "model", numeric=False, left=True),
         _th("BenchPR", "benchpr"),
-        _th("Best-move acc.", "acc"),
-        _th("Text", "text"),
-        _th("Image", "image"),
-        _th("Total cost", "cost"),
-        _th("Cost / pos", "costpos"),
+        _th("Best move", "acc"),
+        _th("Eq. loss", "eqloss"),
+        _th("Checker / cube", "split"),
+        _th("Cost / run", "cost"),
+        _th("Tokens", "tokens"),
     ]
     body = []
     for row in list(models) + list(humans):
         rank = row.get("rank")
-        rank_cell = str(rank) if rank else '<span class="badge">human</span>'
+        is_human = bool(row.get("human"))
         rank_sort = rank if rank else 9999
         b = row["benchpr"]
         ci = row.get("benchpr_ci")
         b_disp = fmt_pr(b)
         if ci:
-            b_disp += f' <span class="muted">[{ci[0]:.2f}–{ci[1]:.2f}]</span>'
-        name = esc(row["model"])
-        if row.get("human"):
+            b_disp += f' <span class="ci">[{ci[0]:.2f}–{ci[1]:.2f}]</span>'
+        short = esc(row["model"].split("/")[-1])
+        name = f'<span class="modelname">{short}</span>'
+        if is_human:
             name += ' <span class="badge">human</span>'
         acc = row["best_move_accuracy"]
+        eq = row.get("mean_equity_loss")
+        tr_cls = ' class="human-row"' if is_human else ""
         body.append(
-            "<tr>"
-            f'<td class="left" data-sort="{rank_sort}">{rank_cell}</td>'
-            f'<td class="left" data-sort="{esc(row["model"])}">{name}</td>'
-            f'<td data-sort="{b if b is not None else 1e9}">{b_disp}</td>'
+            f"<tr{tr_cls}>"
+            f'<td class="left" data-sort="{rank_sort}">{_rank_chip(rank)}</td>'
+            f'<td class="left" data-sort="{esc(row["model"])}"><span class="modelcell">{name}</span></td>'
+            f'<td class="primary" data-sort="{b if b is not None else 1e9}">{b_disp}</td>'
             f'<td data-sort="{acc if acc is not None else -1}">{fmt_pct(acc)}</td>'
-            f'<td data-sort="{row["benchpr_text"] if row["benchpr_text"] is not None else 1e9}">{fmt_pr(row["benchpr_text"])}</td>'
-            f'<td data-sort="{row["benchpr_image"] if row["benchpr_image"] is not None else 1e9}">{fmt_pr(row["benchpr_image"])}</td>'
+            f'<td data-sort="{eq if eq is not None else 1e9}">{fmt_eq(eq)}</td>'
+            f'{_split_cell(row)}'
             f'<td data-sort="{row["cost_usd"] if row["cost_usd"] is not None else 1e9}">{fmt_usd(row["cost_usd"])}</td>'
-            f'<td data-sort="{row["cost_per_position"] if row["cost_per_position"] is not None else 1e9}">{fmt_usd_small(row["cost_per_position"])}</td>'
+            f'<td data-sort="{row["tokens"] if row["tokens"] is not None else 1e9}">{fmt_tokens(row["tokens"])}</td>'
             "</tr>"
         )
     return (
@@ -652,43 +833,139 @@ def budget_table_html(rows):
     )
 
 
+def _wordmark():
+    return (
+        '<span class="wordmark">'
+        '<span class="die">⚄</span>'
+        '<span><span class="b1">Gammon</span><span class="b2">Bench</span></span>'
+        '<span class="tag">beta</span>'
+        "</span>"
+    )
+
+
 def header_html(meta, generated, synthetic):
+    """Top bar (wordmark + theme toggle), hero, metadata chips, synthetic banner."""
     banner = ""
     if synthetic:
         banner = (
-            '<div class="explain" style="border-color:var(--image-track)">'
-            "<b>SYNTHETIC PREVIEW.</b> Built from <code>tests/fixtures/</code> — "
-            "fake models, fabricated numbers. Not benchmark results.</div>"
+            '<div class="banner">'
+            "<b>Synthetic preview.</b> Built from <code>tests/fixtures/</code> — "
+            "fake models, fabricated numbers. Not real benchmark results.</div>"
         )
-    bits = []
+
+    chips = []
+    if meta.get("positions"):
+        chips.append(f'<span class="chip"><b>{fmt_int(meta["positions"])}</b> positions</span>')
     if meta.get("dataset_hash"):
-        bits.append(f'dataset <code>{esc(str(meta["dataset_hash"])[:16])}</code>')
+        chips.append(f'<span class="chip">dataset <code>{esc(str(meta["dataset_hash"])[:16])}</code></span>')
     if meta.get("prompt_version"):
-        bits.append(f'prompt <code>{esc(meta["prompt_version"])}</code>')
-    if meta.get("ascii_render_version"):
-        bits.append(f'ascii render <code>{esc(meta["ascii_render_version"])}</code>')
-    if meta.get("image_render_version"):
-        bits.append(f'image render <code>{esc(meta["image_render_version"])}</code>')
-    meta_line = " · ".join(bits) if bits else "no run metadata"
+        chips.append(f'<span class="chip">prompt <code>{esc(meta["prompt_version"])}</code></span>')
+    if meta.get("latest_run_timestamp"):
+        chips.append(f'<span class="chip">updated <b>{esc(str(meta["latest_run_timestamp"])[:10])}</b></span>')
+    chips_html = f'<div class="chips">{"".join(chips)}</div>' if chips else ""
+
     return (
-        '<header class="site">'
-        '<span class="themetoggle" id="themetoggle">light / dark</span>'
-        "<h1>Backgammon LLM Benchmark</h1>"
-        '<p class="sub">How well do LLMs play backgammon? Scored against XG rollout '
-        "ground truth as <b>BenchPR</b> — an XG-Performance-Rating-like error score.</p>"
-        f"{banner}"
-        '<div class="explain">'
-        "<b>BenchPR = 500 × mean equity loss per decision. Lower is better.</b> "
-        "It sits on the same axis as a human XG Performance Rating, so the north-star "
-        "lines below read directly: <b>PR 2–4 is world-class</b>, PR 5–8 strong expert, "
-        "PR 10–15 intermediate, PR 20+ beginner. A model at PR 2 plays like a top human."
+        '<div class="topbar">'
+        f"{_wordmark()}"
+        '<button class="themetoggle" id="themetoggle" type="button" aria-label="Toggle light/dark theme">'
+        '<span aria-hidden="true">◐</span> Theme</button>'
         "</div>"
-        f'<p class="meta">{meta_line}</p>'
-        f'<p class="meta">Generated {esc(generated)}'
-        + (f' · latest run {esc(meta["latest_run_timestamp"])}' if meta.get("latest_run_timestamp") else "")
-        + "</p>"
+        '<header class="hero">'
+        "<h1>How well do LLMs play backgammon?</h1>"
+        '<p class="lede">GammonBench scores language models on real backgammon decisions — '
+        "checker plays and cube decisions — against GNU Backgammon rollouts, on a single "
+        "human-comparable error metric, <b>BenchPR</b>.</p>"
+        f"{chips_html}"
+        f"{banner}"
         "</header>"
     )
+
+
+def stat_tiles_html(models, humans, meta):
+    """Headline KPI tiles: leader, human baseline, dataset size, field size."""
+    tiles = []
+    ranked = [m for m in models if m.get("benchpr") is not None]
+    if ranked:
+        leader = ranked[0]
+        acc = leader.get("best_move_accuracy")
+        acc_line = f"{fmt_pct(acc)} best-move accuracy" if acc is not None else ""
+        tiles.append(
+            '<div class="tile accent">'
+            '<p class="label">Leader · BenchPR</p>'
+            f'<div class="value">{fmt_pr(leader["benchpr"])}</div>'
+            f'<p class="sub2"><b>{esc(leader["model"].split("/")[-1])}</b>'
+            + (f" · {acc_line}" if acc_line else "")
+            + "</p>"
+            "</div>"
+        )
+    if humans:
+        h = humans[0]
+        tiles.append(
+            '<div class="tile human-tile">'
+            '<p class="label">Human panel · BenchPR</p>'
+            f'<div class="value">{fmt_pr(h["benchpr"])}</div>'
+            f'<p class="sub2">Measured baseline · {esc(h["model"].split("/")[-1])}</p>'
+            "</div>"
+        )
+    if meta.get("positions"):
+        tiles.append(
+            '<div class="tile">'
+            '<p class="label">Scored positions</p>'
+            f'<div class="value">{fmt_int(meta["positions"])}</div>'
+            '<p class="sub2">Checker &amp; cube decisions, tiers T1–T4</p>'
+            "</div>"
+        )
+    tiles.append(
+        '<div class="tile">'
+        '<p class="label">Models ranked</p>'
+        f'<div class="value">{len(ranked)}</div>'
+        '<p class="sub2">Scored vs. GNU Backgammon rollouts</p>'
+        "</div>"
+    )
+    return f'<div class="tiles">{"".join(tiles)}</div>'
+
+
+def methodology_html():
+    scale = [
+        ("PR 0–2", "flawless", "var(--human)"),
+        ("2–4", "world-class", "var(--tier-3)"),
+        ("5–8", "strong expert", "var(--tier-2)"),
+        ("10–15", "intermediate", "var(--image-track)"),
+        ("20+", "beginner", "var(--cube)"),
+    ]
+    bands = "".join(
+        f'<span class="band" style="background:{c}">{esc(a)} · {esc(b)}</span>' for a, b, c in scale
+    )
+    return (
+        '<div class="explain">'
+        "<b>What is BenchPR?</b> BenchPR = 500 × mean equity loss per decision "
+        "(lower is better). Equity loss is how much money-game equity a move gives up "
+        "versus the engine's best play, read from GNU Backgammon rollouts. The scale is "
+        "calibrated to sit on the same axis as a human Performance Rating, so the "
+        "north-star lines read directly:"
+        f'<div class="scale">{bands}</div>'
+        '<div class="methods">'
+        '<a href="../../docs/SCORING.md">Scoring &amp; BenchPR</a>'
+        '<a href="../../docs/DATASET.md">Dataset &amp; tiers</a>'
+        '<a href="../../docs/HARNESS.md">Harness &amp; budget track</a>'
+        '<a href="../../docs/CONTAMINATION.md">Contamination policy</a>'
+        "</div>"
+        "</div>"
+    )
+
+
+def _legend_html(items):
+    """Small HTML legend row. ``items`` = list of (css_color, shape, label)."""
+    keys = []
+    for color, shape, label in items:
+        cls = "swatch diamond" if shape == "diamond" else "swatch"
+        keys.append(
+            f'<span class="k"><span class="{cls}" style="background:{color}"></span>{esc(label)}</span>'
+        )
+    return f'<div class="legend">{"".join(keys)}</div>'
+
+
+SITE_TITLE = "GammonBench — Backgammon LLM Benchmark"
 
 
 def build_html(results, generated, synthetic=False):
@@ -701,7 +978,7 @@ def build_html(results, generated, synthetic=False):
             '<div class="empty">No runs yet — once <code>results/*.json</code> '
             "exists, the leaderboard appears here.</div>"
         )
-        return templates.page("Backgammon LLM Benchmark", body)
+        return templates.page(SITE_TITLE, body)
 
     latest = latest_runs(results)
     all_rows = build_models(latest)
@@ -720,35 +997,80 @@ def build_html(results, generated, synthetic=False):
         else:
             points.append(rec)
 
-    sections = [header]
-    sections.append("<h2>Leaderboard</h2>")
-    sections.append('<p class="sub">Ranked by BenchPR (lower is better). Click a column header to sort.</p>')
-    sections.append(leaderboard_table_html(models, humans))
+    scatter_legend = [
+        ("var(--text-track)", "circle", "text track"),
+        ("var(--image-track)", "circle", "image track"),
+    ]
+    if human_pts:
+        scatter_legend.append(("var(--human)", "diamond", "human panel"))
 
-    sections.append("<h2>Skill vs. cost</h2>")
+    sections = [header]
+    sections.append(stat_tiles_html(models, humans, meta))
+    sections.append(methodology_html())
+
+    sections.append('<section id="leaderboard">')
+    sections.append('<div class="sec-head"><h2>Leaderboard</h2></div>')
     sections.append(
-        '<p class="sub">BenchPR against total dollar cost (log). Dashed red lines are the '
-        "human north star (PR 2 / 4 / 8).</p>"
+        '<p class="sub">Ranked by BenchPR (lower is better). Human-panel rows are baselines, '
+        "not ranked competitors. Click any column header to re-sort.</p>"
+    )
+    sections.append(leaderboard_table_html(models, humans))
+    sections.append("</section>")
+
+    sections.append('<section id="skill-cost">')
+    sections.append('<div class="sec-head"><h2>Skill vs. cost</h2></div>')
+    sections.append(
+        '<p class="sub">BenchPR against total dollar cost per run (log x-axis). Dashed lines are '
+        "the human north star (PR 2 / 4 / 8).</p>"
     )
     sections.append(f'<div class="chart">{scatter_svg(points, human_pts)}</div>')
+    sections.append(_legend_html(scatter_legend))
+    sections.append("</section>")
 
-    sections.append("<h2>Per-tier breakdown</h2>")
-    sections.append('<p class="sub">Where models fall apart: BenchPR by difficulty tier T1–T4.</p>')
+    sections.append('<section id="tiers">')
+    sections.append('<div class="sec-head"><h2>Difficulty tiers</h2></div>')
+    sections.append(
+        '<p class="sub">Where models fall apart: BenchPR by difficulty tier T1 (easiest) '
+        "to T4 (hardest for top humans).</p>"
+    )
     sections.append(f'<div class="chart">{tier_bars_svg(models + humans)}</div>')
+    sections.append("</section>")
 
-    sections.append("<h2>Text vs. image</h2>")
-    sections.append('<p class="sub">Does seeing the board (image) help or hurt vs. text?</p>')
+    sections.append('<section id="decision-type">')
+    sections.append('<div class="sec-head"><h2>Checker vs. cube</h2></div>')
+    sections.append(
+        '<p class="sub">BenchPR split by decision type — checker plays vs. doubling-cube '
+        "decisions.</p>"
+    )
+    sections.append(f'<div class="chart">{decision_type_bars_svg(models + humans)}</div>')
+    sections.append(
+        _legend_html([("var(--checker)", "circle", "checker"), ("var(--cube)", "circle", "cube")])
+    )
+    sections.append("</section>")
+
+    sections.append('<section id="text-image">')
+    sections.append('<div class="sec-head"><h2>Text vs. image</h2></div>')
+    sections.append('<p class="sub">Does seeing the rendered board (image) help or hurt vs. plain text?</p>')
     sections.append(f'<div class="chart">{dumbbell_svg(models + humans)}</div>')
+    sections.append(
+        _legend_html([("var(--text-track)", "circle", "text"), ("var(--image-track)", "circle", "image")])
+    )
+    sections.append("</section>")
 
     budget_html = budget_table_html(budgets)
     if budget_html:
-        sections.append(budget_html)
+        sections.append('<section id="budget-track">' + budget_html + "</section>")
 
     sections.append(
-        '<div class="foot">Static leaderboard · one-way data flow (results JSON → build → HTML) · '
-        "self-contained, no external requests. See PLAN.md §6.</div>"
+        '<div class="foot">'
+        '<p class="fnote"><b>BenchPR</b> = 500 × mean equity loss per decision, versus GNU '
+        "Backgammon rollout ground truth. Lower is better; the scale mirrors a human "
+        "Performance Rating.</p>"
+        "<p>GammonBench · static leaderboard, one-way data flow (results JSON → build → HTML) · "
+        "self-contained, no external requests. See PLAN.md §6.</p>"
+        "</div>"
     )
-    return templates.page("Backgammon LLM Benchmark", "\n".join(sections))
+    return templates.page(SITE_TITLE, "\n".join(sections))
 
 
 def build_leaderboard_json(results, generated):
@@ -769,9 +1091,13 @@ def build_leaderboard_json(results, generated):
             "benchpr_ci": r.get("benchpr_ci"),
             "benchpr_text": r["benchpr_text"],
             "benchpr_image": r["benchpr_image"],
+            "benchpr_checker": r.get("benchpr_checker"),
+            "benchpr_cube": r.get("benchpr_cube"),
             "best_move_accuracy": r["best_move_accuracy"],
+            "mean_equity_loss": r.get("mean_equity_loss"),
             "cost_usd": r["cost_usd"],
             "cost_per_position": r["cost_per_position"],
+            "tokens": r.get("tokens"),
             "benchpr_at_budget": r["benchpr_at_budget"],
             "n_positions": r["n_positions"],
         }

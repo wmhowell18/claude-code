@@ -17,6 +17,11 @@
     "best_move_accuracy": 0.51,
     "mean_equity_loss": 0.0096,
     "cost_usd": 5.60,
+    "tokens": 623000,
+    "per_decision_type": {
+      "checker": { "benchpr": 4.50, "best_move_accuracy": 0.54, "mean_equity_loss": 0.0090, "n": 84 },
+      "cube": { "benchpr": 5.40, "best_move_accuracy": 0.44, "mean_equity_loss": 0.0108, "n": 36 }
+    },
     "per_tier": {
       "T1": { "benchpr": 2.10, "best_move_accuracy": 0.80, "n": 30 },
       "T2": { "benchpr": 4.00, "best_move_accuracy": 0.55, "n": 36 },

@@ -16,6 +16,10 @@
     "benchpr": 2.30,
     "best_move_accuracy": 0.71,
     "mean_equity_loss": 0.0046,
+    "per_decision_type": {
+      "checker": { "benchpr": 2.10, "best_move_accuracy": 0.73, "mean_equity_loss": 0.0042, "n": 84 },
+      "cube": { "benchpr": 2.70, "best_move_accuracy": 0.67, "mean_equity_loss": 0.0054, "n": 36 }
+    },
     "per_tier": {
       "T1": { "benchpr": 0.50, "best_move_accuracy": 0.98, "n": 30 },
       "T2": { "benchpr": 1.80, "best_move_accuracy": 0.80, "n": 36 },
