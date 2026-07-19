@@ -1,8 +1,10 @@
-# Backgammon LLM Benchmark
+# GammonBench
 
-A benchmark that measures how well large language models play backgammon —
-**checker plays** *and* **cube decisions** — scored against eXtreme Gammon (XG)
-rollout ground truth, on a single human-comparable error metric.
+**GammonBench** — how well do LLMs play backgammon? A benchmark that measures how
+well large language models play backgammon — **checker plays** *and* **cube
+decisions** — scored against GNU Backgammon rollout ground truth, on a single
+human-comparable error metric (**BenchPR**). The public leaderboard is generated
+by [`site/`](site/) (run `python3 site/build.py`).
 
 > **Status: Phase 1 pilot dataset built (50 positions).** The core engine
 > (`bgcore/`: board model, legal-move generation, notation), ID codecs (`ids/`:

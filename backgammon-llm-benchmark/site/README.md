@@ -1,8 +1,10 @@
-# site/ — static leaderboard (GitHub Pages)
+# site/ — GammonBench static leaderboard (GitHub Pages)
 
-The v1 results website (PLAN.md §6). A small build step (`build.py`) reads
-`results/*.json` and renders static HTML — no backend, no database, one-way data
-flow (results JSON -> build -> static HTML). The build is stdlib-only.
+The **GammonBench** results website (PLAN.md §6). A small build step (`build.py`)
+reads `results/*.json` and renders static HTML — no backend, no database, one-way
+data flow (results JSON -> build -> static HTML). The build is stdlib-only.
+"GammonBench" is presentation-level branding; the module, directory, and schema
+names are unchanged.
 
 ## Human-benchmark quiz (`human-benchmark-pilot.html`)
 
@@ -156,25 +158,36 @@ Into `--out` (default `site/public/`):
 
 ## Page sections
 
-- **Header** — dataset hash, prompt / ASCII / image render versions, generation
-  timestamp, and a plain-English explanation of BenchPR (lower is better;
-  PR 2–4 = world-class) and the human north-star lines.
-- **Leaderboard table** — rank, model, BenchPR (with CI when present),
-  best-move accuracy, per-track columns (text / image), total cost, cost per
-  position. Sortable by any column (inline JS).
+- **Hero + metadata chips** — the GammonBench wordmark, one-line description,
+  positions / dataset-hash / prompt-version / last-updated chips, and a
+  persisted light/dark theme toggle.
+- **Headline stat tiles** — leader + its BenchPR, human-panel baseline, scored
+  positions, and models-ranked count.
+- **Methodology explainer** — a plain-English "what is BenchPR" note, the PR
+  band scale (flawless → beginner), and links to `docs/` (scoring, dataset,
+  harness, contamination).
+- **Leaderboard table** — rank (medal-emphasised top 3), model, BenchPR (with CI
+  when present), best-move accuracy, mean equity loss, checker/cube split, cost
+  per run, tokens. Human-panel rows are visually distinct baselines. Sortable by
+  any column (inline JS), `tabular-nums` aligned.
 - **Skill-vs-cost scatter** (SVG) — x = total cost (log), y = BenchPR
-  (lower better), one point per model/track, with north-star reference lines at
-  PR 2 / 4 / 8.
-- **Per-tier bars** (SVG) — grouped BenchPR bars by tier T1–T4 per model.
+  (lower better), directly-labelled points per model/track, north-star reference
+  lines at PR 2 / 4 / 8.
+- **Difficulty tiers** (SVG) — grouped BenchPR bars T1–T4 per model, using a
+  single-hue ordinal blue ramp (difficulty is ordered magnitude, not identity).
+- **Checker vs. cube** (SVG) — grouped BenchPR bars split by decision type.
 - **Text-vs-image dumbbell** (SVG) — paired text/image BenchPR per model.
 - **Fixed-budget track** — BenchPR @ budget table, shown when a run carries
   `manifest.budget_usd` / `aggregate.benchpr_at_budget`.
 - **Graceful empty state** — with zero results files the page still builds and
   says "no runs yet".
 
-Charts are deterministic, server-side inline SVG computed in pure Python (axes,
-ticks, labels, legends). Given identical inputs (and an injected timestamp) the
-output is byte-for-byte identical.
+The design tokens follow the `dataviz` skill's validated default palette (blue /
+orange / green categorical hues, blue ordinal ramp for tiers), exposed as CSS
+custom properties so light and dark swap in one place. Charts are deterministic,
+server-side inline SVG computed in pure Python (axes, ticks, labels, legends).
+Given identical inputs (and an injected timestamp) the output is byte-for-byte
+identical.
 
 ## Input contract
 

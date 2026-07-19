@@ -1,4 +1,8 @@
-# Backgammon LLM Benchmark — Founding Design Doc (PLAN.md)
+# GammonBench — Founding Design Doc (PLAN.md)
+
+> **GammonBench** is the public name for this backgammon LLM benchmark. Directory,
+> file, schema, and code identifiers keep their existing names; "GammonBench" is
+> presentation-level branding for the site and docs.
 
 **Status:** Draft v1 · **Created:** 2026-07-12 · **Owner:** wesleyhowell7
 
