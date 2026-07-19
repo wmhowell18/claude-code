@@ -51,7 +51,13 @@ Both modes end on the same results screen and export the same results JSON shape
 
 ### What the panelist sees
 
-- An intro screen (instructions + a run-mode chooser + a name/identifier field).
+- A **state-aware home screen** on every load: with no saved run it shows the
+  intro (instructions + run-mode chooser + name field); with a run **in progress**
+  it shows "Resume run (N/42 answered, <mode>)" plus "Start over" (confirm, discards
+  answers); with a **completed** run it shows "View results" plus "Start a new run"
+  (confirm; the name stays prefilled and the mode is re-choosable). The results
+  screen also carries "Start a new run". Starting a new run clears answers, the
+  mode lock and per-question state cleanly while keeping the panelist's name.
 - One position at a time with a `Position N / 42` progress bar, deterministic
   order (sorted by `position_id`). Every diagram is shown from the on-roll
   player's perspective — **the panelist always plays the White checkers**
@@ -93,8 +99,8 @@ Both modes end on the same results screen and export the same results JSON shape
   quiz build) or corrupt storage the page offers a clean "start fresh" instead of
   crashing or mixing schemas. Boot is wrapped in an error boundary that surfaces a
   readable error box rather than a blank page, and double-clicking a submit never
-  double-records or double-advances. Reloading mid-quiz resumes at the right
-  question in both modes.
+  double-records or double-advances. Reloading mid-quiz returns to the home screen,
+  whose "Resume run" button continues at the next unanswered position in both modes.
 - A results screen reveals ground truth **only at the end**: total BenchPR, mean
   equity loss, best-move accuracy, per-tier (T1–T4) and per-decision-type
   breakdowns, a per-position review (answer vs. best move + equity loss), and a
