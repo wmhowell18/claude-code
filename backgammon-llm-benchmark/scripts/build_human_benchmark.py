@@ -1174,36 +1174,44 @@ function selectedMode(){
   return (checked && checked.value === MODES.blind) ? MODES.blind : MODES.practice;
 }
 
-function screenIntro(){
-  clear();
-  var nameVal = STATE.name || "";
-  var input = el("input", { type: "text", id: "pname", value: nameVal,
-    placeholder: "e.g. panelist-3 or your initials" });
+/* Clear the current run (answers + mode lock + started), keep the name so it stays
+   prefilled, and return to the home screen. Used by "Start over" / "Start a new
+   run" (both behind a confirm). Resets localStorage to a fresh, versioned state. */
+function startNewRun(){
+  var keepName = STATE.name || "";
+  clearState();
+  STATE = freshState();
+  if(keepName) STATE.name = keepName;
+  STATE_STALE = false;
+  saveState(STATE);
+  screenHome();
+}
+
+/* State-aware home screen: fresh intro form, resume-in-progress, or view-results. */
+function screenHome(){
   var answered = Object.keys(STATE.answers).length;
-  var resumeNote = answered > 0 ? el("p", { class: "muted small",
-    text: "Resuming: " + answered + " of " + TOTAL + " already answered on this device (mode locked to “" +
-      (STATE.mode === MODES.blind ? "blind" : "practice") + "”)." }) : null;
-  var chooser = answered > 0 ? null : modeChooser(STATE.mode || MODES.practice);
-  var btn = el("button", { class: "btn", text: answered > 0 ? "Resume" : "Start" });
+  if(STATE.name && answered >= TOTAL){ screenHomeCompleted(); return; }
+  if(STATE.name && answered > 0){ screenHomeResume(answered); return; }
+  screenIntroForm();
+}
+
+/* Fresh start: name + run-mode chooser + Start (mode locks once answering begins). */
+function screenIntroForm(){
+  clear();
+  var input = el("input", { type: "text", id: "pname", value: STATE.name || "",
+    placeholder: "e.g. panelist-3 or your initials" });
+  var chooser = modeChooser(STATE.mode || MODES.practice);
+  var btn = el("button", { class: "btn", text: "Start" });
   btn.onclick = function(){
     var v = document.getElementById("pname").value.trim();
     if(!v){ document.getElementById("pname").focus(); return; }
     STATE.name = v;
-    if(answered === 0) STATE.mode = selectedMode();   /* lock mode once a run begins */
-    if(!STATE.started) STATE.started = new Date().toISOString();
+    STATE.mode = selectedMode();
+    STATE.started = new Date().toISOString();
     STATE.v = STATE_VERSION;
     saveState(STATE);
     routeToNext();
   };
-  var reset = null;
-  if(answered > 0){
-    reset = el("button", { class: "btn secondary", text: "Start over (clear answers)" });
-    reset.onclick = function(){
-      if(confirm("Clear all saved answers on this device and start fresh?")){
-        clearState(); STATE = freshState(); STATE_STALE = false; screenIntro();
-      }
-    };
-  }
   app.appendChild(el("div", { class: "panel" }, [
     el("h1", { text: "Backgammon Human Benchmark — Pilot" }),
     el("p", { text: "You will see " + TOTAL + " backgammon positions, one at a time. For each, " +
@@ -1214,21 +1222,56 @@ function screenIntro(){
     el("p", { class: "muted", html: "You cannot go back to change an earlier answer. Your progress is saved on this device, " +
       "so an accidental tab close will not lose it." }),
     el("hr", { class: "divider" }),
-    chooser ? el("label", { text: "Run mode" }) : null,
+    el("label", { text: "Run mode" }),
     chooser,
     el("label", { for: "pname", text: "Your name or identifier" }),
     input,
-    resumeNote,
-    el("div", { class: "btn-row" }, [btn, reset])
+    el("div", { class: "btn-row" }, [btn])
   ]));
   input.focus();
+}
+
+/* A run is partway done: resume where you left off, or start over (confirm). */
+function screenHomeResume(answered){
+  clear();
+  var modeLabel = STATE.mode === MODES.blind ? "blind panel run" : "practice (feedback after each answer)";
+  var resume = el("button", { class: "btn", text: "Resume run (" + answered + "/" + TOTAL + " answered)" });
+  resume.onclick = function(){ routeToNext(); };
+  var over = el("button", { class: "btn secondary", text: "Start over" });
+  over.onclick = function(){
+    if(confirm("Discard your " + answered + " saved answer(s) and start a brand-new run?")){ startNewRun(); }
+  };
+  app.appendChild(el("div", { class: "panel" }, [
+    el("h1", { text: "Backgammon Human Benchmark — Pilot" }),
+    el("p", { html: "Welcome back, <b>" + esc(STATE.name) + "</b>. You have a <b>run in progress</b>: <b>" +
+      answered + " of " + TOTAL + "</b> answered, mode <b>" + esc(modeLabel) + "</b> (locked for this run)." }),
+    el("p", { class: "muted small", text: "Resume picks up at the next unanswered position. Starting over discards these answers." }),
+    el("div", { class: "btn-row" }, [resume, over])
+  ]));
+}
+
+/* A run is complete: view results, or start a new run (confirm). */
+function screenHomeCompleted(){
+  clear();
+  var view = el("button", { class: "btn", text: "View results" });
+  view.onclick = function(){ screenResults(); };
+  var again = el("button", { class: "btn secondary", text: "Start a new run" });
+  again.onclick = function(){
+    if(confirm("Start a new run? This clears your completed answers on this device — download the results JSON first if you want to keep them.")){ startNewRun(); }
+  };
+  app.appendChild(el("div", { class: "panel" }, [
+    el("h1", { text: "Backgammon Human Benchmark — Pilot" }),
+    el("p", { html: "You've <b>completed all " + TOTAL + " positions</b> as <b>" + esc(STATE.name || "anon") +
+      "</b>. View your results, or start a new run (the name stays prefilled and you can re-choose the mode)." }),
+    el("div", { class: "btn-row" }, [view, again])
+  ]));
 }
 
 /* Stale/corrupt saved-state recovery screen (offered instead of crashing). */
 function screenStale(){
   clear();
   var fresh = el("button", { class: "btn", text: "Start fresh" });
-  fresh.onclick = function(){ clearState(); STATE = freshState(); STATE_STALE = false; screenIntro(); };
+  fresh.onclick = function(){ clearState(); STATE = freshState(); STATE_STALE = false; screenHome(); };
   app.appendChild(el("div", { class: "panel" }, [
     el("h1", { text: "Saved progress can’t be restored" }),
     el("p", { html: "This device has saved answers from an <b>older version</b> of the quiz. To avoid mixing " +
@@ -1610,6 +1653,10 @@ function screenResults(){
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
   };
+  var newRunBtn = el("button", { class: "btn secondary", text: "Start a new run" });
+  newRunBtn.onclick = function(){
+    if(confirm("Start a new run? This clears your answers on this device — download the results JSON first if you want to keep them.")){ startNewRun(); }
+  };
 
   app.appendChild(el("div", { class: "panel" }, [
     el("h1", { text: "Results" }),
@@ -1621,7 +1668,7 @@ function screenResults(){
     el("h2", { text: "Per-position review" }),
     el("div", { class: "board-wrap" }, [ el("table", {}, revRows) ]),
     el("hr", { class: "divider" }),
-    el("div", { class: "btn-row" }, [dlBtn]),
+    el("div", { class: "btn-row" }, [dlBtn, newRunBtn]),
     el("p", { class: "hint", text: "Send the downloaded JSON back to whoever ran the panel. It lands in results/ as a human run." })
   ]));
   window.scrollTo(0, 0);
@@ -1639,9 +1686,9 @@ function screenError(err){
 }
 function boot(){
   if(STATE_STALE){ screenStale(); return; }
-  if(STATE.name && firstUnanswered() < TOTAL){ screenPosition(firstUnanswered()); }
-  else if(STATE.name && Object.keys(STATE.answers).length >= TOTAL){ screenResults(); }
-  else { screenIntro(); }
+  /* Always land on the state-aware home screen so partial progress is visible and
+     a finished run can be reset — rather than silently jumping into a question. */
+  screenHome();
 }
 /* Last-resort handler so an exception in any click handler surfaces a readable
    box instead of leaving a dead/blank page. */

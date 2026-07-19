@@ -112,6 +112,15 @@ def test_page_carries_practice_and_blind_modes():
         assert needle in html, needle
 
 
+def test_page_has_state_aware_home_and_new_run():
+    """State-aware home screen (fresh / resume / view-results) + Start-a-new-run."""
+    records = hb.load_positions()
+    html = hb.render_html(hb.build_data(records), hb.build_manifest(records, "2026-01-01T00:00:00Z"))
+    for needle in ("screenHome", "screenHomeResume", "screenHomeCompleted", "screenIntroForm",
+                   "startNewRun", "Resume run (", "View results", "Start a new run"):
+        assert needle in html, needle
+
+
 def test_quality_gate_filters_pilot_to_42(records):
     """The quiz build gates out the 8 no-decision positions, landing at 42."""
     eligible, excluded = hb.filter_eligible(records)
