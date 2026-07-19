@@ -7,12 +7,17 @@ flow (results JSON -> build -> static HTML). The build is stdlib-only.
 ## Human-benchmark quiz (`human-benchmark-pilot.html`)
 
 `scripts/build_human_benchmark.py` generates a **single self-contained HTML quiz**
-that lets human panelists sit the exact same 50-position pilot set the LLMs are
-scored on, producing a directly comparable **BenchPR**. Everything is inlined
-(CSS, JS, and the rollout answer key as a JSON blob) — zero network requests — so
-the file can be emailed and opened locally. There are **no pre-baked SVGs**: a
-single runtime JS board engine (a faithful port of `render/svg.py`) draws every
-position from structured data and re-renders after each click.
+that lets human panelists sit the pilot set the LLMs are scored on, producing a
+directly comparable **BenchPR**. A quality gate (`generate/quality.py`) drops
+positions with no real decision (forced / unscoreable / trivial bear-offs), so the
+quiz presents **42 positions** (27 checker + 15 cube) out of the 50-position pilot;
+the 8 excluded IDs are logged at build time and recorded in the results JSON. See
+`positions/pilot/README.md` for the list and the plan to restore the pilot to 50.
+Everything is inlined (CSS, JS, and the rollout answer key as a JSON blob) — zero
+network requests — so the file can be emailed and opened locally. There are **no
+pre-baked SVGs**: a single runtime JS board engine (a faithful port of
+`render/svg.py`) draws every position from structured data and re-renders after
+each click.
 
 ```bash
 # Generate site/public/human-benchmark-pilot.html (stdlib only):
@@ -29,13 +34,16 @@ The intro screen offers two modes (persisted in the saved state and recorded in
 the exported results JSON as a top-level `mode` field):
 
 - **Practice — feedback after each answer** (default). After every submission the
-  quiz shows a feedback panel *before advancing*: whether the answer was best, the
-  engine's best play/action, the panelist's equity loss in millipoints, the rank
-  of their choice among the rollout's listed moves/actions, and — for checker
-  decisions — the board redrawn with the best play applied. A **Next position**
-  button advances. Good for learning.
+  quiz shows a feedback panel *before advancing*: a best/not-best verdict, the
+  panelist's equity loss in millipoints, and a ranked breakdown — the **top three
+  rollout moves** with their equity loss (best = 0.0), or for a cube decision **all
+  three actions** with their equity error, with the best row tagged and the
+  panelist's own row highlighted. If the panelist's move falls outside the top
+  three it is appended as its own highlighted row (so you always see how your move
+  ranked, not just "best/not best"). Checker feedback also redraws the board with
+  the engine's best play applied. A **Next position** button advances.
 - **Blind panel run — results only at the end**. The original protocol: no engine
-  ground truth is shown until all 50 positions are done. Use this for a clean
+  ground truth is shown until all 42 positions are done. Use this for a clean
   benchmark run. (The mode is locked once a run has any answers; "Start over"
   clears it.)
 
@@ -43,8 +51,14 @@ Both modes end on the same results screen and export the same results JSON shape
 
 ### What the panelist sees
 
-- An intro screen (instructions + a run-mode chooser + a name/identifier field).
-- One position at a time with a `Position N / 50` progress bar, deterministic
+- A **state-aware home screen** on every load: with no saved run it shows the
+  intro (instructions + run-mode chooser + name field); with a run **in progress**
+  it shows "Resume run (N/42 answered, <mode>)" plus "Start over" (confirm, discards
+  answers); with a **completed** run it shows "View results" plus "Start a new run"
+  (confirm; the name stays prefilled and the mode is re-choosable). The results
+  screen also carries "Start a new run". Starting a new run clears answers, the
+  mode lock and per-question state cleanly while keeping the panelist's name.
+- One position at a time with a `Position N / 42` progress bar, deterministic
   order (sorted by `position_id`). Every diagram is shown from the on-roll
   player's perspective — **the panelist always plays the White checkers**
   (opponent is Black). `board_json` is authoritative and already mover-relative
@@ -59,17 +73,25 @@ Both modes end on the same results screen and export the same results JSON shape
   "Black". Shown: the board SVG, dice (checker decisions only — cube records
   carry no dice), cube value/owner, money-vs-match + score, and pip counts. Tier,
   phase, expected-loss and other difficulty/answer hints are **not** shown.
-- Checker decisions are composed by **clicking checkers** on the live board: the
-  engine (a JS port of `bgcore/moves.py`'s single-die hop rules) highlights legal
-  destinations and only enables **Submit play** once the composed sequence reaches
-  a legal full-move signature enumerated at build time (`Undo` / `Reset`
-  available). A collapsed secondary **"Prefer to type the move?"** panel still
-  accepts free-text notation (JS port of `bgcore/notation.py` — reordered plays,
-  `*` hits, `(n)` repeats, `bar/`/`/off`) with live legality validation; a move
-  that reaches the same position spelled differently (e.g. a single checker's
-  intermediate point, `10/4/3` for `10/3`) matches via a pre-computed endpoint map
-  and resulting-position fallback (mirrors `bgcore.moves.moves_equivalent`).
-  Unrecognised typed input warns once, then may be submitted anyway.
+- Checker decisions use **one-click auto-move** (backgammonhub-style), a JS port of
+  `bgcore/moves.py`'s single-die hop rules. The two dice are shown left-to-right in
+  the order they will be played; **clicking a checker moves it immediately by the
+  next unused die** (left die first, then the next). Exceptions: if the checker can
+  legally-and-completably move by only one of the remaining dice, that die is played
+  regardless of order and the dice display **reorders** to match what happened; a
+  checker that can't extend to any full legal move gives a subtle **shake** rather
+  than a silent no-op. Bar entry, hits and bear-off follow the same one-click rule.
+  **Tap the dice to swap their order** (moot for doubles, which show four pips that
+  fade one per use); a played die is drawn smaller and faded, and **Undo** un-spends
+  it (`Reset` clears the whole move). **Submit play** enables once the composed
+  sequence reaches a legal full-move signature enumerated at build time. A collapsed
+  secondary **"Prefer to type the move?"** panel still accepts free-text notation
+  (JS port of `bgcore/notation.py` — reordered plays, `*` hits, `(n)` repeats,
+  `bar/`/`/off`) with live legality validation; a move that reaches the same
+  position spelled differently (e.g. a single checker's intermediate point, `10/4/3`
+  for `10/3`) matches via a pre-computed endpoint map and resulting-position
+  fallback (mirrors `bgcore.moves.moves_equivalent`). Unrecognised typed input warns
+  once, then may be submitted anyway.
 - Cube decisions are buttons for exactly the actions the record poses
   (`No double` / `Double, Take` / `Double, Pass`).
 - No going back; answers persist to `localStorage`, so a tab close doesn't lose
@@ -77,8 +99,8 @@ Both modes end on the same results screen and export the same results JSON shape
   quiz build) or corrupt storage the page offers a clean "start fresh" instead of
   crashing or mixing schemas. Boot is wrapped in an error boundary that surfaces a
   readable error box rather than a blank page, and double-clicking a submit never
-  double-records or double-advances. Reloading mid-quiz resumes at the right
-  question in both modes.
+  double-records or double-advances. Reloading mid-quiz returns to the home screen,
+  whose "Resume run" button continues at the next unanswered position in both modes.
 - A results screen reveals ground truth **only at the end**: total BenchPR, mean
   equity loss, best-move accuracy, per-tier (T1–T4) and per-decision-type
   breakdowns, a per-position review (answer vs. best move + equity loss), and a

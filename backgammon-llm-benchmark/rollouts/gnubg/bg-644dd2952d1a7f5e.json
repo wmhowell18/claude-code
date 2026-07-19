@@ -25,8 +25,8 @@
     "best_action": "No double",
     "error_mp": {
       "No double": 0.0,
-      "Double, Take": 0.0,
-      "Double, Pass": 2186.1
+      "Double, Take": 680.6,
+      "Double, Pass": 680.6
     }
   },
   "best_equity": -0.505475,

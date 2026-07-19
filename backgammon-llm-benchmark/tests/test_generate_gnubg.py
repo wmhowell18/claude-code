@@ -4,10 +4,17 @@ Pure-function tests only — the subprocess shim ``gnubg.run_gnubg`` is never
 called (gnubg is not installed in CI). Canned gnubg output is embedded here.
 """
 
+import glob
+import json
+import os
+
 import pytest
 
 from bgcore.board import validate
 from generate import gnubg
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_ROLL_DIR = os.path.join(_REPO_ROOT, "rollouts", "gnubg")
 
 
 # --------------------------------------------------------------------------
@@ -270,6 +277,79 @@ def test_parse_cube_rollout_three_equities_and_errors():
 def test_parse_cube_rollout_missing_line_raises():
     with pytest.raises(ValueError):
         gnubg.parse_cube_rollout("Cubeless equity +0.4\nNo double +0.5\n")
+
+
+# -- cube_action_errors: the corrected doubler-answer scoring -----------------
+
+
+def test_cube_errors_no_double_best_both_double_answers_equal():
+    """Doubling is wrong (best = No double): both Double answers pay the SAME
+    doubling error and |DT-DP| is NOT added (regression for the 3000-mpt bug)."""
+    # bg-06f2f715c60a3064: nd=-0.52598, dt=-2.0, dp=1.0 -> R=min=-2.0, best=nd.
+    best, err = gnubg.cube_action_errors(-0.52598, -2.0, 1.0)
+    assert best == "No double"
+    assert err["No double"] == 0.0
+    assert err["Double, Take"] == pytest.approx(1474.0, abs=0.05)
+    assert err["Double, Pass"] == pytest.approx(1474.0, abs=0.05)
+    assert err["Double, Take"] == err["Double, Pass"]
+
+
+def test_cube_errors_double_correct_take_wrong_pass_claim_adds_gap():
+    """Doubling correct and the opponent should TAKE: 'Double, Take' is 0 and
+    'Double, Pass' pays the response-claim penalty |DT-DP|."""
+    best, err = gnubg.cube_action_errors(0.520, 0.610, 1.000)
+    assert best == "Double, Take"
+    assert err["Double, Take"] == 0.0
+    assert err["No double"] == pytest.approx(90.0, abs=0.05)     # R - nd
+    assert err["Double, Pass"] == pytest.approx(390.0, abs=0.05)  # |DT - DP|
+
+
+def test_cube_errors_double_correct_pass_wrong_take_claim_adds_gap():
+    """Doubling correct and the opponent should PASS (a double/pass): the wrong
+    'Double, Take' claim pays |DT-DP|; 'Double, Pass' is 0."""
+    # dt above dp -> R = dp, opponent passes; take-claim is the wrong response.
+    best, err = gnubg.cube_action_errors(0.30, 1.20, 1.00)
+    assert best == "Double, Pass"
+    assert err["Double, Pass"] == 0.0
+    assert err["No double"] == pytest.approx(700.0, abs=0.05)     # R(=1.0) - nd
+    assert err["Double, Take"] == pytest.approx(200.0, abs=0.05)  # |DT - DP|
+
+
+def test_cube_errors_borderline_toss_up_all_zero():
+    """When no-double and doubling equity are essentially equal, every answer is
+    ~free (a genuine toss-up), so two zeros here is legitimate."""
+    best, err = gnubg.cube_action_errors(0.500, 0.500, 1.000)
+    assert best == "No double"
+    assert err["No double"] == 0.0
+    assert err["Double, Take"] == 0.0
+    assert err["Double, Pass"] == 0.0
+
+
+def test_cube_errors_best_action_always_zero():
+    for nd, dt, dp in [(-0.5, -2.0, 1.0), (0.52, 0.61, 1.0), (0.30, 1.20, 1.0),
+                       (0.82, 1.077, 1.0), (0.95, 1.096, 1.0), (-0.06, -0.26, 1.0)]:
+        best, err = gnubg.cube_action_errors(nd, dt, dp)
+        assert err[best] == 0.0, (nd, dt, dp, best, err)
+        assert all(v >= 0 for v in err.values())
+
+
+def test_shipped_cube_rollouts_match_formula():
+    """Every checked-in cube rollout's error_mp/best_action must match
+    cube_action_errors(equities) — guards against the old buggy map creeping back
+    (scripts/repair_cube_error_mp.py keeps them in sync)."""
+    n = 0
+    for path in sorted(glob.glob(os.path.join(_ROLL_DIR, "*.json"))):
+        rec = json.load(open(path, encoding="utf-8"))
+        if rec.get("decision_type") != "cube":
+            continue
+        n += 1
+        c = rec["cube"]
+        best, err = gnubg.cube_action_errors(
+            c["no_double_equity"], c["double_take_equity"], c["double_pass_equity"])
+        assert c["error_mp"] == err, rec["position_id"]
+        assert c["best_action"] == best, rec["position_id"]
+        assert err[best] == 0.0
+    assert n == 15
 
 
 def test_parse_rollout_dispatch():

@@ -549,6 +549,13 @@ rejected for v1 (hosting friction, not needed).
   full rollout data; panel results recorded and tier thresholds re-fit; one
   end-to-end model run (one cheap model) produces a BenchPR and best-move
   accuracy; scoring reproduces by re-running from cache.
+- **Quality gate (`generate/quality.py`):** a position is quiz-eligible only if it
+  poses a real decision — checker: ≥2 legal moves in the display frame, ≥2 scored
+  rollout moves, best-to-worst loss spread ≥ 10 mpt; cube: all three actions
+  scored. In the current pilot **8 of 50 fail** (forced / unscoreable / trivial
+  bear-offs), so the human quiz runs on **42** (27 checker + 15 cube). Those 8 need
+  replacement via a fresh gnubg rollout run to return the pilot to 50 — see
+  `positions/pilot/README.md`.
 
 ### Phase 2 — Full dataset + harness
 

@@ -112,6 +112,56 @@ def test_page_carries_practice_and_blind_modes():
         assert needle in html, needle
 
 
+def test_page_has_state_aware_home_and_new_run():
+    """State-aware home screen (fresh / resume / view-results) + Start-a-new-run."""
+    records = hb.load_positions()
+    html = hb.render_html(hb.build_data(records), hb.build_manifest(records, "2026-01-01T00:00:00Z"))
+    for needle in ("screenHome", "screenHomeResume", "screenHomeCompleted", "screenIntroForm",
+                   "startNewRun", "Resume run (", "View results", "Start a new run"):
+        assert needle in html, needle
+
+
+def test_quality_gate_filters_pilot_to_42(records):
+    """The quiz build gates out the 8 no-decision positions, landing at 42."""
+    eligible, excluded = hb.filter_eligible(records)
+    assert len(records) == 50
+    assert len(eligible) == 42
+    assert len(excluded) == 8
+    checker = sum(1 for r in eligible if r["decision_type"] == "checker")
+    cube = sum(1 for r in eligible if r["decision_type"] == "cube")
+    assert (checker, cube) == (27, 15)
+    # every exclusion carries a position_id + human-readable reason
+    for e in excluded:
+        assert e["position_id"] and e["reason"]
+    data = hb.build_data(eligible)
+    assert len(data) == 42
+
+
+def test_manifest_records_effective_and_excluded(records):
+    eligible, excluded = hb.filter_eligible(records)
+    manifest = hb.build_manifest(records, "2026-01-01T00:00:00Z",
+                                 excluded=excluded, effective=len(eligible))
+    assert manifest["total_positions"] == 50
+    assert manifest["effective_positions"] == 42
+    assert len(manifest["excluded_positions"]) == 8
+    # dataset_hash still covers the FULL pilot (comparability), unchanged by the gate
+    assert manifest["dataset_hash"] == hb.build_manifest(records, "2026-01-01T00:00:00Z")["dataset_hash"]
+
+
+def test_page_uses_one_click_automove_and_topmoves_feedback():
+    """The page ships the one-click auto-move engine (dice order + swap + spent
+    fading + rejection shake) and the top-3 feedback tables — and no longer uses
+    the old select-then-pick-destination highlight UI."""
+    records = hb.load_positions()
+    html = hb.render_html(hb.build_data(records), hb.build_manifest(records, "2026-01-01T00:00:00Z"))
+    for needle in ("pickDie", "trySwap", "diceSwappable", "usedCount", "bg-shake",
+                   "fbTopMovesTable", "fbCubeTable"):
+        assert needle in html, needle
+    # the destination-highlight primary interaction is gone
+    for gone in ("computeHighlights", "sourceHasMove", "destdot"):
+        assert gone not in html, gone
+
+
 # -- the embedded legal set == the authoritative engine ---------------------
 
 
