@@ -7,12 +7,17 @@ flow (results JSON -> build -> static HTML). The build is stdlib-only.
 ## Human-benchmark quiz (`human-benchmark-pilot.html`)
 
 `scripts/build_human_benchmark.py` generates a **single self-contained HTML quiz**
-that lets human panelists sit the exact same 50-position pilot set the LLMs are
-scored on, producing a directly comparable **BenchPR**. Everything is inlined
-(CSS, JS, and the rollout answer key as a JSON blob) — zero network requests — so
-the file can be emailed and opened locally. There are **no pre-baked SVGs**: a
-single runtime JS board engine (a faithful port of `render/svg.py`) draws every
-position from structured data and re-renders after each click.
+that lets human panelists sit the pilot set the LLMs are scored on, producing a
+directly comparable **BenchPR**. A quality gate (`generate/quality.py`) drops
+positions with no real decision (forced / unscoreable / trivial bear-offs), so the
+quiz presents **42 positions** (27 checker + 15 cube) out of the 50-position pilot;
+the 8 excluded IDs are logged at build time and recorded in the results JSON. See
+`positions/pilot/README.md` for the list and the plan to restore the pilot to 50.
+Everything is inlined (CSS, JS, and the rollout answer key as a JSON blob) — zero
+network requests — so the file can be emailed and opened locally. There are **no
+pre-baked SVGs**: a single runtime JS board engine (a faithful port of
+`render/svg.py`) draws every position from structured data and re-renders after
+each click.
 
 ```bash
 # Generate site/public/human-benchmark-pilot.html (stdlib only):
@@ -38,7 +43,7 @@ the exported results JSON as a top-level `mode` field):
   ranked, not just "best/not best"). Checker feedback also redraws the board with
   the engine's best play applied. A **Next position** button advances.
 - **Blind panel run — results only at the end**. The original protocol: no engine
-  ground truth is shown until all 50 positions are done. Use this for a clean
+  ground truth is shown until all 42 positions are done. Use this for a clean
   benchmark run. (The mode is locked once a run has any answers; "Start over"
   clears it.)
 
@@ -47,7 +52,7 @@ Both modes end on the same results screen and export the same results JSON shape
 ### What the panelist sees
 
 - An intro screen (instructions + a run-mode chooser + a name/identifier field).
-- One position at a time with a `Position N / 50` progress bar, deterministic
+- One position at a time with a `Position N / 42` progress bar, deterministic
   order (sorted by `position_id`). Every diagram is shown from the on-roll
   player's perspective — **the panelist always plays the White checkers**
   (opponent is Black). `board_json` is authoritative and already mover-relative
