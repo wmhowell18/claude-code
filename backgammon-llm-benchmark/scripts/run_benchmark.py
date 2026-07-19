@@ -24,8 +24,11 @@ from pathlib import Path
 # Allow running as a script (`python3 scripts/run_benchmark.py`).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import os  # noqa: E402
+
 from harness import prompts as _prompts  # noqa: E402
 from harness.runner import (  # noqa: E402
+    apply_quality_gate,
     dataset_hash,
     load_config,
     load_positions,
@@ -42,9 +45,16 @@ def _resolve_dataset(config: dict, base: Path):
     return positions, rollouts
 
 
+def _gate(config: dict, positions: list, rollouts: dict):
+    """Apply the quality gate the same way run_config does. Returns (kept, excluded)."""
+    gate_on = bool(config.get("quality_gate", True))
+    return apply_quality_gate(positions, rollouts, enabled=gate_on)
+
+
 def dry_run(config: dict, base: Path) -> dict:
     """Build prompts + estimate request counts without any network calls."""
-    positions, _rollouts = _resolve_dataset(config, base)
+    positions, rollouts = _resolve_dataset(config, base)
+    positions, excluded = _gate(config, positions, rollouts)
     models = list(config.get("models", []))
     track = config.get("track", "text")
     sampling = config.get("sampling", {}) or {}
@@ -77,6 +87,11 @@ def dry_run(config: dict, base: Path) -> dict:
         "estimated_requests": base_requests,
         "estimated_requests_max_with_retries": max_requests,
         "prompts_built": built,
+        "quality_gate": {
+            "enabled": bool(config.get("quality_gate", True)),
+            "excluded_count": len(excluded),
+            "excluded": [{"position_id": pid, "reason": reason} for pid, reason in excluded],
+        },
         "sample_prompt": sample_prompt,
     }
 
@@ -95,12 +110,23 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.limit is not None:
         positions, rollouts = _resolve_dataset(config, base)
+        # Gate first (so --limit caps eligible positions), then trim.
+        positions, _excluded = _gate(config, positions, rollouts)
         positions = positions[: args.limit]
-        # Inline the trimmed dataset so run_config/dry_run use it.
+        # Inline the trimmed dataset so run_config/dry_run use it. The gate has
+        # already been applied, so turn it off downstream to avoid re-gating.
         config = dict(config)
         config["dataset"] = {}
+        config["quality_gate"] = False
     else:
         positions = rollouts = None
+
+    if not args.dry_run and not os.environ.get("OPENROUTER_API_KEY"):
+        # Real run: fail fast with a readable message if the API key is missing,
+        # rather than surfacing an auth traceback mid-run.
+        print("error: OPENROUTER_API_KEY is not set. Export your OpenRouter key "
+              "(or use --dry-run for a no-network estimate).", file=sys.stderr)
+        return 2
 
     if args.dry_run:
         summary = dry_run(config, base) if positions is None else _dry_run_inline(config, positions)

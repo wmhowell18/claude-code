@@ -112,6 +112,10 @@ def build_results(
         manifest["image_render_version"] = run.image_render_version
     if run.budget_usd is not None:
         manifest["budget_usd"] = run.budget_usd
+    if run.quality_gate is not None:
+        # Additive record of the eligibility gate (PLAN §3.2): which positions the
+        # runner dropped and why, so results stay auditable/reproducible.
+        manifest["quality_gate"] = run.quality_gate
 
     decisions = [_decision_json(r) for r in run.decisions] if include_decisions else []
 

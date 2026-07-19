@@ -11,6 +11,7 @@ from harness.cache import ResponseCache
 from harness.client import OpenRouterClient
 from harness.cost import BudgetGuard, CostTracker
 from harness.runner import (
+    apply_quality_gate,
     dataset_hash,
     load_positions,
     load_rollouts,
@@ -242,6 +243,44 @@ def test_dataset_loading_from_dir_and_jsonl(tmp_path):
     rl.write_text("\n".join(json.dumps(v) for v in ROLLOUTS.values()))
     rolls = load_rollouts(rl)
     assert set(rolls) == {"chk-1", "cube-1"}
+
+
+def test_quality_gate_filters_and_records(tmp_path):
+    # Third position is unscoreable (rollout lists a single scored move) -> gated.
+    positions = [_checker_position(), _cube_position(),
+                 dict(_checker_position(), position_id="chk-bad")]
+    rollouts = dict(ROLLOUTS)
+    rollouts["chk-bad"] = {
+        "position_id": "chk-bad",
+        "decision_type": "checker",
+        "checker": {"moves": [{"move": "8/5 6/5", "equity": 0.1, "error_mp": 0.0, "rank": 1}]},
+    }
+
+    kept, excluded = apply_quality_gate(positions, rollouts, enabled=True)
+    assert {p["position_id"] for p in kept} == {"chk-1", "cube-1"}
+    assert [pid for pid, _ in excluded] == ["chk-bad"]
+
+    # Disabled gate is a pass-through.
+    kept2, excluded2 = apply_quality_gate(positions, rollouts, enabled=False)
+    assert len(kept2) == 3 and excluded2 == []
+
+    # End-to-end: run_config drops the position and records it in the manifest.
+    client = OpenRouterClient(api_key="k", transport=httpx.MockTransport(_answer_for))
+    config = {
+        "run_id": "gated", "track": "text", "models": ["fake/a"],
+        "sampling": {"temperature": 0, "max_retries": 0},
+        "quality_gate": True, "results_dir": "results",
+    }
+    results = _run(run_config(config, base_dir=tmp_path, client=client,
+                              positions=positions, rollouts=rollouts))
+    _run(client.aclose())
+    mr = results[0]
+    assert {d.position_id for d in mr.decisions} == {"chk-1", "cube-1"}
+    obj = report.build_results(mr, run_id="gated")
+    assert report.validate_results(obj) == []
+    gate = obj["manifest"]["quality_gate"]
+    assert gate["enabled"] is True and gate["excluded_count"] == 1
+    assert gate["excluded"][0]["position_id"] == "chk-bad"
 
 
 def test_config_mini_yaml_matches_expected():

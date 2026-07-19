@@ -1,0 +1,49 @@
+# Pilot run config (PLAN.md §3.3, §5.2).
+#
+# The first real benchmark: the 50-position pilot set with gnubg rollouts as
+# ground truth, text track, greedy decoding, and the quality gate on. Run it with:
+#
+#   python3 scripts/run_benchmark.py --config runs/pilot.yaml --dry-run   # no network
+#   python3 scripts/run_benchmark.py --config runs/pilot.yaml             # needs OPENROUTER_API_KEY
+#
+# A JSON twin (runs/pilot.json, identical keys) works with zero extra packages.
+
+run_id: pilot
+track: text                 # text | image | text+image   (PLAN.md §4.1)
+split: pilot                # pilot | dev | heldout        (PLAN.md §3.2)
+
+# Apply the shared quiz-eligibility gate (PLAN §3.2): drops forced / unscoreable /
+# trivial positions so LLMs face the same 42 real decisions the human quiz does.
+# Excluded positions are logged and recorded in the results manifest.
+quality_gate: true
+
+# OpenRouter model slugs. One slug per line — add a model = add a line, no code
+# change. Slug validity CANNOT be checked offline; verify against
+# https://openrouter.ai/models before a real run and swap freely here.
+models:
+  - openai/gpt-5.2                # OpenAI frontier
+  - anthropic/claude-opus-4.8     # Anthropic frontier
+  - anthropic/claude-sonnet-5     # Anthropic mid-tier
+  - google/gemini-3-pro           # Google frontier
+  - deepseek/deepseek-v4          # open-weight frontier
+  - openai/gpt-4o-mini            # cheap floor / sanity baseline
+
+# Dataset: 50 pilot positions + gnubg rollouts (keyed by position_id). Paths are
+# relative to --base-dir (repo root by default).
+dataset:
+  positions: positions/pilot
+  rollouts: rollouts/gnubg
+
+sampling:                   # PLAN.md §4.6
+  temperature: 0            # 0 = reproducible greedy baseline
+  n: 1                      # samples per position (>1 only for self-consistency)
+  mode: greedy              # greedy | self-consistency
+  max_retries: 2            # re-asks on unparseable output before worst-case scoring
+
+# Fixed-$ budget track (PLAN.md §5.3). usd: null = untracked (full run).
+budget:
+  usd: null
+
+concurrency: 8              # bounded in-flight requests
+prompt_version: bench-1     # informational; the harness pins its own PROMPT_VERSION
+results_dir: results        # where results/*.json are written

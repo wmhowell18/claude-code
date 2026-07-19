@@ -38,6 +38,7 @@ __all__ = [
     "load_positions",
     "load_rollouts",
     "dataset_hash",
+    "apply_quality_gate",
     "DecisionRecord",
     "ModelRunResult",
     "run_model",
@@ -236,6 +237,29 @@ def dataset_hash(positions: Sequence[dict[str, Any]]) -> str:
     return h.hexdigest()
 
 
+def apply_quality_gate(
+    positions: Sequence[dict[str, Any]],
+    rollouts: dict[str, dict[str, Any]],
+    *,
+    enabled: bool = True,
+) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
+    """Filter positions through the shared quiz-eligibility gate (PLAN §3.2).
+
+    Reuses :func:`generate.quality.filter_eligible` so LLM runs face exactly the
+    same eligible positions as the human quiz — forced / unscoreable / trivial
+    positions (no real decision) are gated out. Returns ``(kept, excluded)`` where
+    ``excluded`` is a list of ``(position_id, reason)``. When ``enabled`` is False
+    the positions pass through unchanged with an empty exclusion list.
+    """
+    if not enabled:
+        return list(positions), []
+    from generate.quality import filter_eligible  # noqa: PLC0415
+
+    pairs = [(p, rollouts.get(p.get("position_id", ""), {})) for p in positions]
+    kept, excluded = filter_eligible(pairs)
+    return kept, excluded
+
+
 # ========================================================================
 # Records
 # ========================================================================
@@ -283,6 +307,7 @@ class ModelRunResult:
     budget_usd: float | None = None
     ascii_render_version: str | None = None
     image_render_version: str | None = None
+    quality_gate: dict[str, Any] | None = None
 
 
 # ========================================================================
@@ -573,6 +598,18 @@ async def run_config(
     if rollouts is None:
         rollouts = load_rollouts(base / ds["rollouts"]) if ds.get("rollouts") else {}
 
+    gate_on = bool(config.get("quality_gate", True))
+    positions, excluded = apply_quality_gate(positions, rollouts, enabled=gate_on)
+    gate_meta: dict[str, Any] = {
+        "enabled": gate_on,
+        "excluded_count": len(excluded),
+        "excluded": [{"position_id": pid, "reason": reason} for pid, reason in excluded],
+    }
+    if excluded:
+        print(f"quality gate excluded {len(excluded)} position(s):")
+        for pid, reason in excluded:
+            print(f"  - {pid}: {reason}")
+
     ds_hash = dataset_hash(positions)
     run_dir = base / "runs" / run_id
     cache = ResponseCache(run_dir / "cache")
@@ -601,6 +638,7 @@ async def run_config(
                 concurrency=concurrency, raw_dir=run_dir / "raw",
                 dataset_hash_str=ds_hash,
             )
+            mr.quality_gate = gate_meta
             out.append(mr)
             _write_scores(run_dir, mr)
             if write_results:

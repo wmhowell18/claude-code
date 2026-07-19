@@ -27,6 +27,24 @@
           }
         },
         "budget_usd": { "type": "number", "description": "Set for the fixed-$ budget track (PLAN.md §5.3)." },
+        "quality_gate": {
+          "type": "object",
+          "description": "Optional record of the quiz-eligibility gate applied at dataset load (PLAN.md §3.2). Additive.",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "excluded_count": { "type": "integer" },
+            "excluded": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "position_id": { "type": "string" },
+                  "reason": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
         "timestamp": { "type": "string", "format": "date-time" }
       }
     },
