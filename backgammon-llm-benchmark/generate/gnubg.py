@@ -661,6 +661,55 @@ def _canon_cube_action(raw: str) -> str:
     return raw.strip()
 
 
+def cube_action_errors(
+    nd_eq: float, dt_eq: float, dp_eq: float
+) -> tuple[str, dict[str, float]]:
+    """Best action + per-answer millipoint errors for the on-roll cube decision.
+
+    Scores the *doubler's* three possible answers — "No double", "Double, Take"
+    (double, expecting a take) and "Double, Pass" (double, expecting a pass) —
+    against the three rollout equities (all from the doubler's perspective):
+
+    * ``nd_eq``  — equity if the doubler does not double.
+    * ``dt_eq``  — equity if the doubler doubles and the opponent takes.
+    * ``dp_eq``  — equity if the doubler doubles and the opponent passes (≈ +1).
+
+    The opponent responds to a double by *minimising* the doubler's equity, so the
+    realizable equity from doubling is ``R = min(dt_eq, dp_eq)``; doubling is
+    correct iff ``R > nd_eq``. Errors (equity, ×1000 → mpt), all ≥ 0:
+
+    * **No double** → ``max(0, R − nd_eq)`` (the cost of not doubling).
+    * **Double, Take / Double, Pass** → both pay the double/no-double error
+      ``max(0, nd_eq − R)``. When doubling *is* correct that term is 0, and the
+      answer that names the *wrong* opponent response additionally pays
+      ``|dt_eq − dp_eq|`` (the cost of misjudging take vs. pass). When doubling is
+      *wrong* the response claim is moot, so both double answers score the same and
+      ``|dt_eq − dp_eq|`` is **not** added (fixing the old bug that scored the wrong
+      response as ``dp_eq − R`` and produced e.g. 3000 instead of 1474 mpt).
+
+    Returns ``(best_action, error_mp)``; ``error_mp[best_action]`` is always 0.
+    """
+    realized = min(dt_eq, dp_eq)
+    doubling_correct = realized > nd_eq
+    take_is_optimal = dt_eq <= dp_eq  # opponent takes when that lowers doubler equity
+    if not doubling_correct:
+        best_action = "No double"
+    else:
+        best_action = "Double, Take" if take_is_optimal else "Double, Pass"
+
+    nd_err = max(0.0, realized - nd_eq)
+    double_err = max(0.0, nd_eq - realized)
+    response_pen = abs(dt_eq - dp_eq)
+    dt_err = double_err + (0.0 if (not doubling_correct or take_is_optimal) else response_pen)
+    dp_err = double_err + (0.0 if (not doubling_correct or not take_is_optimal) else response_pen)
+    error_mp = {
+        "No double": _to_mp(nd_err),
+        "Double, Take": _to_mp(dt_err),
+        "Double, Pass": _to_mp(dp_err),
+    }
+    return best_action, error_mp
+
+
 def parse_cube_rollout(
     text: str,
     *,
@@ -686,29 +735,19 @@ def parse_cube_rollout(
     dt_eq = float(dt.group(1))
     dp_eq = float(dp.group(1))
 
-    # Doubler's realizable equity if doubling: opponent picks the action worse
-    # for the doubler (min of take/pass). Best overall = max(no-double, double).
-    double_eq = min(dt_eq, dp_eq)
-    best_eq = max(nd_eq, double_eq)
+    # Best action + per-answer errors from the equities (authoritative, keeps
+    # error_mp[best_action] == 0). Best overall equity = max(no-double, doubling),
+    # where doubling realizes min(take, pass) under optimal opponent response.
+    best_eq = max(nd_eq, min(dt_eq, dp_eq))
+    best_action, error_mp = cube_action_errors(nd_eq, dt_eq, dp_eq)
 
+    # Cross-check against gnubg's stated action when present; the equity-derived
+    # action wins on disagreement so the error map stays self-consistent.
     bm = _CUBE_BEST_RE.search(text)
     if bm:
-        best_action = _canon_cube_action(bm.group(1))
-    else:
-        best_action = "No double" if nd_eq >= double_eq else (
-            "Double, Pass" if dp_eq < dt_eq else "Double, Take"
-        )
-
-    # Millipoint error of each named action, all >= 0. "No double" is the
-    # doubler's error (cost of not doubling); "Double, Take"/"Double, Pass" are
-    # the receiver's response errors (cost of the wrong take/pass), measured
-    # against the response that minimizes the doubler's equity.
-    best_response = min(dt_eq, dp_eq)
-    error_mp = {
-        "No double": _to_mp(max(0.0, best_eq - nd_eq)),
-        "Double, Take": _to_mp(max(0.0, dt_eq - best_response)),
-        "Double, Pass": _to_mp(max(0.0, dp_eq - best_response)),
-    }
+        stated = _canon_cube_action(bm.group(1))
+        if stated in error_mp and stated != best_action and error_mp.get(stated) == 0.0:
+            best_action = stated  # equal-equity tie gnubg broke a particular way
 
     meta = s.to_meta()
     tm = _TRIALS_RE.search(text)
