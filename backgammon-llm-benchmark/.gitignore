@@ -10,9 +10,15 @@
 positions/heldout/*
 !positions/heldout/.gitkeep
 !positions/heldout/hashes.json
+!positions/heldout/README.md
 
 # Generated images for the held-out set must not leak the private positions.
 render/images/heldout/
+
+# Encrypted held-out archives (heldout-<date>.tar.enc). The ciphertext is safe to
+# publish/back up externally; its name+sha256 are recorded in
+# data/manifests/heldout-blobs.json (committed). Kept out of git by default.
+data/heldout/
 
 # Raw self-play games can be large/regenerable intermediate artifacts.
 data/selfplay/*

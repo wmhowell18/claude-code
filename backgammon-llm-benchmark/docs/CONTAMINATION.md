@@ -19,3 +19,27 @@ Positions must be **in-distribution** (real strong play) yet **out-of-corpus**
 
 Residual, accepted risks (format familiarity, distributional leakage, public-dev
 decay) are documented in PLAN.md §2.6.
+
+## Held-out tooling (`scripts/heldout.py`)
+
+The private set's lifecycle is operationalized by `scripts/heldout.py`
+(stdlib-only; `openssl` via subprocess for encryption):
+
+- `hash` — writes `positions/heldout/hashes.json` (the only published artifact):
+  a per-record SHA-256 over canonical JSON plus a set-level manifest (count,
+  combined hash, `dataset_hash`, creation date, canary). Canonical JSON =
+  `json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`
+  UTF-8, so any third party can reproduce the hashes.
+- `verify` — recomputes from local plaintext and diffs the committed
+  `hashes.json` (nonzero exit on mismatch). `verify --results <file>` instead
+  checks that a results file's `manifest.dataset_hash` matches the committed
+  manifest — provable, offline, that a run scored against this exact set.
+- `encrypt` / `decrypt` — package the plaintext into one AES-encrypted tar for
+  backup. `openssl enc` cannot do AEAD/GCM on stock OpenSSL 3.x, so the tool
+  detects support and otherwise uses `aes-256-cbc -pbkdf2 -iter 600000`. The key
+  (`GAMMONBENCH_HELDOUT_KEY` or `--key-file`) is never written to disk; the
+  ciphertext's SHA-256 and cipher mode are recorded in
+  `data/manifests/heldout-blobs.json`.
+
+See `positions/heldout/README.md` for the full generate → hash → commit →
+encrypt workflow.
