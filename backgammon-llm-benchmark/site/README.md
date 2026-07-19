@@ -4,6 +4,73 @@ The v1 results website (PLAN.md §6). A small build step (`build.py`) reads
 `results/*.json` and renders static HTML — no backend, no database, one-way data
 flow (results JSON -> build -> static HTML). The build is stdlib-only.
 
+## Human-benchmark quiz (`human-benchmark-pilot.html`)
+
+`scripts/build_human_benchmark.py` generates a **single self-contained HTML quiz**
+that lets human panelists sit the exact same 50-position pilot set the LLMs are
+scored on, blind, producing a directly comparable **BenchPR**. Everything is
+inlined (all 50 board SVGs, CSS, JS, and the rollout answer key as a JSON blob) —
+zero network requests — so the file can be emailed and opened locally.
+
+```bash
+# Generate site/public/human-benchmark-pilot.html (stdlib only):
+python3 scripts/build_human_benchmark.py
+
+# Options:
+#   --out PATH          output file (default: site/public/human-benchmark-pilot.html)
+#   --timestamp "..."   fixed ISO manifest timestamp (default: now, UTC)
+```
+
+### What the panelist sees
+
+- An intro screen (instructions + a name/identifier field + a blind-test notice).
+- One position at a time with a `Position N / 50` progress bar, deterministic
+  order (sorted by `position_id`). Every diagram is shown from the on-roll
+  player's perspective — **the panelist is always `X`** (the light checkers).
+  The generator normalises each record to the mover frame before rendering: a
+  record stored with `turn == "o"` is the color-flipped (opponent's-view) form
+  (`bgcore.board.flip`), so it is flipped back — the board SVG is re-rendered and
+  the pips / score / cube-owner are recomputed — so the displayed `X` is always
+  the player the rollout move list is for. Shown: the board SVG, dice (checker
+  decisions only — cube records carry no dice), cube value/owner, money-vs-match
+  + score, and pip counts. Tier, phase, expected-loss and other difficulty/answer
+  hints are **not** shown.
+- Checker decisions take a free-text move in standard notation (a JS port of
+  `bgcore/notation.py` normalises it — reordered plays, `*` hits, `(n)` repeats,
+  `bar/`/`/off`). A move that reaches the same position spelled differently (e.g.
+  naming a single checker's intermediate point, `13/10/9` for `13/9`) also matches
+  via a pre-computed endpoint map (mirrors `bgcore.moves.moves_equivalent`).
+  Unrecognised input warns once, then may be submitted anyway.
+- Cube decisions are buttons for exactly the actions the record poses
+  (`No double` / `Double, Take` / `Double, Pass`).
+- No going back; answers persist to `localStorage` (keyed by `position_id`), so a
+  tab close doesn't lose progress.
+- A results screen reveals ground truth **only at the end**: total BenchPR, mean
+  equity loss, best-move accuracy, per-tier (T1–T4) and per-decision-type
+  breakdowns, a per-position review (answer vs. best move + equity loss), and a
+  **Download results JSON** button.
+
+### Scoring (mirrors `harness/scoring.py`)
+
+`BenchPR = 500 × mean(equity_loss)`, `equity_loss = error_mp / 1000` (equity
+points). A checker answer is matched against the rollout move list by canonical
+notation, then (if no direct hit) by resulting-position equivalence via the
+endpoint map; `is_best` iff the matched `error_mp` is zero. Unmatched or
+unparseable answers are scored as the **worst listed move** (PLAN §4.6). A cube
+answer reads the chosen action's `error_mp` directly.
+
+### Workflow
+
+1. **Generate** the file (above) and verify it opens.
+2. **Send** `site/public/human-benchmark-pilot.html` to panelists (email/attach).
+3. Each panelist completes it and clicks **Download results JSON**
+   (`human-panel_<name>_text.json`, shaped like `tests/fixtures/human-panel_text.json`:
+   `kind: "human"`, `model: "human-panel/<name>"`, `track: "text"`).
+4. **Collect** the returned JSONs and drop them into `results/`. They are picked
+   up by `build.py` as measured human-panel baselines (`kind: "human"`) —
+   excluded from the ranked model list, badged `human`, and plotted as the
+   north-star reference points.
+
 ## Build
 
 ```bash
