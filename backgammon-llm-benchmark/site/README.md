@@ -29,11 +29,14 @@ The intro screen offers two modes (persisted in the saved state and recorded in
 the exported results JSON as a top-level `mode` field):
 
 - **Practice — feedback after each answer** (default). After every submission the
-  quiz shows a feedback panel *before advancing*: whether the answer was best, the
-  engine's best play/action, the panelist's equity loss in millipoints, the rank
-  of their choice among the rollout's listed moves/actions, and — for checker
-  decisions — the board redrawn with the best play applied. A **Next position**
-  button advances. Good for learning.
+  quiz shows a feedback panel *before advancing*: a best/not-best verdict, the
+  panelist's equity loss in millipoints, and a ranked breakdown — the **top three
+  rollout moves** with their equity loss (best = 0.0), or for a cube decision **all
+  three actions** with their equity error, with the best row tagged and the
+  panelist's own row highlighted. If the panelist's move falls outside the top
+  three it is appended as its own highlighted row (so you always see how your move
+  ranked, not just "best/not best"). Checker feedback also redraws the board with
+  the engine's best play applied. A **Next position** button advances.
 - **Blind panel run — results only at the end**. The original protocol: no engine
   ground truth is shown until all 50 positions are done. Use this for a clean
   benchmark run. (The mode is locked once a run has any answers; "Start over"
@@ -59,17 +62,25 @@ Both modes end on the same results screen and export the same results JSON shape
   "Black". Shown: the board SVG, dice (checker decisions only — cube records
   carry no dice), cube value/owner, money-vs-match + score, and pip counts. Tier,
   phase, expected-loss and other difficulty/answer hints are **not** shown.
-- Checker decisions are composed by **clicking checkers** on the live board: the
-  engine (a JS port of `bgcore/moves.py`'s single-die hop rules) highlights legal
-  destinations and only enables **Submit play** once the composed sequence reaches
-  a legal full-move signature enumerated at build time (`Undo` / `Reset`
-  available). A collapsed secondary **"Prefer to type the move?"** panel still
-  accepts free-text notation (JS port of `bgcore/notation.py` — reordered plays,
-  `*` hits, `(n)` repeats, `bar/`/`/off`) with live legality validation; a move
-  that reaches the same position spelled differently (e.g. a single checker's
-  intermediate point, `10/4/3` for `10/3`) matches via a pre-computed endpoint map
-  and resulting-position fallback (mirrors `bgcore.moves.moves_equivalent`).
-  Unrecognised typed input warns once, then may be submitted anyway.
+- Checker decisions use **one-click auto-move** (backgammonhub-style), a JS port of
+  `bgcore/moves.py`'s single-die hop rules. The two dice are shown left-to-right in
+  the order they will be played; **clicking a checker moves it immediately by the
+  next unused die** (left die first, then the next). Exceptions: if the checker can
+  legally-and-completably move by only one of the remaining dice, that die is played
+  regardless of order and the dice display **reorders** to match what happened; a
+  checker that can't extend to any full legal move gives a subtle **shake** rather
+  than a silent no-op. Bar entry, hits and bear-off follow the same one-click rule.
+  **Tap the dice to swap their order** (moot for doubles, which show four pips that
+  fade one per use); a played die is drawn smaller and faded, and **Undo** un-spends
+  it (`Reset` clears the whole move). **Submit play** enables once the composed
+  sequence reaches a legal full-move signature enumerated at build time. A collapsed
+  secondary **"Prefer to type the move?"** panel still accepts free-text notation
+  (JS port of `bgcore/notation.py` — reordered plays, `*` hits, `(n)` repeats,
+  `bar/`/`/off`) with live legality validation; a move that reaches the same
+  position spelled differently (e.g. a single checker's intermediate point, `10/4/3`
+  for `10/3`) matches via a pre-computed endpoint map and resulting-position
+  fallback (mirrors `bgcore.moves.moves_equivalent`). Unrecognised typed input warns
+  once, then may be submitted anyway.
 - Cube decisions are buttons for exactly the actions the record poses
   (`No double` / `Double, Take` / `Double, Pass`).
 - No going back; answers persist to `localStorage`, so a tab close doesn't lose
