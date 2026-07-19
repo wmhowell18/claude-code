@@ -470,7 +470,14 @@ code { background: var(--chip); padding: 1px 5px; border-radius: 4px; font-size:
 
 /* interactive board engine */
 .bgboard.interactive .hit { cursor: pointer; }
-.bgboard .destdot { pointer-events: none; }
+/* subtle rejection feedback when a clicked checker cannot move */
+.board-wrap.shake { animation: bg-shake .42s cubic-bezier(.36,.07,.19,.97) both; }
+@keyframes bg-shake {
+  10%, 90% { transform: translateX(-2px); }
+  20%, 80% { transform: translateX(4px); }
+  30%, 50%, 70% { transform: translateX(-7px); }
+  40%, 60% { transform: translateX(7px); }
+}
 .cb-controls { margin: 6px 0 2px; }
 .cb-status { margin: 2px 0 6px; }
 .cb-move { margin: 6px 0 10px; font-size: 1.05rem; }
@@ -502,6 +509,17 @@ code { background: var(--chip); padding: 1px 5px; border-radius: 4px; font-size:
 .fb-v { font-weight: 600; font-variant-numeric: tabular-nums; }
 .errbox { background: var(--chip); border: 1px solid var(--line); border-radius: 8px;
   padding: 12px; overflow-x: auto; white-space: pre-wrap; font-size: .82rem; color: var(--bad); }
+/* feedback top-moves table */
+.fb-table { border-collapse: collapse; width: 100%; margin: 8px 0 4px; font-size: .92rem; }
+.fb-table th, .fb-table td { padding: 7px 9px; border-bottom: 1px solid var(--line); text-align: left; }
+.fb-table td.num, .fb-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.fb-table tr.fb-user td { background: var(--chip); font-weight: 700; }
+.fb-table tr.fb-user td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.fb-tag { display: inline-block; font-size: .72rem; font-weight: 700; border-radius: 999px;
+  padding: 1px 8px; margin-left: 6px; border: 1px solid var(--line); }
+.fb-tag.best { color: var(--ok); border-color: var(--ok); }
+.fb-tag.you { color: var(--accent); border-color: var(--accent); }
+.fb-sep td { border-top: 2px solid var(--line); }
 """
 
 _JS = r"""
@@ -770,7 +788,6 @@ var BYTOP = 90, BYBOT = 610, BPTH = 210, BCR = 24;
 var C_BG = "#14110f", C_BOARD = "#3a2c22", C_PT_A = "#c9a06a", C_PT_B = "#7a5a3c", C_BAR = "#241a12";
 var C_X = "#ffffff", C_X_EDGE = "#8a8a8a", C_O = "#000000", C_O_EDGE = "#5a5a5a";
 var C_TEXT = "#f2ead9", C_DIE = "#f4efe6", C_PIP = "#1a1a1a";
-var C_SEL = "#f2c14e", C_DEST = "#5bbf6a";
 var BTOP = [13,14,15,16,17,18,19,20,21,22,23,24];
 var BBOT = [12,11,10,9,8,7,6,5,4,3,2,1];
 var _PIP_LAYOUT = { 1:[[1,1]], 2:[[0,0],[2,2]], 3:[[0,0],[1,1],[2,2]],
@@ -861,18 +878,34 @@ function renderBoardSVG(bd, view){
   s.push('<rect x="'+bf(BX0-6)+'" y="'+bf(cubeY)+'" width="54" height="54" rx="8" fill="#e8e2d2" stroke="#000" stroke-width="2"/>');
   s.push('<text x="'+bf(BX0-6+27)+'" y="'+bf(cubeY+36)+'" text-anchor="middle" font-family="monospace" font-size="26" fill="#1a1a1a">'+cubeVal+'</text>');
 
-  /* dice or cube marker */
+  /* dice or cube marker. When interactive, dice are drawn in PLAY ORDER
+     (view.order) left-to-right; already-played dice (index < view.usedCount) are
+     drawn smaller and faded. Doubles are shown as up to four pips in a row so
+     per-use fading is visible. A swappable pair carries a clickable hit box. */
+  var diceHitBox = null;
   if(bd.dice && bd.dice.length === 2){
-    var dx = barLeft() + BBARW + 3 * BCOLW, dy = (BYTOP+BYBOT)/2 - 27;
-    var rem = view.remaining, d0 = bd.dice[0], d1 = bd.dice[1], usedMask = [false, false];
-    if(rem){
-      if(d0 === d1){ usedMask = [rem.length < 2, rem.length < 1]; }
-      else { var pool = rem.slice(); function take(v){ var k = pool.indexOf(v); if(k>=0){ pool.splice(k,1); return true;} return false; }
-             usedMask[0] = !take(d0); usedMask[1] = !take(d1); }
+    var dy = (BYTOP+BYBOT)/2 - 27;
+    var dxBase = barLeft() + BBARW + 3 * BCOLW;
+    var isDoubles = bd.dice[0] === bd.dice[1];
+    var order = view.order || (isDoubles ? [bd.dice[0], bd.dice[0], bd.dice[0], bd.dice[0]] : [bd.dice[0], bd.dice[1]]);
+    var usedCount = view.usedCount || 0;
+    if(isDoubles){
+      var gap = 42;
+      for(var di = 0; di < order.length; di++){
+        var spent = di < usedCount, sz = spent ? 30 : 42;
+        s.push('<g'+(spent?' opacity="0.34"':'')+'>'+svgDie(dxBase + di*gap + (42-sz)/2, dy + (54-sz)/2, order[di], sz)+'</g>');
+      }
+      diceHitBox = { x: dxBase - 6, y: dy - 6, w: (order.length-1)*gap + 42 + 12, h: 66 };
+    } else {
+      for(var dj = 0; dj < 2; dj++){
+        var sp = dj < usedCount, s2 = sp ? 40 : 54, x2 = dxBase + dj*70;
+        s.push('<g'+(sp?' opacity="0.34"':'')+'>'+svgDie(x2 + (54-s2)/2, dy + (54-s2)/2, order[dj], s2)+'</g>');
+      }
+      diceHitBox = { x: dxBase - 6, y: dy - 6, w: 70 + 54 + 12, h: 66 };
     }
-    s.push('<g'+(usedMask[0]?' opacity="0.32"':'')+'>'+svgDie(dx, dy, d0)+'</g>');
-    s.push('<g'+(usedMask[1]?' opacity="0.32"':'')+'>'+svgDie(dx+70, dy, d1)+'</g>');
-    if(d0 === d1 && rem){ s.push(svgText(dx+62, dy-10, "x"+rem.length, 18, "middle", "bold")); }
+    if(view.interactive && view.diceSwappable){
+      s.push(svgText(dxBase + (isDoubles ? (order.length-1)*42+42 : 124)/2, dy + 78, "⇄ tap dice to swap order", 15, "middle"));
+    }
   } else {
     var lbl = (view.diceLabel !== undefined) ? view.diceLabel : "[cube decision]";
     if(lbl) s.push(svgText(barLeft() + BBARW + 3 * BCOLW, (BYTOP+BYBOT)/2, lbl, 20));
@@ -888,23 +921,9 @@ function renderBoardSVG(bd, view){
   s.push(svgText(playRight, 66, "White pip " + px + "  (White on roll)", 20, "end"));
   s.push('<polygon points="'+bf(BX0-20)+','+bf(BYBOT-20)+' '+bf(BX0-20)+','+bf(BYBOT)+' '+bf(BX0-4)+','+bf(BYBOT-10)+'" fill="'+C_X+'"/>');
 
-  /* -- interactive overlay -- */
+  /* -- interactive overlay (one-click auto-move: clicks act immediately, so there
+        is no selected-source ring or destination-marker layer) -- */
   if(view.interactive){
-    /* selected-source ring */
-    if(view.selected !== null && view.selected !== undefined){
-      if(view.selected === "bar"){ s.push('<circle cx="'+bf(barcx)+'" cy="'+bf(BYBOT-40)+'" r="'+(BCR+5)+'" fill="none" stroke="'+C_SEL+'" stroke-width="4"/>'); }
-      else { var sn = 25 - view.selected, sr = pointColumn(sn); var scx = colX(sr[0]) + BCOLW/2;
-        var scount = Math.abs(points[view.selected]); var syi = Math.min(scount, 5) - 1; if(syi < 0) syi = 0;
-        s.push('<circle cx="'+bf(scx)+'" cy="'+bf(stackY(sr[1], syi))+'" r="'+(BCR+5)+'" fill="none" stroke="'+C_SEL+'" stroke-width="4"/>'); }
-    }
-    /* destination markers (visual only; pointer-events off so the hit layer wins) */
-    var hl = view.highlights || {};
-    for(var key in hl){ if(!hl.hasOwnProperty(key)) continue;
-      if(key === "off"){ s.push('<circle class="destdot" cx="'+bf(trayx)+'" cy="'+bf(BYBOT-20-offX*14)+'" r="14" fill="'+C_DEST+'" fill-opacity="0.85" stroke="#fff" stroke-width="2"/>'); }
-      else { var dn = 25 - parseInt(key,10), dr = pointColumn(dn); var dcx = colX(dr[0]) + BCOLW/2;
-        var dv = points[parseInt(key,10)]; var slot = dv > 0 ? dv : 0;
-        s.push('<circle class="destdot" cx="'+bf(dcx)+'" cy="'+bf(stackY(dr[1], slot))+'" r="'+(BCR-2)+'" fill="'+C_DEST+'" fill-opacity="0.55" stroke="#fff" stroke-width="3"/>'); }
-    }
     /* clickable hit regions LAST so they sit above every visual layer. Top and
        bottom points share a column, so each gets only its own half-height band. */
     var midY = (BYTOP + BYBOT) / 2, halfH = midY - BYTOP;
@@ -913,6 +932,8 @@ function renderBoardSVG(bd, view){
       s.push('<rect class="hit" data-bi="'+(25-n)+'" x="'+bf(cx0)+'" y="'+bf(hy)+'" width="'+BCOLW+'" height="'+bf(halfH)+'" fill="transparent"/>'); }
     s.push('<rect class="hit" data-bi="bar" x="'+bf(barLeft())+'" y="'+BYTOP+'" width="'+BBARW+'" height="'+bf(BYBOT-BYTOP)+'" fill="transparent"/>');
     s.push('<rect class="hit" data-bi="off" x="'+bf(playRight+10)+'" y="'+BYTOP+'" width="'+BTRAYW+'" height="'+bf(BYBOT-BYTOP)+'" fill="transparent"/>');
+    if(view.diceSwappable && diceHitBox){
+      s.push('<rect class="hit" data-bi="dice" x="'+bf(diceHitBox.x)+'" y="'+bf(diceHitBox.y)+'" width="'+bf(diceHitBox.w)+'" height="'+bf(diceHitBox.h)+'" fill="transparent"/>'); }
   }
 
   s.push("</svg>");
@@ -920,7 +941,6 @@ function renderBoardSVG(bd, view){
 }
 
 /* -- move engine: single-die hops in the board-index frame (ports bgcore/moves) -- */
-function expandDice(dice){ if(dice.length === 2 && dice[0] === dice[1]) return [dice[0], dice[0], dice[0], dice[0]]; return dice.slice(); }
 function allHomeJS(points, barX){ if(barX > 0) return false; for(var i = 1; i < 19; i++){ if(points[i] > 0) return false; } return true; }
 function legalHops(st, d){
   var points = st.points, barX = st.barX, hops = [];
@@ -973,23 +993,27 @@ function formatHopsJS(hops){
   return uniq.map(function(t){ var n = cnt[t]; return n > 1 ? (t + "(" + n + ")") : t; }).join(" ");
 }
 
-/* Interactive click-to-move controller. Mounts into `wrap` (board) + `ctrl`
-   (controls), calls onComplete(canonicalNotation) when a full legal play is
+/* Interactive ONE-CLICK auto-move controller (backgammonhub-style). Mounts into
+   `wrap` (board) + `ctrl` (controls). A click on a checker plays it immediately by
+   the next unused die (in the visible left-to-right dice order); tapping the dice
+   swaps that order. calls onSubmit(canonicalNotation) once a full legal play is
    composed and the panelist submits. */
 function ClickBoard(pos, wrap, ctrl, onSubmit){
   var init = pos.board;
   var targets = {}; for(var t = 0; t < pos.legal.length; t++){ targets[pos.legal[t].s] = pos.legal[t].n; }
   var hasLegal = pos.legal.length > 0;
-  var live, remaining, used, selected, highlights;
+  var isDoubles = init.dice.length === 2 && init.dice[0] === init.dice[1];
+  var live, order, used;
 
   function initLive(){ return { points: init.points.slice(), barX: init.bar.x, barO: init.bar.o, offX: init.off.x, offO: init.off.o }; }
-  function rebuild(){
-    live = initLive(); remaining = expandDice(init.dice); selected = null;
-    for(var i = 0; i < used.length; i++){ live = applyHop(live, used[i]); var idx = remaining.indexOf(used[i].die); if(idx >= 0) remaining.splice(idx, 1); }
-  }
-  function reset(){ used = []; rebuild(); }
+  function initOrder(){ return isDoubles ? [init.dice[0], init.dice[0], init.dice[0], init.dice[0]] : [init.dice[0], init.dice[1]]; }
+  function rebuildLive(){ live = initLive(); for(var i = 0; i < used.length; i++){ live = applyHop(live, used[i]); } }
+  function reset(){ used = []; order = initOrder(); rebuildLive(); }
+
   function currentSig(){ return sigOf(live); }
   function isComplete(){ return hasLegal ? !!targets[currentSig()] : false; }
+  function unusedDice(){ return order.slice(used.length); }   /* die values not yet played, in display order */
+
   /* Canonical string to display / submit for a completed play: prefer the rollout
      move's spelling when the composed play resolves to one (e.g. a bear-in double
      "14/6" rather than the raw hop chain "14/12/10/8/6") — scores identically. */
@@ -999,33 +1023,56 @@ function ClickBoard(pos, wrap, ctrl, onSubmit){
     return (res && res.matched) ? res.matched : raw;
   }
 
-  function computeHighlights(){
-    highlights = {};
-    if(selected === null) return;
-    var seen = {};
-    for(var i = 0; i < remaining.length; i++){ var d = remaining[i]; if(seen[d]) continue; seen[d] = 1;
-      var hops = legalHops(live, d);
-      for(var k = 0; k < hops.length; k++){ var h = hops[k]; if(h.frm !== selected) continue;
-        var ns = applyHop(live, h); var rem = remaining.slice(); rem.splice(rem.indexOf(d), 1);
-        if(reachTarget(ns, rem, targets)){ highlights[h.to === "off" ? "off" : String(h.to)] = h; } } }
+  /* the single-die hop from source `src` for die value `d`, or null */
+  function hopFrom(src, d){
+    var hops = legalHops(live, d);
+    for(var k = 0; k < hops.length; k++){ if(hops[k].frm === src) return hops[k]; }
+    return null;
   }
-  /* a board point / bar is a valid *source* if selecting it exposes >=1 dest */
-  function sourceHasMove(bi){
-    var save = selected; selected = bi; computeHighlights(); var any = false;
-    for(var k in highlights){ if(highlights.hasOwnProperty(k)){ any = true; break; } }
-    selected = save; computeHighlights(); return any;
+  /* Pick the die to play when `src` is clicked: the earliest unused die (display
+     order) whose hop is legal AND keeps a full embedded legal move reachable
+     (completability). This subsumes the single-legal-die exception — if the next
+     die can't legally/completably move this checker, the other die is used. */
+  function pickDie(src){
+    var unused = unusedDice(), seen = {};
+    for(var i = 0; i < unused.length; i++){
+      var d = unused[i]; if(seen[d]) continue; seen[d] = 1;
+      var hop = hopFrom(src, d); if(!hop) continue;
+      var ns = applyHop(live, hop);
+      var rem = unused.slice(); rem.splice(rem.indexOf(d), 1);
+      if(reachTarget(ns, rem, targets)) return { die: d, hop: hop };
+    }
+    return null;
+  }
+  function playPicked(pick){
+    /* reorder so the played die sits at the head of the unused run — the visible
+       order then reflects what actually happened (single-legal-die reordering) */
+    var j = order.indexOf(pick.die, used.length);
+    if(j > used.length){ order.splice(j, 1); order.splice(used.length, 0, pick.die); }
+    used.push(pick.hop); live = applyHop(live, pick.hop);
   }
 
-  function playHop(h){ used.push(h); live = applyHop(live, h); var idx = remaining.indexOf(h.die); if(idx >= 0) remaining.splice(idx, 1); selected = null; }
+  /* subtle rejection: brief shake of the board (no silent no-op) */
+  function reject(){ if(!wrap) return; wrap.classList.add("shake"); setTimeout(function(){ if(wrap) wrap.classList.remove("shake"); }, 420); }
+
+  function trySwap(){
+    if(isDoubles || used.length !== 0) return;   /* order is moot once a die is spent / for doubles */
+    var tmp = order[0]; order[0] = order[1]; order[1] = tmp; paint();
+  }
 
   function onHit(bi){
-    if(isComplete()) return;
-    if(selected !== null){ var key = (bi === "off") ? "off" : String(bi);
-      if(highlights[key]){ playHop(highlights[key]); paint(); return; } }
-    if(live.barX > 0){ selected = (selected === "bar") ? null : (sourceHasMove("bar") ? "bar" : null); }
-    else if(typeof bi === "number" && live.points[bi] > 0){ selected = (selected === bi) ? null : (sourceHasMove(bi) ? bi : null); }
-    else { selected = null; }
-    paint();
+    if(isComplete()) return;                 /* full move composed — submit or undo */
+    if(bi === "dice"){ trySwap(); return; }
+    var src;
+    if(live.barX > 0){
+      if(bi !== "bar"){ reject(); return; }  /* bar entry has priority */
+      src = "bar";
+    } else if(typeof bi === "number" && live.points[bi] > 0){
+      src = bi;
+    } else { return; }                       /* empty / opponent point / tray — no-op */
+    var pick = pickDie(src);
+    if(!pick){ reject(); return; }           /* this checker can't move with any remaining die */
+    playPicked(pick); paint();
   }
 
   function composedText(){
@@ -1035,16 +1082,16 @@ function ClickBoard(pos, wrap, ctrl, onSubmit){
   }
 
   function paint(){
-    computeHighlights();
     var bd = { points: live.points, bar: {x: live.barX, o: live.barO}, off: {x: live.offX, o: live.offO},
       dice: init.dice, cube: init.cube, score: init.score };
-    wrap.innerHTML = renderBoardSVG(bd, { interactive: true, selected: selected, highlights: highlights, remaining: remaining });
+    var swappable = hasLegal && !isDoubles && used.length === 0;
+    wrap.innerHTML = renderBoardSVG(bd, { interactive: true, order: order, usedCount: used.length, diceSwappable: swappable });
     var svg = wrap.querySelector("svg");
     svg.addEventListener("click", function(e){
       var node = e.target; while(node && node !== svg && !(node.getAttribute && node.getAttribute("data-bi") !== null && node.getAttribute("data-bi") !== undefined)) node = node.parentNode;
       if(!node || node === svg) return;
       var raw = node.getAttribute("data-bi"); if(raw === null) return;
-      onHit(raw === "bar" || raw === "off" ? raw : parseInt(raw, 10));
+      onHit(raw === "bar" || raw === "off" || raw === "dice" ? raw : parseInt(raw, 10));
     });
     renderControls();
   }
@@ -1058,9 +1105,11 @@ function ClickBoard(pos, wrap, ctrl, onSubmit){
       ctrl.appendChild(el("div", { class: "btn-row" }, [pb]));
       return;
     }
-    var status = selected === null
-      ? (used.length ? "Click another White checker to keep moving, or Undo." : "Click one of your White checkers to move it.")
-      : "Now click a highlighted point (or the same checker to deselect).";
+    var status = isComplete()
+      ? "Move complete — Submit, or Undo to change it."
+      : (used.length
+          ? ("Click another checker to play the next die" + (isDoubles ? "." : ", or tap the dice to swap the order."))
+          : ("Click a checker to move it by the left-hand die" + (isDoubles ? "." : "; tap the dice to swap which die plays first.")));
     ctrl.appendChild(el("div", { class: "cb-status small muted", text: status }));
     ctrl.appendChild(el("div", { class: "cb-move" }, [
       el("span", { class: "small muted", text: "Your play: " }),
@@ -1068,7 +1117,7 @@ function ClickBoard(pos, wrap, ctrl, onSubmit){
     ]));
     var undo = el("button", { class: "btn secondary", text: "Undo" });
     undo.disabled = used.length === 0;
-    undo.onclick = function(){ used.pop(); rebuild(); paint(); };
+    undo.onclick = function(){ used.pop(); rebuildLive(); paint(); };
     var rst = el("button", { class: "btn secondary", text: "Reset" });
     rst.disabled = used.length === 0;
     rst.onclick = function(){ reset(); paint(); };
@@ -1205,7 +1254,8 @@ function screenPosition(idx){
   var title = pos.decision_type === "cube"
     ? el("p", { html: "<b>You are White, on roll.</b> It is your cube decision — what is your action?" })
     : el("p", { html: "<b>You are White, on roll.</b> You rolled <b>" +
-        (pos.dice.length === 2 ? pos.dice[0] + "-" + pos.dice[1] : "?") + "</b>. Click your checkers to compose your play." });
+        (pos.dice.length === 2 ? pos.dice[0] + "-" + pos.dice[1] : "?") + "</b>. Click a checker to move it by the next die" +
+        (pos.dice.length === 2 && pos.dice[0] !== pos.dice[1] ? "; tap the dice to swap their order." : ".") });
 
   var panel = el("div", { class: "panel" }, [head, boardWrap, title, contextChips(pos)]);
 
@@ -1310,21 +1360,61 @@ function routeToNext(){
 }
 
 /* ---- per-answer feedback (practice mode) ---- */
-function moveRank(pos, moveStr){
-  if(!moveStr || !pos.moves) return null;
-  var canon = canonicalizeMove(moveStr);
-  for(var i = 0; i < pos.moves.length; i++){
-    if(pos.moves[i].move === moveStr || pos.moves[i].canonical === canon) return pos.moves[i].rank;
-  }
-  return null;
+function fbTag(cls, text){ return el("span", { class: "fb-tag " + cls, text: text }); }
+function fbTh(cells){
+  return el("tr", {}, cells.map(function(c){ return el("th", { class: c.num ? "num" : "", text: c.t }); }));
 }
-function cubeRank(pos, label){
-  /* 1-based rank of an action among the posed options, ascending by error. */
-  var order = pos.options.slice().sort(function(a, b){
-    return (pos.error_mp[a] || 0) - (pos.error_mp[b] || 0);
-  });
-  var k = order.indexOf(label);
-  return k >= 0 ? (k + 1) : null;
+/* one move/action row: label cell (with best/you tags) + numeric loss cell */
+function fbRow(rankLabel, moveEl, lossMp, opts){
+  opts = opts || {};
+  var cls = (opts.user ? "fb-user " : "") + (opts.sep ? "fb-sep " : "");
+  var cells = [];
+  if(rankLabel !== null) cells.push(el("td", { text: rankLabel }));
+  cells.push(el("td", {}, moveEl));
+  cells.push(el("td", { class: "num", text: fmt(lossMp, 1) + " mpt" }));
+  return el("tr", { class: cls.trim() }, cells);
+}
+/* Top-3 rollout moves (+ the user's move if it falls outside the top 3). */
+function fbTopMovesTable(pos, a){
+  var moves = (pos.moves || []).slice().sort(function(x, y){ return (x.rank || 999) - (y.rank || 999); });
+  var userMatched = a.matched;
+  var trs = [ fbTh([{t: "Rank"}, {t: "Move"}, {t: "Equity loss", num: true}]) ];
+  var top = moves.slice(0, 3), userInTop = false;
+  for(var i = 0; i < top.length; i++){
+    var m = top[i];
+    var isUser = !!(userMatched && m.move === userMatched);
+    if(isUser) userInTop = true;
+    var isBest = m.error_mp <= EPS_MP;
+    var cell = [ document.createTextNode(m.move) ];
+    if(isBest) cell.push(fbTag("best", "best"));
+    if(isUser) cell.push(fbTag("you", "you"));
+    trs.push(fbRow("#" + m.rank, cell, m.error_mp, { user: isUser }));
+  }
+  if(!userInTop){
+    var um = null;
+    if(userMatched){ for(var j = 0; j < moves.length; j++){ if(moves[j].move === userMatched){ um = moves[j]; break; } } }
+    if(um){
+      trs.push(fbRow("#" + um.rank, [ document.createTextNode(um.move), fbTag("you", "you") ], um.error_mp, { user: true, sep: true }));
+    } else {
+      var lbl = a.chosen + (a.parse_failed ? " (not a listed move)" : "");
+      trs.push(fbRow("—", [ document.createTextNode(lbl), fbTag("you", "you") ], a.equity_loss * MP_PER_POINT, { user: true, sep: true }));
+    }
+  }
+  return el("table", { class: "fb-table" }, trs);
+}
+/* All three cube actions with their equity error; user's choice highlighted. */
+function fbCubeTable(pos, a){
+  var order = pos.options.slice().sort(function(x, y){ return (pos.error_mp[x] || 0) - (pos.error_mp[y] || 0); });
+  var trs = [ fbTh([{t: "Action"}, {t: "Equity error", num: true}]) ];
+  for(var i = 0; i < order.length; i++){
+    var lbl = order[i], err = pos.error_mp[lbl] || 0;
+    var isUser = lbl === a.chosen, isBest = err <= EPS_MP;
+    var cell = [ document.createTextNode(lbl) ];
+    if(isBest) cell.push(fbTag("best", "best"));
+    if(isUser) cell.push(fbTag("you", "you"));
+    trs.push(fbRow(null, cell, err, { user: isUser }));
+  }
+  return el("table", { class: "fb-table" }, trs);
 }
 
 function screenFeedback(idx){
@@ -1354,17 +1444,13 @@ function screenFeedback(idx){
   rows.push(el("div", { class: "fb-row" }, [ el("span", { class: "fb-k", text: "Your equity loss" }),
     el("span", { class: "fb-v", text: fmt(lossMp, 1) + " mpt" + (isBest ? "  (0 — best)" : "") }) ]));
 
-  var rank = pos.decision_type === "cube" ? cubeRank(pos, a.chosen) : moveRank(pos, a.matched);
-  var nlisted = pos.decision_type === "cube" ? pos.options.length : (pos.moves ? pos.moves.length : 0);
-  if(rank){
-    rows.push(el("div", { class: "fb-row" }, [ el("span", { class: "fb-k", text: "Rank of your choice" }),
-      el("span", { class: "fb-v", text: "#" + rank + " of " + nlisted + (pos.decision_type === "cube" ? " actions" : " listed moves") }) ]));
-  } else if(pos.decision_type === "checker") {
-    rows.push(el("div", { class: "fb-row" }, [ el("span", { class: "fb-k", text: "Rank of your choice" }),
-      el("span", { class: "fb-v", text: "not among the " + nlisted + " listed moves" }) ]));
-  }
-
   var kids = [head, verdict, el("div", { class: "fb-grid" }, rows)];
+
+  /* Full ranked breakdown: top-3 rollout moves (or all three cube actions), the
+     user's row highlighted; if their move isn't shown it's appended below. */
+  kids.push(el("h2", { class: "small", text: pos.decision_type === "cube"
+    ? "All cube actions (equity error)" : "Top rollout moves (equity loss)" }));
+  kids.push(pos.decision_type === "cube" ? fbCubeTable(pos, a) : fbTopMovesTable(pos, a));
 
   /* Checker: redraw the board with the engine's best play applied (if resolvable). */
   if(pos.decision_type === "checker" && pos.best_after){
