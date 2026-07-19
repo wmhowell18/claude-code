@@ -8,12 +8,16 @@ mover frame (``render/svg.py``) and emits ONE fully self-contained HTML file at
 zero network requests — so it can be emailed to panelists and opened locally.
 
 The page presents each position blind (no engine ground truth until the end),
-one at a time, from the on-roll player's perspective (always ``X`` / the light
-checkers). Records are stored so that positive ("x") checkers are the mover ONLY
-when ``turn == "x"``; a ``turn == "o"`` record is the color-flipped opponent's
-view (``bgcore.board.flip``), so it is flipped back to mover-relative before the
-SVG is rendered and the pip/score/cube-owner fields are read — otherwise the
-diagram would show the wrong side on roll and every answer would score as worst.
+one at a time, from the on-roll player's perspective. The panelist always plays
+the **White** checkers (the opponent is Black). ``board_json`` is authoritative
+and already mover-relative — positive ("x") checkers are the player on roll,
+confirmed by both id codecs (``ids/xgid.py``, ``ids/gnubg_id.py``) — so its cube
+owner / score / pips are read as-is (see :func:`_display_board`). Cube decisions
+are never color-flipped. A subset of the pilot's checker rollouts were computed
+in the color-mirror frame; those positions are presented as ``flip(board_json)``
+(a legal, symmetric equivalent, on-roll player still White) so the diagram stays
+consistent with the answer key. White/black is drawn by pushing render/svg.py's
+mover/opponent checker fills to true white/black.
 
 Answers are scored like ``harness/scoring.py``:
 
@@ -38,6 +42,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 
@@ -68,20 +73,67 @@ def _canonical(move: str) -> str:
         return move.strip()
 
 
-def _mover_board(board_json: dict) -> Board:
-    """Return the board in the *on-roll player's* mover-relative frame.
+def _display_board(rec: dict, rollout: dict) -> Board:
+    """Return the board to render/score, in the on-roll player's frame.
 
-    Position records are stored so that positive checkers ("x") are the mover
-    ONLY when ``turn == "x"``; a ``turn == "o"`` record is the color-flipped
-    (opponent's-view) form produced by :func:`bgcore.board.flip`, so the actual
-    player on roll is the negative ("o") checkers. The rollout move list and the
-    quiz's "you are X, on roll" framing are both in the mover frame, so we flip
-    ``turn == "o"`` records back to mover-relative before rendering / scoring.
+    ``board_json`` is authoritative and already mover-relative: positive ("x")
+    checkers are the player on roll (confirmed by both the XGID and gnubg-id
+    codecs — ``ids/xgid.py`` and ``ids/gnubg_id.py`` decode board_json's points
+    with the on-roll player positive, regardless of the ``turn`` *seat* label).
+    So the cube owner / score / pips in ``board_json`` are ALREADY correct from
+    the on-roll player's view and must NOT be color-flipped.
+
+    Cube decisions therefore never flip. For checker decisions, a subset of the
+    pilot's ``rollouts/gnubg`` move lists were computed in the color-mirror frame
+    (a data quirk: the moves are legal only on ``flip(board_json)``). For those we
+    present ``flip(board_json)`` — a legal, color-symmetric equivalent position in
+    which the on-roll player is again "x" — so the diagram the panelist plays is
+    consistent with the answer key. The frame is chosen per position by which
+    orientation actually makes the rollout's moves legal (board_json wins ties).
     """
-    b = Board.from_json(board_json)
-    if b.turn == "o":
-        b = flip(b)
-    return b
+    b = Board.from_json(rec["board_json"])
+    if rec["decision_type"] == "cube":
+        return b
+    moves = (rollout.get("checker") or {}).get("moves") or []
+
+    def n_legal(bd: Board) -> int:
+        c = 0
+        for m in moves:
+            mv = m.get("move")
+            if not mv:
+                continue
+            try:
+                if bgmoves.is_legal(bd, mv):
+                    c += 1
+            except Exception:  # noqa: BLE001
+                pass
+        return c
+
+    fb = flip(b)
+    return fb if n_legal(fb) > n_legal(b) else b
+
+
+# Checker colors for the panel: the on-roll player ("x") plays WHITE, the
+# opponent ("o") plays BLACK. render/svg.py already draws the mover in a light
+# tone and the opponent dark; we push both to true white/black so the UI can use
+# the "white"/"black" vocabulary the panel asked for. Patched at import time
+# (module globals are read at render call time), scoped to this process only.
+svgrender._C_X = "#ffffff"       # mover / you = white
+svgrender._C_X_EDGE = "#8a8a8a"
+svgrender._C_O = "#000000"       # opponent = black
+svgrender._C_O_EDGE = "#5a5a5a"
+
+
+def _svg_white_black(svg: str) -> str:
+    """Relabel the X/O text baked into the SVG to White/Black (colors now match)."""
+    svg = svg.replace("X pip", "White pip").replace("(X on roll)", "(White on roll)")
+    svg = svg.replace("O pip", "Black pip")
+    svg = re.sub(r"\bX (\d+)-(\d+) O\b", r"White \1-\2 Black", svg)  # match score
+    svg = svg.replace("Cube: ", "Cube: ")
+    svg = re.sub(r"\(x\)", "(White)", svg)
+    svg = re.sub(r"\(o\)", "(Black)", svg)
+    svg = svg.replace("(center)", "(centered)")
+    return svg
 
 
 def _endpoint_key(cnt) -> str:
@@ -152,11 +204,10 @@ def build_data(records: list[dict]) -> list[dict]:
         with open(os.path.join(ROLL_DIR, pid + ".json"), encoding="utf-8") as fh:
             roll = json.load(fh)
 
-        # Normalise to the on-roll player's frame (flip stored turn="o" records)
-        # so the rendered board, the displayed pips/score/cube and the rollout
-        # move list are all consistent with the quiz's "you are X, on roll".
-        mover = _mover_board(bj)
-        svg = svgrender.render(mover).strip()
+        # Render/score in the on-roll player's frame (board_json authoritative;
+        # only color-mirrored for the checker positions whose rollout demands it).
+        mover = _display_board(rec, roll)
+        svg = _svg_white_black(svgrender.render(mover).strip())
         pip_x, pip_o = pip_counts(mover)
 
         entry: dict = {
@@ -625,9 +676,9 @@ function screenIntro(){
     el("h1", { text: "Backgammon Human Benchmark — Pilot" }),
     el("p", { text: "You will see " + TOTAL + " backgammon positions, one at a time. For each, " +
       "give the play you think is best. Some are checker plays (type the move); some are cube decisions (pick a button)." }),
-    el("p", { html: "In every diagram <b>you are X</b> — the light checkers, on roll. " +
-      "You move your checkers toward your home board (points 6 to 1, lower right) and bear off on the right. " +
-      "Points are numbered from your perspective (24 = back checkers, 1 = ace point)." }),
+    el("p", { html: "In every diagram <b>you play the White checkers</b> (your opponent is Black), and it is " +
+      "always your roll. You move your White checkers toward your home board (points 6 to 1, lower right) and " +
+      "bear off on the right. Points are numbered from your perspective (24 = back checkers, 1 = ace point)." }),
     el("p", { class: "muted", html: "This is a <b>blind</b> test: no engine evaluation or “best move” is shown until you finish all " +
       TOTAL + " positions. You cannot go back to change an earlier answer. Your progress is saved on this device, " +
       "so an accidental tab close will not lose it." }),
@@ -649,7 +700,7 @@ function contextChips(pos){
   } else {
     chips.push(el("span", { class: "chip", html: "<b>Money game</b>" }));
   }
-  var owner = pos.cube.owner === "x" ? "you" : (pos.cube.owner === "o" ? "opponent" : "center");
+  var owner = pos.cube.owner === "x" ? "you (White)" : (pos.cube.owner === "o" ? "opponent (Black)" : "centered");
   chips.push(el("span", { class: "chip", html: "<b>Cube:</b> " + pos.cube.value + " (" + owner + ")" }));
   if(pos.decision_type === "checker" && pos.dice.length === 2){
     chips.push(el("span", { class: "chip", html: "<b>Dice:</b> " + pos.dice[0] + "-" + pos.dice[1] }));
@@ -672,8 +723,8 @@ function screenPosition(idx){
 
   var boardWrap = el("div", { class: "board-wrap", html: pos.svg });
   var title = pos.decision_type === "cube"
-    ? el("p", { html: "<b>You are X, on roll.</b> It is your cube decision — what is your action?" })
-    : el("p", { html: "<b>You are X, on roll.</b> You rolled <b>" +
+    ? el("p", { html: "<b>You are White, on roll.</b> It is your cube decision — what is your action?" })
+    : el("p", { html: "<b>You are White, on roll.</b> You rolled <b>" +
         (pos.dice.length === 2 ? pos.dice[0] + "-" + pos.dice[1] : "?") + "</b>. What is your play?" });
 
   var panel = el("div", { class: "panel" }, [head, boardWrap, title, contextChips(pos)]);
