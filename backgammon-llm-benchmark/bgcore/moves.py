@@ -264,12 +264,58 @@ def legal_moves(board: Board) -> list[str]:
 # -- applying / matching a move string ------------------------------------
 
 
+def _applied_signature(board: Board, tokens: list[dict]):
+    """Resulting-layout signature of applying a parsed move's chains verbatim.
+
+    Walks each token's point chain as consecutive single-die hops (converting
+    notation points to board indices) and applies them, detecting intermediate
+    hits exactly as :func:`_apply_hop` does. Because a full move is identified by
+    the position it reaches (module docstring), this lets :func:`_match` recognise
+    a spelling whose per-checker endpoint multiset differs from the representative
+    :func:`generate_moves` kept (e.g. a single checker written ``10/3`` versus the
+    equivalent two-checker ``10/4 4/3``). Returns ``None`` if a coordinate is out
+    of range / underflows, in which case the caller falls back to "no match".
+    """
+    points = list(board.points)
+    bar_x = int(board.bar["x"])
+    bar_o = int(board.bar["o"])
+    off_x = int(board.off["x"])
+    for tok in tokens:
+        chain = tok["chain"]
+        for a, b in zip(chain, chain[1:]):
+            if a == "bar":
+                if bar_x <= 0:
+                    return None
+                bar_x -= 1
+            else:
+                ai = 25 - a
+                if ai < 0 or ai > 25 or points[ai] <= 0:
+                    return None
+                points[ai] -= 1
+            if b == "off":
+                off_x += 1
+            else:
+                j = 25 - b
+                if j < 0 or j > 25:
+                    return None
+                if points[j] < 0:
+                    points[j] = 0
+                    bar_o += 1
+                points[j] += 1
+    return (tuple(points), bar_x, bar_o, off_x)
+
+
 def _match(board: Board, move_str: str):
     """Find the generated :class:`LegalMove` a notation string denotes, or ``None``.
 
     Matching is by the multiset of per-checker (start, end) endpoints, so any die
     ordering or combined-die spelling that names the same checkers matches; ``*``
-    markers only disambiguate when several legal moves share endpoints.
+    markers only disambiguate when several legal moves share endpoints. When no
+    generated move shares the endpoint multiset (a single checker written through
+    an intermediate resting point yields a different multiset than the equivalent
+    two-checker representative :func:`generate_moves` kept), fall back to matching
+    by the resulting layout — the move's true identity — so both spellings resolve
+    to the same legal move.
     """
     from bgcore import notation as _notation
 
@@ -283,8 +329,16 @@ def _match(board: Board, move_str: str):
         for hp in tok["hits"]:
             want_hits.add(hp)
 
-    candidates = [m for m in generate_moves(board) if m.endpoint_multiset == want]
+    legal = generate_moves(board)
+    candidates = [m for m in legal if m.endpoint_multiset == want]
     if not candidates:
+        # Resulting-position fallback: the same legal end layout spelled with a
+        # different per-checker endpoint decomposition (e.g. "10/3" vs "10/4 4/3").
+        sig = _applied_signature(board, tokens)
+        if sig is not None:
+            by_sig = [m for m in legal if m.signature() == sig]
+            if by_sig:
+                return by_sig[0]  # signatures are unique across generate_moves
         return None
     if len(candidates) == 1:
         return candidates[0]

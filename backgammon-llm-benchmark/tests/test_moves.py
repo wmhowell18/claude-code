@@ -51,6 +51,25 @@ def test_must_play_both_when_possible():
     assert moves.moves_equivalent(b, legal[0], "12/4")  # both dice, one checker 13->21
 
 
+def test_single_checker_through_resting_point_matches_split_spelling():
+    """A one-checker play written through an intermediate resting point (``10/3``)
+    must resolve even when generate_moves keeps the equivalent two-checker
+    representative (``10/4 4/3``) as the lexicographically-smallest notation.
+
+    Regression for the endpoint-multiset identity leak: ``_match`` now falls back
+    to matching by resulting layout, so both spellings denote the same legal move
+    (previously ``10/3`` was reported illegal, mis-scoring a correct answer).
+    """
+    b = _board({15: 1, 21: 1}, dice=[6, 1])  # point 10 + a resting checker on point 4
+    legal = moves.legal_moves(b)
+    assert legal == ["10/4 4/3"]                 # the representative kept
+    assert moves.is_legal(b, "10/3")             # single-checker spelling recognised
+    assert moves.is_legal(b, "10/9/3")           # via the other intermediate too
+    assert moves.moves_equivalent(b, "10/3", "10/4 4/3")
+    assert moves.moves_equivalent(b, "10/3", "10/3")  # self-equivalence (scorer relies on this)
+    assert moves.apply_move(b, "10/3").points == moves.apply_move(b, "10/4 4/3").points
+
+
 def test_bearoff_overflow_off_highest_point():
     # one checker on the 5-point (board index 20); all home; 6 must bear it off
     b = _board({20: 1}, dice=[6, 4], off={"x": 14})
